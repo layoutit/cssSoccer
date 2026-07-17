@@ -920,12 +920,20 @@ function nativeValueSymbols(sourceFiles, exact) {
   if (!Number.isSafeInteger(exact.reference.value)) return Object.freeze([]);
   const symbols = [];
   const pattern = /integerConstant\(\s*"([^"]+)"\s*,\s*"([iu](?:8|16|32))"\s*,\s*(-?\d+)\s*\)/gu;
+  const runtimeActionPattern = /\bconst\s+([A-Z][A-Z0-9_]*_ACTION)\s*=\s*(-?\d+)\s*;/gu;
   for (const file of sourceFiles) {
-    if (!/Profile\.mjs$/u.test(file.name)) continue;
-    for (const match of file.text.matchAll(pattern)) {
-      if (match[2] !== exact.reference.valueType || Number(match[3]) !== exact.reference.value) continue;
-      if (exact.selector.leaf === "action" && !/_ACT$/u.test(match[1])) continue;
-      symbols.push(match[1]);
+    if (/Profile\.mjs$/u.test(file.name)) {
+      for (const match of file.text.matchAll(pattern)) {
+        if (match[2] !== exact.reference.valueType || Number(match[3]) !== exact.reference.value) continue;
+        if (exact.selector.leaf === "action" && !/_ACT$/u.test(match[1])) continue;
+        symbols.push(match[1]);
+      }
+    }
+    if (exact.selector.leaf === "action") {
+      for (const match of file.text.matchAll(runtimeActionPattern)) {
+        if (Number(match[2]) !== exact.reference.value) continue;
+        symbols.push(match[1].replace(/^LIVE_/u, "").replace(/_ACTION$/u, "_ACT"));
+      }
     }
   }
   return Object.freeze([...new Set(symbols)]);
