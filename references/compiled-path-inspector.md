@@ -5,9 +5,50 @@ changing browser runtime code, canonical captures, or original game source.
 It treats the original Watcom object as the static code authority and an
 executable-specific map as the runtime address authority.
 
+## Public differential-testing action
+
+For normal parity work, use the retained-current action rather than assembling
+an inspector query or changing oracle capture ranges:
+
+```sh
+node tools/run-compiled-path-check.mjs \
+  --function get_target \
+  --object INTELL \
+  --symbol zone_hgt:f32
+```
+
+That one command:
+
+- reads the selected scenario and current checked Exact coordinate;
+- requires the current engine-independence qualification and native bindings;
+- resolves the Watcom object, linked map, executable, and DGROUP from the
+  retained compiled-path profile;
+- performs the static WDIS inspection;
+- reads an already-retained value directly, or emits and runs a bounded
+  `CSSQRY1` query when the symbol is outside retained ranges;
+- prints one small packet containing both compiled evidence and the runtime
+  value at the checked tick.
+
+The query transport is diagnostic-only until promoted through the normal
+transport binding refresh and engine-independence requalification. Its value
+may resolve a source question, but it cannot itself clear parity or authorize a
+runtime candidate.
+
+Profile initialization is a toolkit-maintainer action, performed once per
+native/transport binding. It copies an exact retained stage and the validated
+query transport into ignored local storage:
+
+```sh
+node tools/run-compiled-path-check.mjs --initialize-profile \
+  --stage-root <exact-retained-native-stage> \
+  --query-transport <query-enabled-dosbox-x> \
+  --transport-evidence <query-transport-build-evidence.json>
+```
+
 ## Public actions
 
-For a read-only static inspection:
+The lower-level inspector remains available for toolkit development and static
+inspection:
 
 ```sh
 node tools/inspect-compiled-path.mjs \
