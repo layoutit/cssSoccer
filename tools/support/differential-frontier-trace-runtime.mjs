@@ -1,6 +1,8 @@
 const DEFAULT_MAX_DEPTH = 8;
 const DEFAULT_MAX_NODES = 8_000;
-const DEFAULT_MAX_RECORDS = 512;
+const DEFAULT_MAX_RECORDS = 1_024;
+const DEFAULT_RESULT_DEPTH = 4;
+const DEFAULT_RESULT_ENTRIES = 160;
 
 /**
  * A disabled-by-default call tracer used only inside the runner's temporary
@@ -10,7 +12,9 @@ export function createDifferentialFrontierTraceController() {
   let config = null;
   let records = [];
   let order = 0;
+  let callId = 0;
   let callDepth = 0;
+  let callStack = [];
   let truncated = false;
 
   return Object.freeze({
@@ -33,7 +37,9 @@ export function createDifferentialFrontierTraceController() {
       });
       records = [];
       order = 0;
+      callId = 0;
       callDepth = 0;
+      callStack = [];
       truncated = false;
     },
 
@@ -53,6 +59,7 @@ export function createDifferentialFrontierTraceController() {
         !metadata
         || typeof metadata.name !== "string"
         || !Number.isSafeInteger(metadata.line)
+        || (metadata.file !== undefined && typeof metadata.file !== "string")
         || typeof fn !== "function"
       ) {
         throw new TypeError("Differential frontier trace wrapper metadata is invalid.");
@@ -60,12 +67,19 @@ export function createDifferentialFrontierTraceController() {
       return function differentialFrontierTracedCall(...args) {
         if (config === null) return Reflect.apply(fn, this, args);
         const depth = callDepth;
+        const currentCallId = callId += 1;
+        const parentCallId = callStack.at(-1) ?? null;
         const input = findEntity(args, config);
         callDepth += 1;
+        callStack.push(currentCallId);
         let result;
+        let failure = null;
         try {
           result = Reflect.apply(fn, this, args);
+        } catch (error) {
+          failure = error;
         } finally {
+          callStack.pop();
           callDepth -= 1;
         }
         const output = findEntity(result, config);
@@ -75,14 +89,23 @@ export function createDifferentialFrontierTraceController() {
           } else {
             records.push(Object.freeze({
               order: order += 1,
+              callId: currentCallId,
+              parentCallId,
               callDepth: depth,
+              file: metadata.file ?? null,
               function: metadata.name,
               line: metadata.line,
               input,
               output,
+              arguments: output === null
+                ? summarizeResult(args, { maxEntries: 64 })
+                : null,
+              result: output === null ? summarizeResult(result) : null,
+              error: summarizeError(failure),
             }));
           }
         }
+        if (failure !== null) throw failure;
         return result;
       };
     },
@@ -129,7 +152,10 @@ function matchesEntity(value, config) {
     || value.stableId === config.entityId
     || (
       config.nativePlayerNumber !== null
-      && value.nativePlayerNumber === config.nativePlayerNumber
+      && (
+        value.nativePlayerNumber === config.nativePlayerNumber
+        || value.nativePlayer === config.nativePlayerNumber
+      )
     );
 }
 
@@ -138,6 +164,7 @@ function snapshot(player) {
   for (const key of [
     "id",
     "stableId",
+    "nativePlayer",
     "nativePlayerNumber",
     "action",
     "actionId",
@@ -173,6 +200,58 @@ function snapshot(player) {
   return Object.freeze(output);
 }
 
+function summarizeResult(value, { maxEntries = DEFAULT_RESULT_ENTRIES } = {}) {
+  if (value === undefined) return Object.freeze({ kind: "undefined" });
+  const seen = new WeakSet();
+  let entries = 0;
+  let truncated = false;
+  const visit = (current, depth) => {
+    if (isScalar(current)) return current;
+    if (typeof current === "bigint") return current.toString();
+    if (typeof current !== "object") return Object.freeze({ kind: typeof current });
+    if (seen.has(current)) return Object.freeze({ kind: "circular" });
+    if (depth >= DEFAULT_RESULT_DEPTH || entries >= maxEntries) {
+      truncated = true;
+      return Object.freeze({ kind: Array.isArray(current) ? "array" : "object", truncated: true });
+    }
+    seen.add(current);
+    if (Array.isArray(current)) {
+      const output = [];
+      for (const child of current) {
+        if (entries >= maxEntries) {
+          truncated = true;
+          break;
+        }
+        entries += 1;
+        output.push(visit(child, depth + 1));
+      }
+      return Object.freeze(output);
+    }
+    const output = {};
+    for (const [key, child] of Object.entries(current)) {
+      if (entries >= maxEntries) {
+        truncated = true;
+        break;
+      }
+      entries += 1;
+      output[key] = visit(child, depth + 1);
+    }
+    return Object.freeze(output);
+  };
+  const summary = visit(value, 0);
+  return truncated
+    ? Object.freeze({ kind: "bounded-result", value: summary, truncated: true })
+    : summary;
+}
+
+function summarizeError(error) {
+  if (error === null) return null;
+  return Object.freeze({
+    name: typeof error?.name === "string" ? error.name : "Error",
+    message: typeof error?.message === "string" ? error.message : String(error),
+  });
+}
+
 function scalarObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const entries = Object.entries(value).filter(([, child]) => isScalar(child));
@@ -198,3 +277,6 @@ function clone(value) {
   }
   return value;
 }
+
+export const differentialFrontierTraceController =
+  createDifferentialFrontierTraceController();

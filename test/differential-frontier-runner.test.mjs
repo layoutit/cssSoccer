@@ -18,7 +18,10 @@ import {
 import { createDifferentialFrontierTraceController } from
   "../tools/support/differential-frontier-trace-runtime.mjs";
 import {
+  createDiagnosticModuleSource,
   createDiagnosticEngineSource,
+  deriveNegativePathFocus,
+  rankNegativePathTrace,
   rankDynamicProducerTrace,
   topLevelFunctionDeclarations,
 } from "../tools/run-differential-frontier.mjs";
@@ -209,6 +212,84 @@ test("temporary call tracing identifies the direct active producer", () => {
   assert.equal(ranked[0].writesSelectedField, true);
 });
 
+test("negative-path tracing retains non-entity decisions and their executed helper calls", () => {
+  const controller = createDifferentialFrontierTraceController();
+  controller.configure({ entityId: "demo-player-01", nativePlayerNumber: 1 });
+  const preference = controller.wrap({
+    file: "src/cssoccer/passDecisionState.mjs",
+    name: "sourcePreference",
+    line: 90,
+  }, ({ candidate }) => ({
+    preference: candidate.nativePlayer * 10,
+    pathThreat: 0,
+  }));
+  const passType = controller.wrap({
+    file: "src/cssoccer/passDecisionState.mjs",
+    name: "sourcePassType",
+    line: 80,
+  }, () => 3);
+  const decide = controller.wrap({
+    file: "src/cssoccer/passDecisionState.mjs",
+    name: "resolveCssoccerAiPassDecision",
+    line: 40,
+  }, (input) => {
+    const type = passType({
+      holder: input.holder,
+      candidate: { nativePlayer: 2 },
+    });
+    const scored = preference({
+      holder: input.holder,
+      candidate: { nativePlayer: 2 },
+    });
+    return {
+      outcome: "no-pass",
+      targetNativePlayer: null,
+      passType: null,
+      candidates: [{ nativePlayer: 2, passType: type, ...scored }],
+      rng: { seed: 3, calls: 2 },
+    };
+  });
+  decide({
+    holder: { id: "demo-player-01", nativePlayer: 1 },
+  });
+  const trace = controller.read();
+  const declarations = [{
+    file: "src/cssoccer/passDecisionState.mjs",
+    name: "resolveCssoccerAiPassDecision",
+    line: 40,
+    source: [
+      "function resolveCssoccerAiPassDecision(input) {",
+      "  let selected = null;",
+      "  if (rng.seed > chance) selected = candidate;",
+      "  if (selected === null && mustPass) [selected] = candidates;",
+      "  return { outcome: selected === null ? \"no-pass\" : \"pass\", candidates };",
+      "}",
+    ].join("\n"),
+  }];
+  const ranked = rankNegativePathTrace({ trace, declarations });
+  const focus = deriveNegativePathFocus({
+    negativePath: ranked[0],
+    nativeBranch: {
+      switchExpression: "pass_type",
+      caseValue: 4,
+      matchedTransitionSymbols: ["MC_DIAGPASSL"],
+    },
+  });
+
+  assert.equal(trace.records.length, 3);
+  assert.equal(trace.records[0].function, "sourcePassType");
+  assert.equal(trace.records[0].result, 3);
+  assert.deepEqual(trace.records[1].result, { preference: 20, pathThreat: 0 });
+  assert.equal(trace.records[0].parentCallId, trace.records[2].callId);
+  assert.equal(ranked[0].function, "resolveCssoccerAiPassDecision");
+  assert.equal(ranked[0].rejectionReason, "candidate-selection-rejected");
+  assert.equal(ranked[0].supportingCalls[0].function, "sourcePassType");
+  assert.match(ranked[0].sourceBranches[0].source, /selected|rng\.seed/u);
+  assert.equal(focus.producer.function, "sourcePassType");
+  assert.equal(focus.producer.result, 3);
+  assert.equal(focus.expectedValue, 4);
+});
+
 test("diagnostic transform wraps only top-level functions and exposes a frozen inspect seam", () => {
   const source = [
     "export function createEngine() {",
@@ -234,6 +315,22 @@ test("diagnostic transform wraps only top-level functions and exposes a frozen i
   assert.match(transformed, /diagnosticState: current/u);
   assert.match(transformed, /producer = __differentialFrontierTraceController\.wrap/u);
   assert.doesNotMatch(transformed, /clone = __differentialFrontierTraceController\.wrap/u);
+});
+
+test("diagnostic module transform shares the trace controller without adding a public seam", () => {
+  const source = [
+    "export function resolveDecision(input) { return helper(input); }",
+    "function helper(input) { return false; }",
+  ].join("\n");
+  const declarations = topLevelFunctionDeclarations(source);
+  const transformed = createDiagnosticModuleSource(source, declarations, {
+    file: "src/cssoccer/decision.mjs",
+  });
+
+  assert.match(transformed, /differentialFrontierTraceController as __differentialFrontierTraceController/u);
+  assert.match(transformed, /file: "src\/cssoccer\/decision\.mjs"/u);
+  assert.match(transformed, /resolveDecision = __differentialFrontierTraceController\.wrap/u);
+  assert.doesNotMatch(transformed, /configureCssoccerDifferentialFrontierTrace/u);
 });
 
 test("decodes only the retained CSSORAW2 range and known match_player layout", () => {

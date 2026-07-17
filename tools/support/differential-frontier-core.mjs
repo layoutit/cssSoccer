@@ -462,7 +462,7 @@ export function findBrowserMappingCandidates(files, {
   ].filter((term) => typeof term === "string" && term.length > 2))];
   const activeFunctions = new Set(
     callTrace?.status === "captured"
-      ? callTrace.records.map(({ function: name }) => name)
+      ? callTrace.records.map(({ file, function: name }) => `${file ?? ""}\u0000${name}`)
       : [],
   );
   const candidates = [];
@@ -475,6 +475,8 @@ export function findBrowserMappingCandidates(files, {
       const matchedNativeTerms = nativeTerms.filter((term) => wordPattern(term).test(line));
       if (matchedSwitchTerms.length === 0 && matchedNativeTerms.length === 0) continue;
       const context = enclosingFunction(lines, index);
+      const activeAtFrontier = activeFunctions.has(`${file.path}\u0000${context.name}`)
+        || activeFunctions.has(`\u0000${context.name}`);
       const structural = /\b(?:case|switch)\b|\.has\s*\(|===|!==|\?\s*[^:]+\s*:/u.test(line);
       const exactCaseMentioned = nativeBranch.caseValue !== null
         && runtimeCaseMentioned(line, switchTerms, nativeBranch.caseValue);
@@ -483,13 +485,13 @@ export function findBrowserMappingCandidates(files, {
       if (exactCaseMentioned && structural) score += 35;
       if (/qualif|allow|support|valid/iu.test(context.name ?? "")) score += 38;
       if (/initial|launch|kick|pass/iu.test(context.name ?? "")) score += 22;
-      if (activeFunctions.has(context.name)) score += 28;
+      if (activeAtFrontier) score += 28;
       candidates.push(Object.freeze({
         file: file.path,
         line: index + 1,
         function: context.name,
         score,
-        activeAtFrontier: activeFunctions.has(context.name),
+        activeAtFrontier,
         exactCaseMentioned,
         matchedSwitchTerms: Object.freeze(matchedSwitchTerms),
         matchedNativeTerms: Object.freeze(matchedNativeTerms),

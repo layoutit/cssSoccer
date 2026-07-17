@@ -80,7 +80,7 @@ const TRACE_RUNTIME_SOURCE_PATH = join(
   "support/differential-frontier-trace-runtime.mjs",
 );
 const TRACE_IMPORT = [
-  "import { createDifferentialFrontierTraceController as __createDifferentialFrontierTraceController }",
+  "import { differentialFrontierTraceController as __differentialFrontierTraceController }",
   `  from \"./${TRACE_RUNTIME_FILE}\";`,
   "",
 ].join("\n");
@@ -317,11 +317,18 @@ async function createDiagnosticRuntime({
   if (!engineFile) {
     throw new DifferentialFrontierError("runtime-engine-missing", "Browser match engine source is unavailable.");
   }
-  const engineDeclarations = topLevelFunctionDeclarations(engineFile.text);
-  const transformedEngine = createDiagnosticEngineSource(
-    engineFile.text,
-    engineDeclarations,
-  );
+  const traceDeclarations = [];
+  const diagnosticSources = new Map();
+  for (const file of sourceFiles) {
+    const declarations = topLevelFunctionDeclarations(file.text).map((declaration) => (
+      Object.freeze({ ...declaration, file: file.path })
+    ));
+    traceDeclarations.push(...declarations);
+    diagnosticSources.set(file.name, file.name === "browserMatchEngine.mjs"
+      ? createDiagnosticEngineSource(file.text, declarations, { file: file.path })
+      : createDiagnosticModuleSource(file.text, declarations, { file: file.path }));
+  }
+  const engineDeclarations = traceDeclarations.filter(({ file }) => file === engineFile.path);
   const traceRuntimeSource = await readFile(TRACE_RUNTIME_SOURCE_PATH, "utf8");
   const runtimeSnapshotSha256 = sha256Canonical({
     schema: "cssoccer-browser-runtime-snapshot@1",
@@ -341,7 +348,7 @@ async function createDiagnosticRuntime({
     const target = join(diagnosticSourceRoot, file.name);
     await writeFile(
       target,
-      file.name === "browserMatchEngine.mjs" ? transformedEngine : file.text,
+      diagnosticSources.get(file.name),
       { flag: "wx" },
     );
   }
@@ -378,7 +385,9 @@ async function createDiagnosticRuntime({
     runtimeFiles,
     engineSource: engineFile.text,
     runtimeSnapshotSha256,
-    transformSha256: sha256(transformedEngine),
+    transformSha256: sha256Canonical(Object.fromEntries(
+      [...diagnosticSources.entries()].map(([name, source]) => [name, sha256(source)]),
+    )),
     traceRuntimeSha256: sha256(traceRuntimeSource),
   });
   const engineIndependence = await independenceModule.qualifyCssoccerBrowserEngineIndependence({
@@ -418,6 +427,7 @@ async function createDiagnosticRuntime({
     runtimeFiles: Object.freeze(runtimeFiles),
     runtimeSnapshotSha256,
     engineDeclarations,
+    traceDeclarations: Object.freeze(traceDeclarations),
     candidateIdentity,
     engineIndependence,
     engine,
@@ -456,7 +466,11 @@ export function topLevelFunctionDeclarations(source) {
   }));
 }
 
-export function createDiagnosticEngineSource(source, declarations) {
+export function createDiagnosticEngineSource(
+  source,
+  declarations,
+  { file = "src/cssoccer/browserMatchEngine.mjs" } = {},
+) {
   const occurrences = source.split(DIAGNOSTIC_INSPECT_ANCHOR).length - 1;
   if (occurrences !== 1) {
     throw new DifferentialFrontierError(
@@ -469,22 +483,35 @@ export function createDiagnosticEngineSource(source, declarations) {
     DIAGNOSTIC_INSPECT_ANCHOR,
     DIAGNOSTIC_INSPECT_REPLACEMENT,
   );
+  return createDiagnosticModuleSource(inspectable, declarations, {
+    exposeControl: true,
+    file,
+  });
+}
+
+export function createDiagnosticModuleSource(
+  source,
+  declarations,
+  { exposeControl = false, file = null } = {},
+) {
   const wrapped = declarations.filter(({ name }) => !TRACE_EXCLUDED_FUNCTIONS.has(name));
+  if (!exposeControl && wrapped.length === 0) return source;
   const traceFooter = [
     "",
-    "const __differentialFrontierTraceController = __createDifferentialFrontierTraceController();",
-    "export function configureCssoccerDifferentialFrontierTrace(config) {",
-    "  __differentialFrontierTraceController.configure(config);",
-    "}",
-    "export function readCssoccerDifferentialFrontierTrace() {",
-    "  return __differentialFrontierTraceController.read();",
-    "}",
+    ...(exposeControl ? [
+      "export function configureCssoccerDifferentialFrontierTrace(config) {",
+      "  __differentialFrontierTraceController.configure(config);",
+      "}",
+      "export function readCssoccerDifferentialFrontierTrace() {",
+      "  return __differentialFrontierTraceController.read();",
+      "}",
+    ] : []),
     ...wrapped.map(({ name, line }) => (
-      `${name} = __differentialFrontierTraceController.wrap({ name: ${JSON.stringify(name)}, line: ${line} }, ${name});`
+      `${name} = __differentialFrontierTraceController.wrap({ file: ${JSON.stringify(file)}, name: ${JSON.stringify(name)}, line: ${line} }, ${name});`
     )),
     "",
   ].join("\n");
-  return `${TRACE_IMPORT}${inspectable}${traceFooter}`;
+  return `${TRACE_IMPORT}${source}${traceFooter}`;
 }
 
 function countNewlines(value, end) {
@@ -719,11 +746,21 @@ async function buildEvidence({
     transitionSymbols,
     callTrace,
   });
+  const negativePathCandidates = rankNegativePathTrace({
+    trace: callTrace,
+    declarations: runtime.traceDeclarations,
+  });
+  const negativePathFocus = deriveNegativePathFocus({
+    negativePath: negativePathCandidates[0] ?? null,
+    nativeBranch: nativeCallerBranches[0] ?? null,
+  });
   const symbolicRouting = buildSymbolicRouting({
     nativeWriter,
     symbolicTransitions,
     nativeCallerBranches,
     browserMappingCandidates,
+    negativePathCandidates,
+    negativePathFocus,
   });
   const nativeFunctions = [...new Set(nativeSites.map((site) => site.function).filter(Boolean))];
   const runtimeCandidates = scan.exact === null ? [] : findRuntimeProducerCandidates(
@@ -737,7 +774,7 @@ async function buildEvidence({
   );
   const dynamicCandidates = scan.exact === null ? [] : rankDynamicProducerTrace({
     trace: callTrace,
-    declarations: runtime.engineDeclarations,
+    declarations: runtime.traceDeclarations,
     exact: scan.exact,
   });
   const producer = classifyProducer(runtimeCandidates, nativeSites, dynamicCandidates);
@@ -979,11 +1016,17 @@ export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8
     return Object.freeze([]);
   }
   const declarationByName = new Map(declarations.map((entry) => [entry.name, entry]));
+  const declarationByFileAndName = new Map(declarations.map((entry) => [
+    `${entry.file ?? ""}\u0000${entry.name}`,
+    entry,
+  ]));
   const paths = selectorSnapshotPaths(exact.selector.leaf);
   const candidateValue = exact.candidate.value;
   const byFunction = new Map();
   for (const record of trace.records) {
-    const declaration = declarationByName.get(record.function);
+    const declaration = declarationByFileAndName.get(
+      `${record.file ?? ""}\u0000${record.function}`,
+    ) ?? declarationByName.get(record.function);
     if (!declaration) continue;
     const before = firstSnapshotValue(record.input?.snapshot, paths);
     const after = firstSnapshotValue(record.output?.snapshot, paths);
@@ -1000,7 +1043,7 @@ export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8
     if (before.found && after.found && !Object.is(before.value, after.value)) score += 24;
     score += Math.min(record.callDepth, 8) * 3;
     const candidate = Object.freeze({
-      file: "src/cssoccer/browserMatchEngine.mjs",
+      file: record.file ?? declaration.file ?? "src/cssoccer/browserMatchEngine.mjs",
       function: record.function,
       line: record.line,
       score,
@@ -1022,6 +1065,276 @@ export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8
       || right.callDepth - left.callDepth
       || left.line - right.line)
     .slice(0, limit));
+}
+
+export function rankNegativePathTrace({ trace, declarations, limit = 8 }) {
+  if (trace?.status !== "captured" || !Array.isArray(trace.records)) {
+    return Object.freeze([]);
+  }
+  const declarationByName = new Map(declarations.map((entry) => [entry.name, entry]));
+  const declarationByFileAndName = new Map(declarations.map((entry) => [
+    `${entry.file ?? ""}\u0000${entry.name}`,
+    entry,
+  ]));
+  const candidates = [];
+  for (const record of trace.records) {
+    const signal = negativeResultSignal(record);
+    if (signal === null) continue;
+    const declaration = declarationByFileAndName.get(
+      `${record.file ?? ""}\u0000${record.function}`,
+    ) ?? declarationByName.get(record.function) ?? null;
+    let score = signal.score;
+    if (/resolve|decid|select|qualif|valid|pass|candidate/iu.test(record.function)) score += 48;
+    if (record.file && record.file !== "src/cssoccer/browserMatchEngine.mjs") score += 36;
+    if (record.input?.depth === 0) score += 24;
+    else if (Number.isSafeInteger(record.input?.depth)) score += Math.max(4, 20 - record.input.depth * 4);
+    score += Math.min(record.callDepth ?? 0, 8) * 4;
+    if (score < 150) continue;
+    candidates.push(Object.freeze({
+      file: record.file ?? declaration?.file ?? "src/cssoccer/browserMatchEngine.mjs",
+      function: record.function,
+      line: record.line,
+      score,
+      callId: record.callId ?? null,
+      parentCallId: record.parentCallId ?? null,
+      callDepth: record.callDepth,
+      rejectionKind: signal.kind,
+      rejectionReason: signal.reason,
+      result: record.result,
+      error: record.error ?? null,
+      arguments: record.arguments ?? null,
+      sourceBranches: declaration === null
+        ? Object.freeze([])
+        : negativeBranchSites(declaration, signal),
+      supportingCalls: negativeSupportingCalls(trace.records, record),
+    }));
+  }
+  return Object.freeze(candidates
+    .sort((left, right) => right.score - left.score
+      || right.callDepth - left.callDepth
+      || (right.callId ?? 0) - (left.callId ?? 0))
+    .slice(0, limit));
+}
+
+export function deriveNegativePathFocus({ negativePath, nativeBranch }) {
+  if (negativePath === null || !Number.isSafeInteger(nativeBranch?.caseValue)) return null;
+  const result = unwrapBoundedResult(negativePath.result);
+  const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+  const observed = candidates
+    .filter(({ nativePlayer, passType }) => (
+      Number.isSafeInteger(nativePlayer) && Number.isSafeInteger(passType)
+    ))
+    .map(({ nativePlayer, passType }) => ({ nativePlayer, passType }));
+  if (
+    observed.length === 0
+    || observed.some(({ passType }) => passType === nativeBranch.caseValue)
+  ) {
+    return null;
+  }
+  const observedTypes = new Set(observed.map(({ passType }) => passType));
+  let producer = null;
+  for (const call of negativePath.supportingCalls) {
+    if (!/pass.*type|type.*pass/iu.test(call.function)) continue;
+    const evaluations = call.evaluations ?? [call];
+    const evaluation = evaluations.find(({ result: value }) => (
+      Number.isSafeInteger(value) && observedTypes.has(value)
+    ));
+    if (evaluation === undefined) continue;
+    producer = { ...call, ...evaluation };
+    break;
+  }
+  if (producer === null) return null;
+  return Object.freeze({
+    kind: "native-switch-value-mismatch",
+    expectedSwitchExpression: nativeBranch.switchExpression,
+    expectedValue: nativeBranch.caseValue,
+    expectedSymbols: nativeBranch.matchedTransitionSymbols,
+    observedCandidates: Object.freeze(observed.map(Object.freeze)),
+    producer: Object.freeze({
+      file: producer.file,
+      function: producer.function,
+      line: producer.line,
+      facts: producer.facts,
+      result: producer.result,
+    }),
+  });
+}
+
+function negativeResultSignal(record) {
+  if (record.error !== null && record.error !== undefined) {
+    return { kind: "error", reason: record.error.message, score: 420, terms: ["throw"] };
+  }
+  const result = unwrapBoundedResult(record.result);
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    if (result === false) {
+      return { kind: "boolean-false", reason: "predicate-rejected", score: 135, terms: ["return", "false"] };
+    }
+    if (result === null && /resolve|select|qualif|candidate/iu.test(record.function)) {
+      return { kind: "null", reason: "resolver-returned-null", score: 105, terms: ["return", "null"] };
+    }
+    if (result === 0 && /type|score|prefer|visible|range|pass/iu.test(record.function)) {
+      return { kind: "zero", reason: "helper-returned-zero", score: 95, terms: ["return", "0"] };
+    }
+    return null;
+  }
+  const outcome = typeof result.outcome === "string" ? result.outcome.toLowerCase() : null;
+  if (outcome && /(?:^|[-_])(no|none|reject|miss|fail|skip)(?:$|[-_])/u.test(`-${outcome}-`)) {
+    const candidateCount = Array.isArray(result.candidates) ? result.candidates.length : null;
+    const reason = candidateCount === 0
+      ? "candidate-table-empty"
+      : candidateCount !== null
+        ? "candidate-selection-rejected"
+        : `outcome-${outcome}`;
+    return {
+      kind: "explicit-outcome",
+      reason,
+      score: 330,
+      terms: reason === "candidate-selection-rejected"
+        ? ["selected", "chance", "rng.seed", "mustPass", "outcome"]
+        : ["passTable", "passType", "candidate", "continue", "outcome"],
+    };
+  }
+  for (const field of ["accepted", "eligible", "qualified", "selected", "valid"]) {
+    if (result[field] !== false) continue;
+    return {
+      kind: "explicit-flag",
+      reason: `${field}-false`,
+      score: 225,
+      terms: [field, "return", "if"],
+    };
+  }
+  if (result.selected === null && Array.isArray(result.candidates)) {
+    return {
+      kind: "null-selection",
+      reason: result.candidates.length === 0
+        ? "candidate-table-empty"
+        : "candidate-selection-rejected",
+      score: 240,
+      terms: ["selected", "candidates", "chance", "return"],
+    };
+  }
+  return null;
+}
+
+function unwrapBoundedResult(result) {
+  return result?.kind === "bounded-result" ? result.value : result;
+}
+
+function negativeBranchSites(declaration, signal, limit = 8) {
+  const lines = declaration.source.split(/\r?\n/u);
+  const sites = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const source = lines[index].trim();
+    const matchedTerms = signal.terms.filter((term) => source.includes(term));
+    if (matchedTerms.length === 0) continue;
+    const control = /\b(?:if|else|continue|break|return|throw)\b/u.test(source);
+    if (!control && matchedTerms.length < 2) continue;
+    sites.push({
+      file: declaration.file ?? null,
+      function: declaration.name,
+      line: declaration.line + index,
+      score: matchedTerms.length * 12 + (control ? 18 : 0),
+      matchedTerms,
+      source: source.slice(0, 260),
+      context: lines
+        .slice(Math.max(0, index - 4), Math.min(lines.length, index + 3))
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 700),
+    });
+  }
+  return Object.freeze(sites
+    .sort((left, right) => right.score - left.score || left.line - right.line)
+    .slice(0, limit)
+    .sort((left, right) => left.line - right.line)
+    .map(Object.freeze));
+}
+
+function negativeSupportingCalls(records, selected, limit = 20) {
+  if (!Number.isSafeInteger(selected.callId)) return Object.freeze([]);
+  const parentById = new Map(records.map((record) => [record.callId, record.parentCallId]));
+  const descendants = records.filter((record) => {
+    let parent = record.parentCallId;
+    while (Number.isSafeInteger(parent)) {
+      if (parent === selected.callId) return true;
+      parent = parentById.get(parent) ?? null;
+    }
+    return false;
+  });
+  const useful = descendants.filter((record) => usefulSupportingResult(record));
+  const groups = new Map();
+  for (const record of useful) {
+    const key = `${record.file ?? ""}\u0000${record.function}\u0000${record.line}`;
+    const group = groups.get(key) ?? {
+      file: record.file,
+      function: record.function,
+      line: record.line,
+      evaluations: [],
+    };
+    group.evaluations.push(Object.freeze({
+      facts: traceArgumentFacts(record.arguments),
+      result: record.result,
+      error: record.error,
+    }));
+    groups.set(key, group);
+  }
+  return Object.freeze([...groups.values()].slice(-limit).map((group) => (
+    group.evaluations.length === 1
+      ? Object.freeze({
+          file: group.file,
+          function: group.function,
+          line: group.line,
+          ...group.evaluations[0],
+        })
+      : Object.freeze({
+          file: group.file,
+          function: group.function,
+          line: group.line,
+          evaluations: Object.freeze(group.evaluations),
+        })
+  )));
+}
+
+function usefulSupportingResult(record) {
+  if (record.output !== null || record.result === null || record.result?.kind === "undefined") {
+    return false;
+  }
+  const result = unwrapBoundedResult(record.result);
+  if (Array.isArray(result)) return false;
+  if (result && typeof result === "object") {
+    return JSON.stringify(result).length <= 1_600;
+  }
+  return ["string", "number", "boolean"].includes(typeof result);
+}
+
+function traceArgumentFacts(argumentsSummary) {
+  const unwrapped = unwrapBoundedResult(argumentsSummary);
+  const root = Array.isArray(unwrapped) && unwrapped.length === 1
+    ? unwrapped[0]
+    : unwrapped;
+  const facts = {};
+  for (const [label, path] of [
+    ["candidateNativePlayer", ["candidate", "nativePlayer"]],
+    ["holderNativePlayer", ["holder", "nativePlayer"]],
+    ["passType", ["passType"]],
+    ["seed", ["seed"]],
+    ["cross", ["cross"]],
+  ]) {
+    const value = nestedTraceValue(root, path);
+    if (["string", "number", "boolean"].includes(typeof value)) facts[label] = value;
+  }
+  return Object.freeze(facts);
+}
+
+function nestedTraceValue(root, path) {
+  if (!root || typeof root !== "object") return undefined;
+  let current = root;
+  for (const part of path) {
+    if (!current || typeof current !== "object" || !Object.hasOwn(current, part)) return undefined;
+    current = current[part];
+  }
+  return current;
 }
 
 function selectorSnapshotPaths(leaf) {
@@ -1139,17 +1452,25 @@ function buildSymbolicRouting({
   symbolicTransitions,
   nativeCallerBranches,
   browserMappingCandidates,
+  negativePathCandidates,
+  negativePathFocus,
 }) {
   const nativeCallChain = nativeCallerBranches[0] ?? null;
-  const browserMapping = browserMappingCandidates[0] ?? null;
+  const negativePath = negativePathCandidates[0] ?? null;
+  const browserMapping = browserMappingCandidates.find(({ activeAtFrontier }) => (
+    activeAtFrontier
+  )) ?? null;
+  const staticBrowserMapping = browserMappingCandidates[0] ?? null;
   return Object.freeze({
-    status: browserMapping !== null
-      ? "surfaced"
-      : nativeCallChain !== null
-        ? "native-chain-only"
-        : symbolicTransitions.length > 0
-          ? "symbols-only"
-          : "not-surfaced",
+    status: negativePath !== null
+      ? "executed-negative-path"
+      : browserMapping !== null
+        ? "surfaced"
+        : nativeCallChain !== null
+          ? "native-chain-only"
+          : symbolicTransitions.length > 0
+            ? "symbols-only"
+            : "not-surfaced",
     transitions: symbolicTransitions,
     nativeWriter: nativeWriter === null ? null : Object.freeze({
       file: nativeWriter.file,
@@ -1159,8 +1480,14 @@ function buildSymbolicRouting({
     }),
     nativeCallChain,
     nativeAlternatives: Object.freeze(nativeCallerBranches.slice(1, 4)),
+    negativePath,
+    negativePathFocus,
+    negativePathAlternatives: Object.freeze(negativePathCandidates.slice(1, 4)),
     browserMapping,
-    browserAlternatives: Object.freeze(browserMappingCandidates.slice(1, 5)),
+    staticBrowserMapping,
+    browserAlternatives: Object.freeze(browserMappingCandidates
+      .filter((candidate) => candidate !== staticBrowserMapping)
+      .slice(0, 4)),
     diagnosticOnly: true,
   });
 }
@@ -1179,6 +1506,33 @@ function nextAction({
       kind: "public-evaluation",
       question: "The diagnostic engine is exact; run the full capture and synchronous publisher.",
       command: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+    });
+  }
+  if (symbolicRouting.status === "executed-negative-path") {
+    const negative = compactNegativePath(symbolicRouting.negativePath);
+    const focus = symbolicRouting.negativePathFocus;
+    const producer = focus?.producer ?? negative;
+    return Object.freeze({
+      kind: focus === null
+        ? "inspect-executed-negative-path"
+        : "inspect-executed-wrong-value-producer",
+      file: producer.file,
+      function: producer.function,
+      line: producer.line,
+      question: focus === null
+        ? `The executed ${negative.function} path returned ${negative.rejectionReason}; repair that decision producer before the unexecuted native mapping seam.`
+        : `Executed ${producer.function} returned ${producer.result}, while native ${focus.expectedSwitchExpression} requires ${focus.expectedValue}; repair this wrong-value producer.`,
+      executedValueMismatch: focus,
+      rejectionKind: negative.rejectionKind,
+      rejectionReason: negative.rejectionReason,
+      result: negative.result,
+      sourceBranches: focus === null ? negative.sourceBranches : [],
+      supportingCalls: negative.supportingCalls,
+      unexecutedStaticMapping: compactMappingCandidate(symbolicRouting.staticBrowserMapping),
+      publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+      doNotRerunBeforeRuntimeChanges: duplicate,
+      note: "Only executed negative-path evidence is primary. The static mapping candidate is advisory until the trace reaches it.",
     });
   }
   if (symbolicRouting.status === "surfaced") {
@@ -1314,10 +1668,57 @@ function compactSymbolicRouting(routing) {
       caseExpression: branch.caseExpression,
       caseValue: branch.caseValue,
       matchedSymbols: branch.matchedTransitionSymbols,
-      dispatchTable: branch.dispatchTable,
+      ...(routing.status === "executed-negative-path"
+        ? {}
+        : { dispatchTable: branch.dispatchTable }),
     }),
-    browserMapping: routing.browserMapping,
-    browserAlternatives: routing.browserAlternatives,
+    negativePath: compactNegativePath(routing.negativePath, { includeEvidence: false }),
+    negativePathFocus: routing.negativePathFocus,
+    negativePathAlternatives: routing.status === "executed-negative-path"
+      ? []
+      : routing.negativePathAlternatives.map((candidate) => ({
+          file: candidate.file,
+          function: candidate.function,
+          line: candidate.line,
+          score: candidate.score,
+          rejectionKind: candidate.rejectionKind,
+          rejectionReason: candidate.rejectionReason,
+        })),
+    browserMapping: routing.status === "executed-negative-path"
+      ? null
+      : compactMappingCandidate(routing.browserMapping),
+    staticBrowserMapping: compactMappingCandidate(routing.staticBrowserMapping),
+    browserAlternatives: routing.status === "executed-negative-path"
+      ? []
+      : routing.browserAlternatives.map(compactMappingCandidate),
+  });
+}
+
+function compactMappingCandidate(candidate) {
+  if (candidate === null) return null;
+  return Object.freeze({
+    file: candidate.file,
+    function: candidate.function,
+    line: candidate.line,
+    activeAtFrontier: candidate.activeAtFrontier,
+    source: candidate.source,
+  });
+}
+
+function compactNegativePath(candidate, { includeEvidence = true } = {}) {
+  if (candidate === null) return null;
+  return Object.freeze({
+    file: candidate.file,
+    function: candidate.function,
+    line: candidate.line,
+    score: candidate.score,
+    rejectionKind: candidate.rejectionKind,
+    rejectionReason: candidate.rejectionReason,
+    result: candidate.result,
+    ...(includeEvidence ? {
+      sourceBranches: candidate.sourceBranches,
+      supportingCalls: candidate.supportingCalls,
+    } : {}),
   });
 }
 
