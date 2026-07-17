@@ -1,0 +1,21 @@
+{
+  "schema": "cssoccer-actua-soccer-oracle-source@1",
+  "repository": "https://github.com/Xrampino/Actua-Soccer.git",
+  "revision": "b40bd6d1e50e052030c5f0884fbe3deda7e9fa4b",
+  "sourceImportRevision": "6375c0a35c20cffe699fd160543229b1b1581e57",
+  "license": "CC-BY-NC-ND-4.0",
+  "use": "ignored local source and patched differential-testing oracle only",
+  "checkout": ".local/actua-soccer/source",
+  "officialArchive": {
+    "url": "https://www.gremlinarchive.com/wp-content/uploads/2017/03/ActuaSoccerSourceCode.zip",
+    "sha256": "74f6baba9cfdba69da9e5068295bda6634611bbdf506e5768a36d38149155177"
+  },
+  "requiredFiles": [
+    "3DENG.C",
+    "BALL.CPP",
+    "FOOTBALL.CPP",
+    "INTELL.CPP",
+    "MATHS.CPP",
+    "NET.GRE"
+  ]
+}

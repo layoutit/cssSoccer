@@ -1,0 +1,8 @@
+.local/
+build/generated/
+dist/
+node_modules/
+/capture/
+/TESTP.err
+.env
+.env.local

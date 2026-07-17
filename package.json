@@ -1,0 +1,13 @@
+{
+  "name": "cssoccer",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "type": "module",
+  "description": "A source-backed Actua Soccer PolyCSS port.",
+  "license": "MIT",
+  "scripts": {
+    "source:setup": "node tools/actua-soccer-oracle.mjs setup",
+    "source:verify": "node tools/actua-soccer-oracle.mjs verify"
+  }
+}
+
