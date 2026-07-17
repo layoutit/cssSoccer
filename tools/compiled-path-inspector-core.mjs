@@ -145,7 +145,18 @@ export function parseWatcomRoutine(listingText, functionName) {
   }
   const instructions = [];
   for (let index = start.index + 1; index < endIndex; index += 1) {
-    const instruction = parseInstructionLine(lines[index], index + 1);
+    let source = lines[index];
+    const wrapped = source.match(
+      /^\s*[0-9a-f]{8}\s+(?:[0-9a-f]{2}[ \t]+)*[0-9a-f]{2}\s*$/iu,
+    );
+    if (wrapped && index + 1 < endIndex) {
+      const continuation = lines[index + 1].match(/^\s+([a-z][a-z0-9]*)\s+(.+?)\s*$/iu);
+      if (continuation) {
+        source = `${source.trimEnd()}  ${continuation[1]} ${continuation[2]}`;
+        index += 1;
+      }
+    }
+    const instruction = parseInstructionLine(source, index + 1);
     if (instruction) instructions.push(instruction);
   }
   if (instructions.length === 0) {
@@ -204,11 +215,21 @@ export function analyzeWatcomRoutine(routine, requestedSymbols = []) {
       references.flatMap(({ nextF32Store }) => nextF32Store ? [nextF32Store] : []),
       ({ offset }) => offset,
     );
+    const constantWrites = references.flatMap((reference) => {
+      const value = constantWriteValue(reference, normalized.valueType);
+      return value === null ? [] : [Object.freeze({
+        offset: reference.offset,
+        line: reference.line,
+        value,
+        raw: reference.raw,
+      })];
+    });
     return Object.freeze({
       ...normalized,
       referenced: references.length > 0,
       references: Object.freeze(references),
       nextF32Stores: Object.freeze(nextF32Stores),
+      constantWrites: Object.freeze(constantWrites),
     });
   });
   return Object.freeze({
@@ -559,6 +580,25 @@ function normalizeSymbolRequest(request) {
   requireSymbolName(request.name, "requested symbol");
   if (request.valueType !== undefined && request.valueType !== null) valueTypeBytes(request.valueType);
   return { name: request.name, valueType: request.valueType ?? null };
+}
+
+function constantWriteValue(reference, valueType) {
+  if (reference.mnemonic !== "mov") return null;
+  const comma = reference.operands.lastIndexOf(",");
+  if (comma < 0) return null;
+  const target = reference.operands.slice(0, comma);
+  if (!/\b(?:byte|word|dword|qword)\s+ptr\b/iu.test(target)) return null;
+  const literal = reference.operands.slice(comma + 1).trim();
+  if (!/^(?:0x[0-9a-f]+|-?\d+)$/iu.test(literal)) return null;
+  const numeric = /^0x/iu.test(literal)
+    ? Number.parseInt(literal.slice(2), 16)
+    : Number(literal);
+  if (!Number.isSafeInteger(numeric)) return null;
+  if (!valueType || !/^i(?:8|16|32)$/u.test(valueType) || numeric < 0) return numeric;
+  const bits = valueTypeBytes(valueType) * 8;
+  const modulus = 2 ** bits;
+  const sign = 2 ** (bits - 1);
+  return numeric >= sign ? numeric - modulus : numeric;
 }
 
 function findNextF32Store(instructions, referenceIndex) {

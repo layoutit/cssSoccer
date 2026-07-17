@@ -10,6 +10,7 @@ import {
   createExactSelector,
   decodeMatchPlayer,
   findBrowserMappingCandidates,
+  findNativeBranchDiscriminators,
   findNativeCallerBranches,
   findNativeWriteSites,
   parseCssoraw2,
@@ -20,9 +21,12 @@ import { createDifferentialFrontierTraceController } from
 import {
   createDiagnosticModuleSource,
   createDiagnosticEngineSource,
+  deriveNativeBranchMismatchFocus,
   deriveNegativePathFocus,
+  nextAction,
   rankNegativePathTrace,
   rankDynamicProducerTrace,
+  resolveNativeBranchIdentity,
   topLevelFunctionDeclarations,
 } from "../tools/run-differential-frontier.mjs";
 
@@ -180,6 +184,169 @@ test("symbolic routing resolves a native transition through its caller branch an
   assert.match(mappings[0].source, /new Set/u);
 });
 
+test("finds a global discriminator when native branches reuse one transition animation", () => {
+  const nativeFiles = [sourceFile("INTELL.CPP", [
+    "void make_pass(match_player *player)",
+    "{",
+    "  kick_type=KT_PASS;",
+    "  switch(pass_type)",
+    "  {",
+    "    case(4): init_kick_act(player,MC_DIAGPASSL,MCC_DIAGPASS); break;",
+    "  }",
+    "}",
+    "void make_shoot(match_player *player)",
+    "{",
+    "  kick_type=KT_SHOOT;",
+    "  switch(pass_type)",
+    "  {",
+    "    case(4): init_kick_act(player,MC_DIAGPASSL,MCC_DIAGPASS); break;",
+    "  }",
+    "}",
+  ])];
+  const branches = findNativeCallerBranches(nativeFiles, {
+    callee: "init_kick_act",
+    transitionSymbols: ["MC_DIAGPASSL"],
+  });
+  const discriminators = findNativeBranchDiscriminators(nativeFiles, { branches });
+
+  assert.equal(branches.length, 2);
+  assert.equal(discriminators[0].symbol, "kick_type");
+  assert.deepEqual(
+    discriminators[0].assignments.map(({ function: name, expression }) => ({ name, expression })),
+    [
+      { name: "make_pass", expression: "KT_PASS" },
+      { name: "make_shoot", expression: "KT_SHOOT" },
+    ],
+  );
+});
+
+test("binds the executed native branch and routes a browser pass trace to the missing shot decision", async () => {
+  const nativeFiles = [sourceFile("INTELL.CPP", [
+    "void make_pass(match_player *player)",
+    "{",
+    "  kick_type=KT_PASS;",
+    "  switch(pass_type)",
+    "  {",
+    "    case(4): init_kick_act(player,MC_DIAGPASSL,MCC_DIAGPASS); break;",
+    "  }",
+    "}",
+    "void make_shoot(match_player *player)",
+    "{",
+    "  kick_type=KT_SHOOT;",
+    "  switch(pass_type)",
+    "  {",
+    "    case(4): init_kick_act(player,MC_DIAGPASSL,MCC_DIAGPASS); break;",
+    "  }",
+    "}",
+    "void got_ball(match_player *player)",
+    "{",
+    "  if (shoot_decide(player))",
+    "    make_shoot(player);",
+    "  else",
+    "  {",
+    "    int p=pass_decide(player);",
+    "    if (p) make_pass(player);",
+    "  }",
+    "}",
+  ])];
+  const branches = findNativeCallerBranches(nativeFiles, {
+    callee: "init_kick_act",
+    transitionSymbols: ["MC_DIAGPASSL"],
+  });
+  const exact = exactMismatch();
+  const identity = await resolveNativeBranchIdentity({
+    branches,
+    nativeFiles,
+    exact,
+    evidenceRoot: "/fixture",
+    outputRoot: "/fixture/output",
+    runCompiledPathCheck: async ({ functionName }) => ({
+      status: "complete",
+      exact: {
+        activeTick: exact.tick,
+        phase: exact.phase,
+        phaseOrder: exact.phaseOrder,
+        field: exact.fieldId,
+        reference: exact.reference,
+        candidate: exact.candidate,
+      },
+      symbols: [{
+        name: "kick_type",
+        valueType: "i32",
+        constantWrites: [{ value: functionName === "make_shoot" ? 3 : 1 }],
+        runtime: { value: 3, numericBits: "00000003" },
+      }],
+      runtime: {
+        authority: "retained-native-capture",
+        parityAuthority: true,
+      },
+      evidencePath: `/fixture/${functionName}.json`,
+    }),
+  });
+  const negativePath = {
+    file: "src/cssoccer/passDecisionState.mjs",
+    function: "resolveCssoccerAiPassDecision",
+    line: 64,
+    supportingCalls: [{ function: "sourcePassType" }],
+    ancestorCalls: [{
+      file: "src/cssoccer/browserMatchEngine.mjs",
+      function: "resolveOpeningLiveAiNormalPass",
+      line: 3267,
+    }],
+  };
+  const valueFocus = deriveNegativePathFocus({
+    negativePath,
+    nativeBranch: identity.branch,
+    nativeBranchIdentity: identity,
+  });
+  const branchFocus = deriveNativeBranchMismatchFocus({
+    negativePath,
+    nativeBranch: identity.branch,
+    nativeBranchIdentity: identity,
+    nativeFiles,
+    playerControl: 0,
+  });
+  const action = nextAction({
+    exact,
+    producer: { status: "ambiguous" },
+    symbolicRouting: {
+      status: "executed-negative-path",
+      negativePath: {
+        ...negativePath,
+        score: 400,
+        rejectionKind: "explicit-outcome",
+        rejectionReason: "candidate-selection-rejected",
+        result: { outcome: "no-pass", candidates: [] },
+        sourceBranches: [],
+      },
+      negativePathFocus: null,
+      nativeBranchMismatchFocus: branchFocus,
+      nativeBranchIdentity: identity,
+      staticBrowserMapping: null,
+    },
+    retainedMovement: "same",
+    duplicate: false,
+    evidenceRoot: "/fixture",
+    outputRoot: "/fixture/output",
+  });
+
+  assert.equal(identity.status, "bound");
+  assert.equal(identity.branch.function, "make_shoot");
+  assert.deepEqual(identity.candidates.map(({ function: name, expectedValue, matched }) => ({
+    name, expectedValue, matched,
+  })), [
+    { name: "make_pass", expectedValue: 1, matched: false },
+    { name: "make_shoot", expectedValue: 3, matched: true },
+  ]);
+  assert.equal(valueFocus, null);
+  assert.equal(branchFocus.missingDecisionFunction, "shoot_decide");
+  assert.equal(branchFocus.browserOwner.function, "resolveOpeningLiveAiNormalPass");
+  assert.equal(branchFocus.nativeGuard.function, "got_ball");
+  assert.equal(action.kind, "implement-missing-native-decision-branch");
+  assert.equal(action.file, "src/cssoccer/browserMatchEngine.mjs");
+  assert.match(action.question, /resolveCssoccerAiPassDecision; implement shoot_decide before/u);
+});
+
 test("temporary call tracing identifies the direct active producer", () => {
   const controller = createDifferentialFrontierTraceController();
   controller.configure({ entityId: "demo-player-01", nativePlayerNumber: 1 });
@@ -274,6 +441,7 @@ test("negative-path tracing retains non-entity decisions and their executed help
       caseValue: 4,
       matchedTransitionSymbols: ["MC_DIAGPASSL"],
     },
+    nativeBranchIdentity: { status: "static-unique" },
   });
 
   assert.equal(trace.records.length, 3);

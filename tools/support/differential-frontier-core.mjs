@@ -444,6 +444,158 @@ export function findNativeCallerBranches(files, {
     })));
 }
 
+export function findNativeBranchDiscriminators(files, {
+  branches = [],
+  limit = 6,
+} = {}) {
+  const branchFunctions = [];
+  const seenFunctions = new Set();
+  for (const branch of branches) {
+    if (!branch?.file || !branch.function) continue;
+    const key = `${branch.file}\u0000${branch.function}`;
+    if (seenFunctions.has(key)) continue;
+    seenFunctions.add(key);
+    branchFunctions.push(branch);
+  }
+  if (branchFunctions.length < 2) return Object.freeze([]);
+  const fileByPath = new Map(files.map((file) => [file.path, file]));
+  const assignmentsBySymbol = new Map();
+  for (const branch of branchFunctions) {
+    const file = fileByPath.get(branch.file);
+    if (!file) continue;
+    const lines = file.text.split(/\r?\n/u);
+    const start = Math.max(0, (branch.functionLine ?? 1) - 1);
+    let end = lines.length;
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const match = lines[index].match(FUNCTION_PATTERN);
+      if (!match || CONTROL_WORDS.has(match[1])) continue;
+      end = index;
+      break;
+    }
+    const code = uncommentedLines(lines.slice(start, end), start + 1);
+    const bySymbol = new Map();
+    for (const entry of code) {
+      const match = entry.source.match(
+        /^\s*([A-Za-z_]\w*)\s*=\s*([A-Z][A-Z0-9_]*|-?(?:0[xX][0-9a-fA-F]+|\d+))\s*;\s*$/u,
+      );
+      if (!match) continue;
+      const values = bySymbol.get(match[1]) ?? [];
+      values.push(Object.freeze({
+        file: branch.file,
+        function: branch.function,
+        line: entry.line,
+        expression: match[2],
+        beforeTransitionCall: entry.line < branch.line,
+      }));
+      bySymbol.set(match[1], values);
+    }
+    for (const [symbol, assignments] of bySymbol) {
+      const functionKey = `${branch.file}\u0000${branch.function}`;
+      const group = assignmentsBySymbol.get(symbol) ?? new Map();
+      group.set(functionKey, assignments);
+      assignmentsBySymbol.set(symbol, group);
+    }
+  }
+  const candidates = [];
+  for (const [symbol, byFunction] of assignmentsBySymbol) {
+    if (byFunction.size !== branchFunctions.length) continue;
+    const assignments = [];
+    let valid = true;
+    const expressions = new Set();
+    for (const branch of branchFunctions) {
+      const key = `${branch.file}\u0000${branch.function}`;
+      const values = byFunction.get(key) ?? [];
+      const uniqueExpressions = new Set(values.map(({ expression }) => expression));
+      if (uniqueExpressions.size !== 1) {
+        valid = false;
+        break;
+      }
+      const [expression] = uniqueExpressions;
+      expressions.add(expression);
+      assignments.push(values[0]);
+    }
+    if (!valid || expressions.size !== branchFunctions.length) continue;
+    let score = 180 + expressions.size * 40;
+    if (/type|mode|kind|action|state/iu.test(symbol)) score += 45;
+    score += assignments.filter(({ beforeTransitionCall }) => beforeTransitionCall).length * 15;
+    candidates.push(Object.freeze({
+      symbol,
+      score,
+      assignments: Object.freeze(assignments),
+    }));
+  }
+  return Object.freeze(candidates
+    .sort((left, right) => right.score - left.score || left.symbol.localeCompare(right.symbol))
+    .slice(0, limit));
+}
+
+export function findNativeGuardedCallSites(files, {
+  callee,
+  playerControl = null,
+  limit = 8,
+} = {}) {
+  if (typeof callee !== "string" || callee.length === 0) return Object.freeze([]);
+  const pattern = wordPattern(callee);
+  const sites = [];
+  for (const file of files) {
+    const lines = file.text.split(/\r?\n/u);
+    const code = uncommentedLines(lines, 1);
+    for (let index = 0; index < code.length; index += 1) {
+      const entry = code[index];
+      if (!pattern.test(entry.source) || !entry.source.includes("(")) continue;
+      const context = enclosingFunction(lines, index);
+      if (context.name === callee && context.line === entry.line) continue;
+      let guard = null;
+      for (let cursor = index - 1; cursor >= Math.max(0, index - 8); cursor -= 1) {
+        const match = code[cursor].source.match(/\bif\s*\((.+)\)\s*$/u);
+        if (!match) continue;
+        guard = {
+          line: code[cursor].line,
+          condition: match[1].trim(),
+          source: code[cursor].source.trim(),
+        };
+        break;
+      }
+      const conditionCalls = guard === null
+        ? []
+        : [...guard.condition.matchAll(/\b([A-Za-z_]\w*)\s*\(/gu)].map((match) => match[1]);
+      const downstreamCalls = [];
+      for (let cursor = index + 1; cursor < Math.min(code.length, index + 48); cursor += 1) {
+        const nextFunction = lines[cursor].match(FUNCTION_PATTERN);
+        if (nextFunction && !CONTROL_WORDS.has(nextFunction[1])) break;
+        for (const match of code[cursor].source.matchAll(/\b([A-Za-z_]\w*)\s*\(/gu)) {
+          if (/^(?:pass_decide|make_pass|punt_decide|make_punt)$/u.test(match[1])) {
+            downstreamCalls.push(match[1]);
+          }
+        }
+      }
+      let score = guard === null ? 20 : 100;
+      if (conditionCalls.length > 0) score += 50;
+      if (downstreamCalls.includes("pass_decide")) score += 55;
+      if (playerControl === 0 && /^user_/u.test(context.name ?? "")) score -= 90;
+      if (playerControl === 0 && context.name === "got_ball") score += 90;
+      if (playerControl !== 0 && /^user_/u.test(context.name ?? "")) score += 90;
+      sites.push(Object.freeze({
+        file: file.path,
+        function: context.name,
+        functionLine: context.line,
+        line: entry.line,
+        callee,
+        guard: guard === null ? null : Object.freeze(guard),
+        conditionCalls: Object.freeze([...new Set(conditionCalls)]),
+        downstreamCalls: Object.freeze([...new Set(downstreamCalls)]),
+        score,
+        source: entry.source.trim(),
+      }));
+    }
+  }
+  return Object.freeze(sites
+    .sort((left, right) => right.score - left.score
+      || left.file.localeCompare(right.file)
+      || left.line - right.line)
+    .slice(0, limit));
+}
+
 export function findBrowserMappingCandidates(files, {
   nativeBranch,
   transitionSymbols = [],
@@ -1032,6 +1184,45 @@ function enclosingFunction(lines, index) {
     return { name: match[1], line: cursor + 1 };
   }
   return { name: null, line: null };
+}
+
+function uncommentedLines(lines, firstLine) {
+  const output = [];
+  let block = false;
+  for (const [offset, original] of lines.entries()) {
+    let source = original;
+    let cleaned = "";
+    let cursor = 0;
+    while (cursor < source.length) {
+      if (block) {
+        const end = source.indexOf("*/", cursor);
+        if (end < 0) {
+          cursor = source.length;
+          continue;
+        }
+        block = false;
+        cursor = end + 2;
+        continue;
+      }
+      const lineComment = source.indexOf("//", cursor);
+      const blockComment = source.indexOf("/*", cursor);
+      if (lineComment >= 0 && (blockComment < 0 || lineComment < blockComment)) {
+        cleaned += source.slice(cursor, lineComment);
+        cursor = source.length;
+        continue;
+      }
+      if (blockComment >= 0) {
+        cleaned += source.slice(cursor, blockComment);
+        block = true;
+        cursor = blockComment + 2;
+        continue;
+      }
+      cleaned += source.slice(cursor);
+      cursor = source.length;
+    }
+    output.push({ source: cleaned, line: firstLine + offset });
+  }
+  return output;
 }
 
 function wordPattern(value) {

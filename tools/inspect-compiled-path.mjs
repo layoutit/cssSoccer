@@ -134,6 +134,7 @@ export async function inspectCompiledPath(queryInput, cliOptions = {}) {
       referenced: true,
       references: request.references,
       nextF32Stores: request.nextF32Stores,
+      constantWrites: request.constantWrites,
       linkedAddress: {
         segment: mapped.segment,
         offset: mapped.offset,
@@ -301,6 +302,7 @@ export async function inspectCompiledPath(queryInput, cliOptions = {}) {
       address: `${symbol.linkedAddress.segment}:${symbol.linkedAddress.offsetHex}`,
       references: symbol.references.length,
       nextF32Stores: symbol.nextF32Stores.length,
+      constantWrites: symbol.constantWrites,
       capture: summarizeCoverage(symbol.capture),
     })),
     artifactBindingStatus,

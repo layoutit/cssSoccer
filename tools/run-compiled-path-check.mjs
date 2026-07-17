@@ -230,7 +230,14 @@ export async function runCurrentCompiledPathCheck(options, dependencies = {}) {
     options.workRoot
       ?? join(workspaceRoot, ".local", "cssoccer", "compiled-path-inspector", "actions"),
   );
-  const exact = context.exact;
+  const exact = options.exactOverride
+    ? normalizeRunnerExact(
+        options.exactOverride,
+        context.exact,
+        options.exactOverrideBindings,
+        context.nativeCurrent.bindings,
+      )
+    : context.exact;
   const bindings = currentProbeBindings(context);
   const baseQuery = {
     schema: COMPILED_PATH_QUERY_SCHEMA,
@@ -952,6 +959,62 @@ function normalizeObjectName(value) {
   const normalized = requireText(value, "--object").replace(/\.obj$/iu, "").toUpperCase();
   if (!/^[A-Z0-9_]+$/u.test(normalized)) throw new TypeError("--object must name one Watcom module.");
   return normalized;
+}
+
+function normalizeRunnerExact(value, retained, bindings, expectedBindings) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CompiledPathInspectorError(
+      "runner-exact-invalid",
+      "The programmatic compiled-path Exact override must be an object.",
+    );
+  }
+  const requiredBindings = [
+    "scenarioId",
+    "scenarioSha256",
+    "profileSha256",
+    "inputSha256",
+    "buildSha256",
+    "contractSha256",
+  ];
+  if (
+    !bindings
+    || requiredBindings.some((key) => bindings[key] !== expectedBindings?.[key])
+  ) {
+    throw new CompiledPathInspectorError(
+      "runner-exact-binding-mismatch",
+      "The programmatic compiled-path Exact override does not match retained native bindings.",
+    );
+  }
+  const activeTick = value.activeTick ?? value.tick;
+  const field = value.field ?? value.fieldId;
+  const phase = value.phase;
+  const phaseOrder = value.phaseOrder;
+  if (
+    !Number.isSafeInteger(activeTick)
+    || activeTick < 0
+    || typeof field !== "string"
+    || field.length === 0
+    || typeof phase !== "string"
+    || !Number.isSafeInteger(phaseOrder)
+    || typeof value.reference?.numericBits !== "string"
+    || typeof value.candidate?.numericBits !== "string"
+  ) {
+    throw new CompiledPathInspectorError(
+      "runner-exact-invalid",
+      "The programmatic compiled-path Exact override is incomplete.",
+    );
+  }
+  return {
+    ...retained,
+    activeTick,
+    phase,
+    phaseOrder,
+    field,
+    fieldLabel: value.fieldLabel ?? field,
+    reason: value.reason ?? null,
+    reference: value.reference,
+    candidate: value.candidate,
+  };
 }
 
 function resolveProfilePath(workspaceRoot, profilePath) {

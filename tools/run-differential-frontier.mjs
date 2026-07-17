@@ -30,6 +30,7 @@ import {
   parseWatcomMap,
   selectWatcomMapSymbol,
 } from "./compiled-path-inspector-core.mjs";
+import { runCurrentCompiledPathCheck } from "./run-compiled-path-check.mjs";
 import {
   DIFFERENTIAL_FRONTIER_AGENT_SCHEMA,
   DIFFERENTIAL_FRONTIER_EVIDENCE_SCHEMA,
@@ -45,7 +46,9 @@ import {
   decodeMatchPlayer,
   diffScalarMaps,
   findBrowserMappingCandidates,
+  findNativeBranchDiscriminators,
   findNativeCallerBranches,
+  findNativeGuardedCallSites,
   findNativeWriteSites,
   findRuntimeProducerCandidates,
   flattenScalars,
@@ -741,8 +744,17 @@ async function buildEvidence({
         runtimeFiles: runtime.sourceFiles,
       })
     : [];
+  const nativeBranchIdentity = await resolveNativeBranchIdentity({
+    branches: nativeCallerBranches,
+    nativeFiles,
+    exact: scan.exact,
+    bindings: context.native.bindings,
+    evidenceRoot,
+    outputRoot,
+  });
+  const selectedNativeBranch = nativeBranchIdentity.branch;
   const browserMappingCandidates = findBrowserMappingCandidates(runtime.sourceFiles, {
-    nativeBranch: nativeCallerBranches[0] ?? null,
+    nativeBranch: selectedNativeBranch,
     transitionSymbols,
     callTrace,
   });
@@ -752,15 +764,25 @@ async function buildEvidence({
   });
   const negativePathFocus = deriveNegativePathFocus({
     negativePath: negativePathCandidates[0] ?? null,
-    nativeBranch: nativeCallerBranches[0] ?? null,
+    nativeBranch: selectedNativeBranch,
+    nativeBranchIdentity,
+  });
+  const nativeBranchMismatchFocus = deriveNativeBranchMismatchFocus({
+    negativePath: negativePathCandidates[0] ?? null,
+    nativeBranch: selectedNativeBranch,
+    nativeBranchIdentity,
+    nativeFiles,
+    playerControl: internal.player?.control ?? null,
   });
   const symbolicRouting = buildSymbolicRouting({
     nativeWriter,
     symbolicTransitions,
     nativeCallerBranches,
+    nativeBranchIdentity,
     browserMappingCandidates,
     negativePathCandidates,
     negativePathFocus,
+    nativeBranchMismatchFocus,
   });
   const nativeFunctions = [...new Set(nativeSites.map((site) => site.function).filter(Boolean))];
   const runtimeCandidates = scan.exact === null ? [] : findRuntimeProducerCandidates(
@@ -934,6 +956,8 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
     player: {
       entityId,
       nativePlayerNumber,
+      control: nativeCurrent.control,
+      shirtRange: nativeCurrent.shirtRange,
       structSha256,
       teamsAddress: `${teams.segment}:0x${teams.offset.toString(16).padStart(8, "0")}`,
     },
@@ -1009,6 +1033,172 @@ function nativeValueSymbols(sourceFiles, exact) {
     }
   }
   return Object.freeze([...new Set(symbols)]);
+}
+
+export async function resolveNativeBranchIdentity({
+  branches,
+  nativeFiles,
+  exact,
+  bindings,
+  evidenceRoot,
+  outputRoot,
+  runCompiledPathCheck = runCurrentCompiledPathCheck,
+}) {
+  const candidates = uniqueNativeBranchFunctions(branches);
+  if (candidates.length === 0) {
+    return Object.freeze({
+      status: "not-available",
+      branch: null,
+      discriminator: null,
+      candidates: Object.freeze([]),
+      failures: Object.freeze([]),
+    });
+  }
+  if (candidates.length === 1 && branches.length === 1) {
+    return Object.freeze({
+      status: "static-unique",
+      branch: candidates[0],
+      discriminator: null,
+      candidates: Object.freeze([compactNativeBranchCandidate(candidates[0])]),
+      failures: Object.freeze([]),
+    });
+  }
+  const discriminators = findNativeBranchDiscriminators(nativeFiles, { branches: candidates });
+  const failures = [];
+  for (const discriminator of discriminators) {
+    const observations = [];
+    let failed = false;
+    for (const branch of candidates) {
+      const objectName = basename(branch.file).replace(/\.(?:c|cpp)$/iu, "");
+      try {
+        const action = await runCompiledPathCheck({
+          workspaceRoot: evidenceRoot,
+          workRoot: join(outputRoot, "native-branch-identity"),
+          functionName: branch.function,
+          objectName,
+          symbols: [discriminator.symbol],
+          exactOverride: exact,
+          exactOverrideBindings: bindings,
+        });
+        if (!compiledActionMatchesExact(action, exact)) {
+          failures.push(Object.freeze({
+            code: "native-branch-exact-mismatch",
+            function: branch.function,
+            symbol: discriminator.symbol,
+          }));
+          failed = true;
+          break;
+        }
+        const symbol = action.symbols.find(({ name }) => name === discriminator.symbol);
+        const expectedValues = [...new Set(
+          symbol?.constantWrites?.map(({ value }) => value) ?? [],
+        )];
+        if (expectedValues.length !== 1 || symbol?.runtime == null) {
+          failures.push(Object.freeze({
+            code: "native-branch-discriminator-unusable",
+            function: branch.function,
+            symbol: discriminator.symbol,
+            expectedValues,
+          }));
+          failed = true;
+          break;
+        }
+        observations.push(Object.freeze({
+          ...compactNativeBranchCandidate(branch),
+          expectedValue: expectedValues[0],
+          runtimeValue: symbol.runtime.value,
+          valueType: symbol.valueType,
+          numericBits: symbol.runtime.numericBits,
+          matched: Object.is(expectedValues[0], symbol.runtime.value),
+          evidencePath: action.evidencePath,
+          authority: action.runtime.authority,
+          parityAuthority: action.runtime.parityAuthority,
+        }));
+      } catch (error) {
+        failures.push(Object.freeze({
+          code: typeof error?.code === "string" ? error.code : "native-branch-check-failed",
+          function: branch.function,
+          symbol: discriminator.symbol,
+          message: error instanceof Error ? error.message : String(error),
+        }));
+        failed = true;
+        break;
+      }
+    }
+    if (failed) continue;
+    const runtimeValues = new Set(observations.map(({ runtimeValue }) => runtimeValue));
+    const expectedValues = new Set(observations.map(({ expectedValue }) => expectedValue));
+    const matched = observations.filter(({ matched: value }) => value);
+    if (
+      observations.length !== candidates.length
+      || runtimeValues.size !== 1
+      || expectedValues.size !== candidates.length
+      || matched.length !== 1
+    ) {
+      failures.push(Object.freeze({
+        code: "native-branch-discriminator-ambiguous",
+        symbol: discriminator.symbol,
+        observations: Object.freeze(observations),
+      }));
+      continue;
+    }
+    const selected = candidates.find(({ file, function: name }) => (
+      file === matched[0].file && name === matched[0].function
+    ));
+    return Object.freeze({
+      status: "bound",
+      branch: selected,
+      discriminator: Object.freeze({
+        symbol: discriminator.symbol,
+        value: matched[0].runtimeValue,
+        valueType: matched[0].valueType,
+        numericBits: matched[0].numericBits,
+        authority: matched[0].authority,
+        parityAuthority: matched[0].parityAuthority,
+      }),
+      candidates: Object.freeze(observations),
+      failures: Object.freeze(failures),
+    });
+  }
+  return Object.freeze({
+    status: "ambiguous",
+    branch: null,
+    discriminator: null,
+    candidates: Object.freeze(candidates.map(compactNativeBranchCandidate)),
+    failures: Object.freeze(failures),
+  });
+}
+
+function uniqueNativeBranchFunctions(branches) {
+  const output = [];
+  const seen = new Set();
+  for (const branch of branches) {
+    const key = `${branch.file}\u0000${branch.function}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(branch);
+  }
+  return output;
+}
+
+function compactNativeBranchCandidate(branch) {
+  return Object.freeze({
+    file: branch.file,
+    function: branch.function,
+    line: branch.line,
+    caseValue: branch.caseValue,
+    matchedTransitionSymbols: branch.matchedTransitionSymbols,
+  });
+}
+
+function compiledActionMatchesExact(action, exact) {
+  return action?.status === "complete"
+    && action.exact?.activeTick === exact?.tick
+    && action.exact?.phase === exact?.phase
+    && action.exact?.phaseOrder === exact?.phaseOrder
+    && action.exact?.field === exact?.fieldId
+    && action.exact?.reference?.numericBits === exact?.reference?.numericBits
+    && action.exact?.candidate?.numericBits === exact?.candidate?.numericBits;
 }
 
 export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8 }) {
@@ -1107,6 +1297,7 @@ export function rankNegativePathTrace({ trace, declarations, limit = 8 }) {
         ? Object.freeze([])
         : negativeBranchSites(declaration, signal),
       supportingCalls: negativeSupportingCalls(trace.records, record),
+      ancestorCalls: negativeAncestorCalls(trace.records, record),
     }));
   }
   return Object.freeze(candidates
@@ -1116,8 +1307,15 @@ export function rankNegativePathTrace({ trace, declarations, limit = 8 }) {
     .slice(0, limit));
 }
 
-export function deriveNegativePathFocus({ negativePath, nativeBranch }) {
-  if (negativePath === null || !Number.isSafeInteger(nativeBranch?.caseValue)) return null;
+export function deriveNegativePathFocus({ negativePath, nativeBranch, nativeBranchIdentity }) {
+  if (
+    negativePath === null
+    || !Number.isSafeInteger(nativeBranch?.caseValue)
+    || !["bound", "static-unique"].includes(nativeBranchIdentity?.status)
+    || !nativeBranchMatchesNegativePath(nativeBranch, negativePath)
+  ) {
+    return null;
+  }
   const result = unwrapBoundedResult(negativePath.result);
   const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
   const observed = candidates
@@ -1158,6 +1356,86 @@ export function deriveNegativePathFocus({ negativePath, nativeBranch }) {
       result: producer.result,
     }),
   });
+}
+
+export function deriveNativeBranchMismatchFocus({
+  negativePath,
+  nativeBranch,
+  nativeBranchIdentity,
+  nativeFiles,
+  playerControl = null,
+}) {
+  if (
+    negativePath === null
+    || nativeBranch === null
+    || !["bound", "static-unique"].includes(nativeBranchIdentity?.status)
+    || nativeBranchMatchesNegativePath(nativeBranch, negativePath)
+  ) {
+    return null;
+  }
+  const family = nativeBranchFamily(nativeBranch.function);
+  if (family === null) return null;
+  const guards = findNativeGuardedCallSites(nativeFiles, {
+    callee: nativeBranch.function,
+    playerControl,
+  });
+  const guard = guards[0] ?? null;
+  const missingDecisionFunction = guard?.conditionCalls.find((name) => (
+    nativeFamilyAliases(family).some((alias) => name.toLowerCase().includes(alias))
+  )) ?? null;
+  const ancestors = negativePath.ancestorCalls ?? [];
+  const browserOwner = ancestors.find(({ file }) => (
+    file !== null && file !== negativePath.file
+  )) ?? ancestors[0] ?? {
+    file: negativePath.file,
+    function: negativePath.function,
+    line: negativePath.line,
+  };
+  return Object.freeze({
+    kind: "native-browser-decision-family-mismatch",
+    nativeFamily: family,
+    nativeFunction: nativeBranch.function,
+    nativeFile: nativeBranch.file,
+    nativeLine: nativeBranch.line,
+    nativeCaseValue: nativeBranch.caseValue,
+    branchIdentity: nativeBranchIdentity.discriminator,
+    missingDecisionFunction,
+    nativeGuard: guard,
+    browserExecutedFunction: negativePath.function,
+    browserExecutedFile: negativePath.file,
+    browserOwner: Object.freeze({
+      file: browserOwner.file,
+      function: browserOwner.function,
+      line: browserOwner.line,
+    }),
+  });
+}
+
+function nativeBranchMatchesNegativePath(nativeBranch, negativePath) {
+  const family = nativeBranchFamily(nativeBranch.function);
+  if (!family) return true;
+  const aliases = nativeFamilyAliases(family);
+  const functions = [
+    negativePath.function,
+    ...(negativePath.supportingCalls ?? []).flatMap((call) => [
+      call.function,
+      ...(call.evaluations ?? []).map(() => call.function),
+    ]),
+  ].filter(Boolean).join(" ").toLowerCase();
+  return aliases.some((alias) => functions.includes(alias));
+}
+
+function nativeBranchFamily(functionName) {
+  return functionName
+    ?.replace(/^(?:make|init|start|set)_/u, "")
+    .split("_")
+    .find((term) => /^(?:pass|shoot|shot|punt|throw|cross)$/u.test(term)) ?? null;
+}
+
+function nativeFamilyAliases(family) {
+  return family === "shoot" || family === "shot"
+    ? ["shoot", "shot"]
+    : [family];
 }
 
 function negativeResultSignal(record) {
@@ -1249,6 +1527,25 @@ function negativeBranchSites(declaration, signal, limit = 8) {
     .slice(0, limit)
     .sort((left, right) => left.line - right.line)
     .map(Object.freeze));
+}
+
+function negativeAncestorCalls(records, selected, limit = 8) {
+  const byId = new Map(records.map((record) => [record.callId, record]));
+  const output = [];
+  let parent = selected.parentCallId;
+  while (parent !== null && output.length < limit) {
+    const record = byId.get(parent);
+    if (!record) break;
+    output.push(Object.freeze({
+      file: record.file,
+      function: record.function,
+      line: record.line,
+      callId: record.callId,
+      callDepth: record.callDepth,
+    }));
+    parent = record.parentCallId;
+  }
+  return Object.freeze(output);
 }
 
 function negativeSupportingCalls(records, selected, limit = 20) {
@@ -1451,18 +1748,22 @@ function buildSymbolicRouting({
   nativeWriter,
   symbolicTransitions,
   nativeCallerBranches,
+  nativeBranchIdentity,
   browserMappingCandidates,
   negativePathCandidates,
   negativePathFocus,
+  nativeBranchMismatchFocus,
 }) {
-  const nativeCallChain = nativeCallerBranches[0] ?? null;
+  const nativeCallChain = nativeBranchIdentity.branch;
   const negativePath = negativePathCandidates[0] ?? null;
   const browserMapping = browserMappingCandidates.find(({ activeAtFrontier }) => (
     activeAtFrontier
   )) ?? null;
   const staticBrowserMapping = browserMappingCandidates[0] ?? null;
   return Object.freeze({
-    status: negativePath !== null
+    status: nativeBranchIdentity.status === "ambiguous"
+      ? "native-branch-ambiguous"
+      : negativePath !== null
       ? "executed-negative-path"
       : browserMapping !== null
         ? "surfaced"
@@ -1479,9 +1780,13 @@ function buildSymbolicRouting({
       source: nativeWriter.source,
     }),
     nativeCallChain,
-    nativeAlternatives: Object.freeze(nativeCallerBranches.slice(1, 4)),
+    nativeBranchIdentity,
+    nativeAlternatives: Object.freeze(nativeCallerBranches
+      .filter((branch) => branch !== nativeCallChain)
+      .slice(0, 4)),
     negativePath,
     negativePathFocus,
+    nativeBranchMismatchFocus,
     negativePathAlternatives: Object.freeze(negativePathCandidates.slice(1, 4)),
     browserMapping,
     staticBrowserMapping,
@@ -1492,7 +1797,7 @@ function buildSymbolicRouting({
   });
 }
 
-function nextAction({
+export function nextAction({
   exact,
   producer,
   symbolicRouting,
@@ -1508,8 +1813,43 @@ function nextAction({
       command: "pnpm capture:browser:full-match:check && pnpm oven:differential",
     });
   }
+  if (symbolicRouting.status === "native-branch-ambiguous") {
+    return Object.freeze({
+      kind: "native-branch-identity-gap",
+      file: null,
+      function: null,
+      line: null,
+      question: "Multiple native branches produce the exact transition, and no retained discriminator proved which one executed.",
+      nativeBranchIdentity: symbolicRouting.nativeBranchIdentity,
+      rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+      doNotRerunBeforeRuntimeChanges: true,
+      note: "Do not associate a native switch value with a browser candidate until native branch identity is bound.",
+    });
+  }
   if (symbolicRouting.status === "executed-negative-path") {
     const negative = compactNegativePath(symbolicRouting.negativePath);
+    const branchMismatch = symbolicRouting.nativeBranchMismatchFocus;
+    if (branchMismatch !== null) {
+      const decision = branchMismatch.missingDecisionFunction
+        ?? `${branchMismatch.nativeFamily}_decision`;
+      return Object.freeze({
+        kind: "implement-missing-native-decision-branch",
+        file: branchMismatch.browserOwner.file,
+        function: branchMismatch.browserOwner.function,
+        line: branchMismatch.browserOwner.line,
+        question: `Native ${branchMismatch.nativeFunction} is proven by ${branchMismatch.branchIdentity?.symbol}=${branchMismatch.branchIdentity?.value}, but the browser executed ${branchMismatch.browserExecutedFunction}; implement ${decision} before that later decision path.`,
+        nativeBranchMismatch: branchMismatch,
+        nativeBranchIdentity: symbolicRouting.nativeBranchIdentity,
+        rejectionKind: negative.rejectionKind,
+        rejectionReason: negative.rejectionReason,
+        result: negative.result,
+        supportingCalls: negative.supportingCalls,
+        publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+        rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+        doNotRerunBeforeRuntimeChanges: duplicate,
+        note: "The native branch discriminator outranks a browser helper with a different decision family.",
+      });
+    }
     const focus = symbolicRouting.negativePathFocus;
     const producer = focus?.producer ?? negative;
     return Object.freeze({
@@ -1672,8 +2012,10 @@ function compactSymbolicRouting(routing) {
         ? {}
         : { dispatchTable: branch.dispatchTable }),
     }),
+    nativeBranchIdentity: routing.nativeBranchIdentity,
     negativePath: compactNegativePath(routing.negativePath, { includeEvidence: false }),
     negativePathFocus: routing.negativePathFocus,
+    nativeBranchMismatchFocus: routing.nativeBranchMismatchFocus,
     negativePathAlternatives: routing.status === "executed-negative-path"
       ? []
       : routing.negativePathAlternatives.map((candidate) => ({
@@ -1718,6 +2060,7 @@ function compactNegativePath(candidate, { includeEvidence = true } = {}) {
     ...(includeEvidence ? {
       sourceBranches: candidate.sourceBranches,
       supportingCalls: candidate.supportingCalls,
+      ancestorCalls: candidate.ancestorCalls,
     } : {}),
   });
 }

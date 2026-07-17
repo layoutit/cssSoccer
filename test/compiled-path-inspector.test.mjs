@@ -38,6 +38,16 @@ const MAP = `
 0003:0003cf0c  float __near zone_hgt
 `;
 
+const WRAPPED_WRITE_LISTING = `
+00000020            void __near make_shoot( match_player __near * ):
+00000020  55                  push       ebp
+00000021  C7 05 00 00 00 00 03 00 00 00
+                          mov        dword ptr int __near kick_type,0x00000003
+0000002B  C3                  ret
+
+Routine Size: 12 bytes,    Routine Base: _TEXT + 0020
+`;
+
 test("indexes a Watcom function and identifies observable f32 stores", () => {
   const routine = parseWatcomRoutine(LISTING, "get_target");
   const analysis = analyzeWatcomRoutine(routine, [{ name: "zone_hgt", valueType: "f32" }]);
@@ -57,6 +67,18 @@ test("indexes a Watcom function and identifies observable f32 stores", () => {
   assert.equal(analysis.symbols[0].references[0].mnemonic, "fdiv");
   assert.equal(analysis.symbols[0].nextF32Stores.length, 1);
   assert.equal(analysis.symbols[0].nextF32Stores[0].target, "[eax]");
+});
+
+test("folds wrapped Watcom instructions and reports constant global writes", () => {
+  const routine = parseWatcomRoutine(WRAPPED_WRITE_LISTING, "make_shoot");
+  const analysis = analyzeWatcomRoutine(routine, [{ name: "kick_type", valueType: "i32" }]);
+
+  assert.equal(analysis.instructionCount, 3);
+  assert.equal(analysis.symbols[0].referenced, true);
+  assert.deepEqual(
+    analysis.symbols[0].constantWrites.map(({ value }) => value),
+    [3],
+  );
 });
 
 test("resolves the executable-specific symbol and reports a range immediately after it", () => {
