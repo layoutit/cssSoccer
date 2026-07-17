@@ -1,5 +1,11 @@
 # Compiled-path inspector
 
+Start exact-parity work with
+`node tools/run-differential-frontier.mjs --continue`. Use this inspector only
+as the nested action for a compiled function, float-store, or runtime-global
+question that remains after the frontier packet has named the active browser
+producer.
+
 The compiled-path inspector answers one checked native-code question without
 changing browser runtime code, canonical captures, or original game source.
 It treats the original Watcom object as the static code authority and an
