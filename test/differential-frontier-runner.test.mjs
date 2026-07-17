@@ -3,13 +3,17 @@ import test from "node:test";
 
 import {
   DifferentialFrontierError,
+  buildNativeSymbolTable,
   buildTransitionClues,
   classifyMismatch,
   compareExactCoordinates,
   createExactSelector,
   decodeMatchPlayer,
+  findBrowserMappingCandidates,
+  findNativeCallerBranches,
   findNativeWriteSites,
   parseCssoraw2,
+  resolveNativeTransitionSymbols,
 } from "../tools/support/differential-frontier-core.mjs";
 import { createDifferentialFrontierTraceController } from
   "../tools/support/differential-frontier-trace-runtime.mjs";
@@ -95,6 +99,82 @@ test("native writer search rejects comparisons and prefers the written target va
   assert.equal(sites[0].function, "init_run_act");
   assert.equal(sites[0].matchedPreferredValue, true);
   assert.equal(sites.find(({ line }) => line === 7).write, false);
+});
+
+test("symbolic routing resolves a native transition through its caller branch and browser mapping", () => {
+  const nativeFiles = [
+    sourceFile("DATA.H", [
+      "#define MC_PASSL 39",
+      "#define MC_DIAGPASSL 47",
+    ]),
+    sourceFile("ACTIONS.CPP", [
+      "void init_kick_act(match_player *player,int mc,float pc)",
+      "{",
+      "  init_anim(player,mc);",
+      "  player->tm_act=KICK_ACT;",
+      "}",
+    ]),
+    sourceFile("INTELL.CPP", [
+      "void make_pass(match_player *player,int p)",
+      "{",
+      "  switch(pass_type)",
+      "  {",
+      "    case(5):",
+      "      init_kick_act(player,MC_PASSL,MCC_PASS);",
+      "      break;",
+      "    case(4):",
+      "      init_kick_act(player,MC_DIAGPASSL,MCC_DIAGPASS);",
+      "      break;",
+      "  }",
+      "}",
+      "void make_shoot(match_player *player)",
+      "{",
+      "  switch(pass_type)",
+      "  {",
+      "    case(4):",
+      "      init_kick_act(player,MC_DIAGPASSL,MCC_DIAGPASS);",
+      "      break;",
+      "  }",
+      "}",
+    ]),
+  ];
+  const runtimeFiles = [sourceFile("browserMatchEngine.mjs", [
+    "const LIVE_KICK_ACTION = 15;",
+    "/** Apply make_pass -> init_kick_act for an ordinary AI pass decision. */",
+    "function openingLivePassIsQualified(player, decision) {",
+    "  return new Set([-1, 1]).has(decision.passType)",
+    "    && decision.targetNativePlayer > 0;",
+    "}",
+    "function initializeOpeningLivePass(player, decision) {",
+    "  const launch = decision.passType === -1 ? chip(player) : backheel(player);",
+    "  return { ...player, action: LIVE_KICK_ACTION, launch };",
+    "}",
+  ])];
+  const symbols = buildNativeSymbolTable(nativeFiles, runtimeFiles);
+  const transitions = resolveNativeTransitionSymbols([
+    { sourceMember: "tm_act", browserPath: "action", before: 1, after: 15 },
+    { sourceMember: "tm_anim", browserPath: "animation", before: 72, after: 47 },
+  ], symbols);
+  const branches = findNativeCallerBranches(nativeFiles, {
+    callee: "init_kick_act",
+    transitionSymbols: transitions.map(({ symbol }) => symbol),
+    runtimeFiles,
+  });
+  const mappings = findBrowserMappingCandidates(runtimeFiles, {
+    nativeBranch: branches[0],
+    transitionSymbols: transitions.map(({ symbol }) => symbol),
+  });
+
+  assert.deepEqual(transitions.map(({ sourceMember, symbol }) => ({ sourceMember, symbol })), [
+    { sourceMember: "tm_act", symbol: "KICK_ACT" },
+    { sourceMember: "tm_anim", symbol: "MC_DIAGPASSL" },
+  ]);
+  assert.equal(branches[0].function, "make_pass");
+  assert.equal(branches[0].caseValue, 4);
+  assert.deepEqual(branches[0].matchedTransitionSymbols, ["MC_DIAGPASSL"]);
+  assert.deepEqual(branches[0].dispatchTable.map(({ caseValue }) => caseValue), [5, 4]);
+  assert.equal(mappings[0].function, "openingLivePassIsQualified");
+  assert.match(mappings[0].source, /new Set/u);
 });
 
 test("temporary call tracing identifies the direct active producer", () => {
@@ -198,6 +278,10 @@ function exactMismatch() {
 
 function sample(valueType, value, numericBits) {
   return { valueType, value, numericBits };
+}
+
+function sourceFile(name, lines) {
+  return { name, path: `fixture/${name}`, text: lines.join("\n") };
 }
 
 function cssorawFixture({ rangeOffset, bytes, tick }) {

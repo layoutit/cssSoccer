@@ -259,6 +259,251 @@ export function findNativeWriteSites(files, {
     .map(Object.freeze));
 }
 
+export function buildNativeSymbolTable(nativeFiles, runtimeFiles = []) {
+  const entries = [];
+  const seen = new Set();
+  const add = ({ symbol, sourceSymbol = symbol, value, file, line, kind }) => {
+    if (!symbol || !Number.isFinite(value)) return;
+    const key = `${symbol}\u0000${value}\u0000${file}\u0000${line}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(Object.freeze({ symbol, sourceSymbol, value, file, line, kind }));
+  };
+
+  for (const file of nativeFiles) {
+    const lines = file.text.split(/\r?\n/u);
+    for (let index = 0; index < lines.length; index += 1) {
+      const define = lines[index].match(
+        /^\s*#\s*define\s+([A-Z][A-Z0-9_]*)\s+(-?(?:0[xX][0-9a-fA-F]+|\d+))\b/u,
+      );
+      if (!define) continue;
+      add({
+        symbol: define[1],
+        value: Number(define[2]),
+        file: file.path,
+        line: index + 1,
+        kind: "native-define",
+      });
+    }
+    for (const enumeration of nativeEnumConstants(file.text)) {
+      add({ ...enumeration, file: file.path, kind: "native-enum" });
+    }
+  }
+
+  const integerConstantPattern = /integerConstant\(\s*"([A-Z][A-Z0-9_]*)"\s*,\s*"[iu](?:8|16|32)"\s*,\s*(-?\d+)\s*\)/gu;
+  const runtimeConstantPattern = /\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*(-?(?:0[xX][0-9a-fA-F]+|\d+))\s*;/gu;
+  const annotatedSymbolPattern = /["'`]([A-Z][A-Z0-9_]*)\s+(-?\d+)\b/gu;
+  for (const file of runtimeFiles) {
+    for (const match of file.text.matchAll(integerConstantPattern)) {
+      add({
+        symbol: match[1],
+        value: Number(match[2]),
+        file: file.path,
+        line: lineNumberAt(file.text, match.index),
+        kind: "runtime-native-constant",
+      });
+    }
+    for (const match of file.text.matchAll(runtimeConstantPattern)) {
+      add({
+        symbol: normalizeRuntimeSymbol(match[1]),
+        sourceSymbol: match[1],
+        value: Number(match[2]),
+        file: file.path,
+        line: lineNumberAt(file.text, match.index),
+        kind: "runtime-constant",
+      });
+    }
+    for (const match of file.text.matchAll(annotatedSymbolPattern)) {
+      add({
+        symbol: match[1],
+        value: Number(match[2]),
+        file: file.path,
+        line: lineNumberAt(file.text, match.index),
+        kind: "runtime-source-annotation",
+      });
+    }
+  }
+
+  return Object.freeze(entries.sort((left, right) => (
+    left.symbol.localeCompare(right.symbol)
+    || left.value - right.value
+    || left.file.localeCompare(right.file)
+    || left.line - right.line
+  )));
+}
+
+export function resolveNativeTransitionSymbols(changes, symbolTable, { limit = 12 } = {}) {
+  const resolved = [];
+  for (const change of changes) {
+    if (!Number.isSafeInteger(change.after)) continue;
+    const matches = symbolTable
+      .filter(({ value }) => value === change.after)
+      .map((entry) => ({ ...entry, score: nativeSymbolScore(change.sourceMember, entry) }))
+      .filter(({ score }) => score >= 40)
+      .sort((left, right) => right.score - left.score
+        || nativeSymbolKindOrder(left.kind) - nativeSymbolKindOrder(right.kind)
+        || left.symbol.localeCompare(right.symbol));
+    const unique = [];
+    const symbols = new Set();
+    for (const match of matches) {
+      if (symbols.has(match.symbol)) continue;
+      symbols.add(match.symbol);
+      unique.push(Object.freeze(match));
+      if (unique.length === 4) break;
+    }
+    if (unique.length === 0) continue;
+    resolved.push(Object.freeze({
+      sourceMember: change.sourceMember,
+      browserPath: change.browserPath,
+      before: change.before,
+      after: change.after,
+      symbol: unique[0].symbol,
+      alternatives: Object.freeze(unique),
+    }));
+  }
+  return Object.freeze(resolved
+    .sort((left, right) => nativeMemberOrder(left.sourceMember) - nativeMemberOrder(right.sourceMember)
+      || left.sourceMember.localeCompare(right.sourceMember))
+    .slice(0, limit));
+}
+
+export function findNativeCallerBranches(files, {
+  callee,
+  transitionSymbols = [],
+  runtimeFiles = [],
+  limit = 10,
+} = {}) {
+  if (typeof callee !== "string" || callee.length === 0) return Object.freeze([]);
+  const runtimeText = runtimeFiles.map(({ text }) => text).join("\n");
+  const callPattern = wordPattern(callee);
+  const sites = [];
+  for (const file of files) {
+    const lines = file.text.split(/\r?\n/u);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!callPattern.test(line) || !line.includes("(")) continue;
+      const context = enclosingFunction(lines, index);
+      if (context.name === callee && context.line === index + 1) continue;
+      const argumentsList = callArguments(line, callee);
+      if (argumentsList === null) continue;
+      const branch = nearestNativeBranch(lines, index, context.line);
+      const identifiers = [...new Set(argumentsList.flatMap((argument) => (
+        [...argument.matchAll(/\b[A-Z][A-Z0-9_]*\b/gu)].map((match) => match[0])
+      )))];
+      const matchedTransitionSymbols = transitionSymbols.filter((symbol) => identifiers.includes(symbol));
+      const runtimeMentioned = context.name !== null && wordPattern(context.name).test(runtimeText);
+      let score = 20 + matchedTransitionSymbols.length * 120;
+      if (branch.caseValue !== null) score += 24;
+      if (runtimeMentioned) score += 90;
+      if (/\b(?:make|init|start|set)_/u.test(context.name ?? "")) score += 8;
+      sites.push({
+        file: file.path,
+        line: index + 1,
+        function: context.name,
+        functionLine: context.line,
+        callee,
+        arguments: Object.freeze(argumentsList),
+        argumentSymbols: Object.freeze(identifiers),
+        matchedTransitionSymbols: Object.freeze(matchedTransitionSymbols),
+        switchExpression: branch.switchExpression,
+        caseExpression: branch.caseExpression,
+        caseValue: branch.caseValue,
+        runtimeMentioned,
+        score,
+        source: line.trim().slice(0, 260),
+      });
+    }
+  }
+
+  const groups = new Map();
+  for (const site of sites) {
+    const key = `${site.file}\u0000${site.function}\u0000${site.switchExpression}`;
+    const group = groups.get(key) ?? [];
+    group.push(site);
+    groups.set(key, group);
+  }
+  return Object.freeze(sites
+    .filter(({ matchedTransitionSymbols }) => matchedTransitionSymbols.length > 0)
+    .sort((left, right) => right.score - left.score
+      || left.file.localeCompare(right.file)
+      || left.line - right.line)
+    .slice(0, limit)
+    .map((site) => Object.freeze({
+      ...site,
+      dispatchTable: Object.freeze((groups.get(
+        `${site.file}\u0000${site.function}\u0000${site.switchExpression}`,
+      ) ?? [])
+        .filter(({ caseExpression }) => caseExpression !== null)
+        .map((entry) => Object.freeze({
+          caseExpression: entry.caseExpression,
+          caseValue: entry.caseValue,
+          arguments: entry.arguments,
+          argumentSymbols: entry.argumentSymbols,
+          line: entry.line,
+        }))),
+    })));
+}
+
+export function findBrowserMappingCandidates(files, {
+  nativeBranch,
+  transitionSymbols = [],
+  callTrace = null,
+  limit = 8,
+} = {}) {
+  if (!nativeBranch) return Object.freeze([]);
+  const switchTerms = [...new Set([
+    nativeBranch.switchExpression,
+    snakeToCamel(nativeBranch.switchExpression ?? ""),
+  ].filter((term) => term.length > 2))];
+  const nativeTerms = [...new Set([
+    nativeBranch.function,
+    nativeBranch.callee,
+    ...transitionSymbols,
+  ].filter((term) => typeof term === "string" && term.length > 2))];
+  const activeFunctions = new Set(
+    callTrace?.status === "captured"
+      ? callTrace.records.map(({ function: name }) => name)
+      : [],
+  );
+  const candidates = [];
+  for (const file of files) {
+    if (runtimeFileClassification(file.name) !== "runtime") continue;
+    const lines = file.text.split(/\r?\n/u);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const matchedSwitchTerms = switchTerms.filter((term) => line.includes(term));
+      const matchedNativeTerms = nativeTerms.filter((term) => wordPattern(term).test(line));
+      if (matchedSwitchTerms.length === 0 && matchedNativeTerms.length === 0) continue;
+      const context = enclosingFunction(lines, index);
+      const structural = /\b(?:case|switch)\b|\.has\s*\(|===|!==|\?\s*[^:]+\s*:/u.test(line);
+      const exactCaseMentioned = nativeBranch.caseValue !== null
+        && runtimeCaseMentioned(line, switchTerms, nativeBranch.caseValue);
+      let score = matchedSwitchTerms.length * 55 + matchedNativeTerms.length * 38;
+      if (structural) score += 42;
+      if (exactCaseMentioned && structural) score += 35;
+      if (/qualif|allow|support|valid/iu.test(context.name ?? "")) score += 38;
+      if (/initial|launch|kick|pass/iu.test(context.name ?? "")) score += 22;
+      if (activeFunctions.has(context.name)) score += 28;
+      candidates.push(Object.freeze({
+        file: file.path,
+        line: index + 1,
+        function: context.name,
+        score,
+        activeAtFrontier: activeFunctions.has(context.name),
+        exactCaseMentioned,
+        matchedSwitchTerms: Object.freeze(matchedSwitchTerms),
+        matchedNativeTerms: Object.freeze(matchedNativeTerms),
+        source: line.trim().slice(0, 260),
+      }));
+    }
+  }
+  return Object.freeze(candidates
+    .sort((left, right) => right.score - left.score
+      || left.file.localeCompare(right.file)
+      || left.line - right.line)
+    .slice(0, limit));
+}
+
 export function findRuntimeProducerCandidates(files, {
   selector,
   sourceOwner,
@@ -644,8 +889,142 @@ function fieldAliases(selector) {
   return [...new Set(aliases.filter(Boolean))];
 }
 
+function nativeEnumConstants(text) {
+  const entries = [];
+  for (const enumeration of text.matchAll(/\benum(?:\s+[A-Za-z_]\w*)?\s*\{([\s\S]*?)\}/gu)) {
+    const body = enumeration[1];
+    const bodyOffset = enumeration.index + enumeration[0].indexOf(body);
+    let cursor = 0;
+    let nextValue = 0;
+    for (const rawEntry of body.split(",")) {
+      const entryOffset = body.indexOf(rawEntry, cursor);
+      cursor = entryOffset + rawEntry.length + 1;
+      const entry = rawEntry
+        .replace(/\/\*[\s\S]*?\*\//gu, " ")
+        .replace(/\/\/.*$/gmu, " ")
+        .trim();
+      const match = entry.match(/^([A-Z][A-Z0-9_]*)(?:\s*=\s*(-?(?:0[xX][0-9a-fA-F]+|\d+)))?\s*$/u);
+      if (!match) {
+        nextValue = null;
+        continue;
+      }
+      const value = match[2] === undefined ? nextValue : Number(match[2]);
+      if (!Number.isSafeInteger(value)) continue;
+      entries.push({
+        symbol: match[1],
+        value,
+        line: lineNumberAt(text, bodyOffset + entryOffset),
+      });
+      nextValue = value + 1;
+    }
+  }
+  return entries;
+}
+
+function normalizeRuntimeSymbol(symbol) {
+  return symbol
+    .replace(/^LIVE_/u, "")
+    .replace(/_ACTION$/u, "_ACT");
+}
+
+function nativeSymbolScore(sourceMember, entry) {
+  let score = entry.kind === "native-define" || entry.kind === "native-enum" ? 15 : 8;
+  if (sourceMember === "tm_anim" && /^MC_/u.test(entry.symbol)) score += 120;
+  if (sourceMember === "tm_act" && /_ACT$/u.test(entry.symbol)) score += 120;
+  if (sourceMember === "int_move" && /^I_/u.test(entry.symbol)) score += 120;
+  if (sourceMember === "ball_state" && /(?:BALL|STATE)/u.test(entry.symbol)) score += 75;
+  if (sourceMember === "dir_mode" && /(?:DIR|MODE)/u.test(entry.symbol)) score += 60;
+  if (sourceMember === "turn_dir" && /(?:TURN|DIR)/u.test(entry.symbol)) score += 60;
+  return score;
+}
+
+function nativeSymbolKindOrder(kind) {
+  return ["native-define", "native-enum", "runtime-native-constant", "runtime-source-annotation", "runtime-constant"]
+    .indexOf(kind);
+}
+
+function nativeMemberOrder(member) {
+  return ["tm_act", "tm_anim", "int_move", "ball_state", "dir_mode", "turn_dir"]
+    .indexOf(member) === -1
+    ? 100
+    : ["tm_act", "tm_anim", "int_move", "ball_state", "dir_mode", "turn_dir"].indexOf(member);
+}
+
+function callArguments(line, callee) {
+  const start = line.search(new RegExp(`\\b${escapeRegExp(callee)}\\s*\\(`, "u"));
+  if (start === -1) return null;
+  const open = line.indexOf("(", start);
+  let depth = 0;
+  let argumentStart = open + 1;
+  const output = [];
+  for (let index = open + 1; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === "(" || character === "[" || character === "{") depth += 1;
+    else if (character === ")") {
+      if (depth === 0) {
+        output.push(line.slice(argumentStart, index).trim());
+        return output.length === 1 && output[0] === "" ? [] : output;
+      }
+      depth -= 1;
+    } else if (character === "]" || character === "}") depth -= 1;
+    else if (character === "," && depth === 0) {
+      output.push(line.slice(argumentStart, index).trim());
+      argumentStart = index + 1;
+    }
+  }
+  return null;
+}
+
+function nearestNativeBranch(lines, index, functionLine) {
+  const lowerBound = Math.max(0, (functionLine ?? index + 1) - 1);
+  let caseExpression = null;
+  let caseValue = null;
+  let caseLine = null;
+  for (let cursor = index; cursor >= lowerBound; cursor -= 1) {
+    const match = lines[cursor].match(/\bcase\s*\(?\s*([^:)]+?)\s*\)?\s*:/u);
+    if (!match) continue;
+    caseExpression = match[1].trim();
+    caseValue = /^-?(?:0[xX][0-9a-fA-F]+|\d+)$/u.test(caseExpression)
+      ? Number(caseExpression)
+      : null;
+    caseLine = cursor;
+    break;
+  }
+  let switchExpression = null;
+  if (caseLine !== null) {
+    for (let cursor = caseLine; cursor >= lowerBound; cursor -= 1) {
+      const match = lines[cursor].match(/\bswitch\s*\(([^)]+)\)/u);
+      if (!match) continue;
+      switchExpression = match[1].trim();
+      break;
+    }
+  }
+  return { switchExpression, caseExpression, caseValue };
+}
+
+function lineNumberAt(text, index) {
+  return text.slice(0, index).split("\n").length;
+}
+
+function snakeToCamel(value) {
+  return value.replace(/_([a-z])/gu, (_match, character) => character.toUpperCase());
+}
+
+function runtimeCaseMentioned(line, switchTerms, value) {
+  const number = escapeRegExp(String(value));
+  if (new RegExp(`\\bcase\\s*\\(?\\s*${number}(?:\\s|\\)|:)`, "u").test(line)) return true;
+  return switchTerms.some((term) => {
+    const name = escapeRegExp(term);
+    return new RegExp(
+      `(?:\\b${name}\\b\\s*(?:===?|!==?)\\s*${number}(?:\\D|$)|(?:^|\\D)${number}\\s*(?:===?|!==?)\\s*\\b${name}\\b|new\\s+Set\\s*\\([^)]*(?:^|\\D)${number}(?:\\D|$)[^)]*\\)\\.has\\s*\\([^)]*\\b${name}\\b)`,
+      "u",
+    ).test(line);
+  });
+}
+
 function enclosingFunction(lines, index) {
   for (let cursor = index; cursor >= Math.max(0, index - 120); cursor -= 1) {
+    if (/^\s*(?:return|throw|new)\b/u.test(lines[cursor])) continue;
     const match = lines[cursor].match(FUNCTION_PATTERN);
     if (!match || CONTROL_WORDS.has(match[1])) continue;
     return { name: match[1], line: cursor + 1 };

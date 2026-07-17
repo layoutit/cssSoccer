@@ -35,6 +35,7 @@ import {
   DIFFERENTIAL_FRONTIER_EVIDENCE_SCHEMA,
   DifferentialFrontierError,
   buildTransitionClues,
+  buildNativeSymbolTable,
   candidatePlayerContext,
   canonicalJson,
   changedNativeMembers,
@@ -43,11 +44,14 @@ import {
   createExactSelector,
   decodeMatchPlayer,
   diffScalarMaps,
+  findBrowserMappingCandidates,
+  findNativeCallerBranches,
   findNativeWriteSites,
   findRuntimeProducerCandidates,
   flattenScalars,
   parseCssoraw2,
   requireSha256,
+  resolveNativeTransitionSymbols,
   sampleReport,
   samplesEqual,
   sha256,
@@ -693,6 +697,34 @@ async function buildEvidence({
     additionalSymbols,
     preferredValueSymbols: preferredNativeValueSymbols,
   });
+  const nativeSymbolTable = scan.exact === null
+    ? []
+    : buildNativeSymbolTable(nativeFiles, runtime.sourceFiles);
+  const symbolicTransitions = scan.exact === null
+    ? []
+    : resolveNativeTransitionSymbols(internal.nativePlayerChanges, nativeSymbolTable);
+  const transitionSymbols = symbolicTransitions.map(({ symbol }) => symbol);
+  const nativeWriter = nativeSites.find(({ write, matchedPreferredValue }) => (
+    write && matchedPreferredValue
+  )) ?? nativeSites.find(({ write }) => write) ?? null;
+  const nativeCallerBranches = nativeWriter?.function
+    ? findNativeCallerBranches(nativeFiles, {
+        callee: nativeWriter.function,
+        transitionSymbols,
+        runtimeFiles: runtime.sourceFiles,
+      })
+    : [];
+  const browserMappingCandidates = findBrowserMappingCandidates(runtime.sourceFiles, {
+    nativeBranch: nativeCallerBranches[0] ?? null,
+    transitionSymbols,
+    callTrace,
+  });
+  const symbolicRouting = buildSymbolicRouting({
+    nativeWriter,
+    symbolicTransitions,
+    nativeCallerBranches,
+    browserMappingCandidates,
+  });
   const nativeFunctions = [...new Set(nativeSites.map((site) => site.function).filter(Boolean))];
   const runtimeCandidates = scan.exact === null ? [] : findRuntimeProducerCandidates(
     runtime.sourceFiles,
@@ -770,9 +802,11 @@ async function buildEvidence({
         candidates: runtimeCandidates,
       },
     },
+    symbolicRouting,
     nextAction: nextAction({
       exact: scan.exact,
       producer,
+      symbolicRouting,
       retainedMovement,
       duplicate,
       evidenceRoot,
@@ -784,6 +818,7 @@ async function buildEvidence({
     bindings: evidence.bindings,
     exactContext,
     producer: evidence.producer,
+    symbolicRouting,
   }).slice(0, 16);
   return Object.freeze(evidence);
 }
@@ -1099,12 +1134,83 @@ function classifyProducer(runtimeCandidates, nativeSites, dynamicCandidates) {
   });
 }
 
-function nextAction({ exact, producer, retainedMovement, duplicate, evidenceRoot, outputRoot }) {
+function buildSymbolicRouting({
+  nativeWriter,
+  symbolicTransitions,
+  nativeCallerBranches,
+  browserMappingCandidates,
+}) {
+  const nativeCallChain = nativeCallerBranches[0] ?? null;
+  const browserMapping = browserMappingCandidates[0] ?? null;
+  return Object.freeze({
+    status: browserMapping !== null
+      ? "surfaced"
+      : nativeCallChain !== null
+        ? "native-chain-only"
+        : symbolicTransitions.length > 0
+          ? "symbols-only"
+          : "not-surfaced",
+    transitions: symbolicTransitions,
+    nativeWriter: nativeWriter === null ? null : Object.freeze({
+      file: nativeWriter.file,
+      line: nativeWriter.line,
+      function: nativeWriter.function,
+      source: nativeWriter.source,
+    }),
+    nativeCallChain,
+    nativeAlternatives: Object.freeze(nativeCallerBranches.slice(1, 4)),
+    browserMapping,
+    browserAlternatives: Object.freeze(browserMappingCandidates.slice(1, 5)),
+    diagnosticOnly: true,
+  });
+}
+
+function nextAction({
+  exact,
+  producer,
+  symbolicRouting,
+  retainedMovement,
+  duplicate,
+  evidenceRoot,
+  outputRoot,
+}) {
   if (exact === null) {
     return Object.freeze({
       kind: "public-evaluation",
       question: "The diagnostic engine is exact; run the full capture and synchronous publisher.",
       command: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+    });
+  }
+  if (symbolicRouting.status === "surfaced") {
+    const branch = symbolicRouting.nativeCallChain;
+    const mapping = symbolicRouting.browserMapping;
+    const matched = branch.matchedTransitionSymbols.join(", ");
+    return Object.freeze({
+      kind: "implement-native-branch-mapping",
+      file: mapping.file,
+      function: mapping.function,
+      line: mapping.line,
+      question: `Implement ${branch.switchExpression} case ${branch.caseExpression} (${matched}) from ${branch.function} -> ${branch.callee} as a generic runtime mapping.`,
+      nativeChain: Object.freeze({
+        caller: branch.function,
+        callerFile: branch.file,
+        callerLine: branch.functionLine,
+        callLine: branch.line,
+        switchExpression: branch.switchExpression,
+        caseExpression: branch.caseExpression,
+        caseValue: branch.caseValue,
+        matchedSymbols: branch.matchedTransitionSymbols,
+      }),
+      nativeDispatchTable: branch.dispatchTable,
+      symbolicTransitions: symbolicRouting.transitions.map(({ sourceMember, after, symbol }) => ({
+        sourceMember,
+        after,
+        symbol,
+      })),
+      publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+      doNotRerunBeforeRuntimeChanges: duplicate,
+      note: "Use the surfaced native dispatch table to implement the branch family; rerun only after the runtime mapping changes.",
     });
   }
   if (producer.status === "surfaced") {
@@ -1169,6 +1275,7 @@ function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
         source: site.source,
       })),
     },
+    symbolicRouting: compactSymbolicRouting(evidence.symbolicRouting),
     transitionClues: evidence.current.transitionClues.slice(0, 6).map((clue) => ({
       fieldId: clue.fieldId,
       referenceChanged: clue.referenceChanged,
@@ -1183,6 +1290,34 @@ function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
     })),
     nextAction: evidence.nextAction,
     evidencePath: relativeOrAbsolute(evidenceRoot, evidencePath),
+  });
+}
+
+function compactSymbolicRouting(routing) {
+  const branch = routing.nativeCallChain;
+  return Object.freeze({
+    status: routing.status,
+    transitions: routing.transitions.map(({ sourceMember, before, after, symbol }) => ({
+      sourceMember,
+      before,
+      after,
+      symbol,
+    })),
+    nativeWriter: routing.nativeWriter,
+    nativeCallChain: branch === null ? null : Object.freeze({
+      caller: branch.function,
+      callerFile: branch.file,
+      callerLine: branch.functionLine,
+      callee: branch.callee,
+      callLine: branch.line,
+      switchExpression: branch.switchExpression,
+      caseExpression: branch.caseExpression,
+      caseValue: branch.caseValue,
+      matchedSymbols: branch.matchedTransitionSymbols,
+      dispatchTable: branch.dispatchTable,
+    }),
+    browserMapping: routing.browserMapping,
+    browserAlternatives: routing.browserAlternatives,
   });
 }
 
