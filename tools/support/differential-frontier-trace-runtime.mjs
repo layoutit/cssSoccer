@@ -23,11 +23,16 @@ export function createDifferentialFrontierTraceController() {
         config = null;
         return;
       }
-      if (!next || typeof next !== "object" || typeof next.entityId !== "string") {
-        throw new TypeError("Differential frontier trace requires an entityId.");
+      const entityId = typeof next?.entityId === "string" ? next.entityId : null;
+      const recordFailures = next?.recordFailures === true;
+      if (!next || typeof next !== "object" || (entityId === null && !recordFailures)) {
+        throw new TypeError(
+          "Differential frontier trace requires an entityId or recordFailures=true.",
+        );
       }
       config = Object.freeze({
-        entityId: next.entityId,
+        entityId,
+        recordFailures,
         nativePlayerNumber: Number.isSafeInteger(next.nativePlayerNumber)
           ? next.nativePlayerNumber
           : null,
@@ -69,7 +74,7 @@ export function createDifferentialFrontierTraceController() {
         const depth = callDepth;
         const currentCallId = callId += 1;
         const parentCallId = callStack.at(-1) ?? null;
-        const input = findEntity(args, config);
+        const input = config.entityId === null ? null : findEntity(args, config);
         callDepth += 1;
         callStack.push(currentCallId);
         let result;
@@ -82,8 +87,8 @@ export function createDifferentialFrontierTraceController() {
           callStack.pop();
           callDepth -= 1;
         }
-        const output = findEntity(result, config);
-        if (input !== null || output !== null) {
+        const output = config.entityId === null ? null : findEntity(result, config);
+        if (input !== null || output !== null || (failure !== null && config.recordFailures)) {
           if (records.length >= config.maxRecords) {
             truncated = true;
           } else {

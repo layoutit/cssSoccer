@@ -19,14 +19,19 @@ import {
 import { createDifferentialFrontierTraceController } from
   "../tools/support/differential-frontier-trace-runtime.mjs";
 import {
+  buildCompoundTransition,
   createDiagnosticModuleSource,
   createDiagnosticEngineSource,
+  describeRuntimeException,
   deriveNativeBranchMismatchFocus,
   deriveNegativePathFocus,
   nextAction,
   rankNegativePathTrace,
   rankDynamicProducerTrace,
+  rankRuntimeExceptionTrace,
   resolveNativeBranchIdentity,
+  runtimeExceptionNextAction,
+  selectFrontierTraceSubject,
   topLevelFunctionDeclarations,
 } from "../tools/run-differential-frontier.mjs";
 
@@ -458,6 +463,276 @@ test("negative-path tracing retains non-entity decisions and their executed help
   assert.equal(focus.expectedValue, 4);
 });
 
+test("failure-only tracing records the throwing producer without an entity selector", () => {
+  const controller = createDifferentialFrontierTraceController();
+  controller.configure({ recordFailures: true });
+  const failKeeperRoute = controller.wrap({
+    file: "src/cssoccer/keeperState.mjs",
+    name: "failKeeperRoute",
+    line: 20,
+  }, (player) => {
+    throw new Error(`Keeper ${String(player.nativePlayerNumber)} entered an outfield route.`);
+  });
+  const stepPlayers = controller.wrap({
+    file: "src/cssoccer/browserMatchEngine.mjs",
+    name: "stepPlayers",
+    line: 10,
+  }, (player) => failKeeperRoute(player));
+
+  assert.throws(
+    () => stepPlayers({ id: "demo-player-01", nativePlayerNumber: 12, action: 0 }),
+    /outfield route/u,
+  );
+  const trace = controller.read();
+
+  assert.equal(trace.records.length, 2);
+  assert.equal(trace.records[0].function, "failKeeperRoute");
+  assert.equal(trace.records[0].error.name, "Error");
+  assert.equal(trace.records[0].parentCallId, trace.records[1].callId);
+  assert.equal(trace.records[1].function, "stepPlayers");
+});
+
+test("runtime exception routing names the executed throw line and its call chain", () => {
+  const runtimeException = {
+    schema: "cssoccer-differential-frontier-runtime-exception@1",
+    tick: 51,
+    phase: "post_tick",
+    phaseOrder: 0,
+    name: "Error",
+    message: "Keeper entered an outfield route.",
+    source: { file: "src/cssoccer/keeperState.mjs", line: 22, column: 5 },
+  };
+  const trace = {
+    status: "captured",
+    records: [
+      {
+        callId: 2,
+        parentCallId: 1,
+        callDepth: 1,
+        file: "src/cssoccer/keeperState.mjs",
+        function: "failKeeperRoute",
+        line: 20,
+        arguments: [{ id: "demo-player-01", nativePlayerNumber: 12, action: 0 }],
+        error: { name: "Error", message: runtimeException.message },
+      },
+      {
+        callId: 1,
+        parentCallId: null,
+        callDepth: 0,
+        file: "src/cssoccer/browserMatchEngine.mjs",
+        function: "stepPlayers",
+        line: 10,
+        arguments: [{ id: "demo-player-01", nativePlayerNumber: 12, action: 0 }],
+        error: { name: "Error", message: runtimeException.message },
+      },
+    ],
+  };
+  const candidates = rankRuntimeExceptionTrace({
+    trace,
+    declarations: [
+      {
+        file: "src/cssoccer/keeperState.mjs",
+        name: "failKeeperRoute",
+        line: 20,
+        source: [
+          "function failKeeperRoute(player) {",
+          "  if (player.nativePlayerNumber === 12)",
+          "    throw new Error(\"Keeper entered an outfield route.\");",
+          "}",
+        ].join("\n"),
+      },
+      {
+        file: "src/cssoccer/browserMatchEngine.mjs",
+        name: "stepPlayers",
+        line: 10,
+        source: "function stepPlayers(player) { return failKeeperRoute(player); }",
+      },
+    ],
+    runtimeException,
+  });
+  const producer = {
+    status: "surfaced",
+    candidateFile: candidates[0].file,
+    candidateFunction: candidates[0].function,
+    candidateLine: candidates[0].line,
+    alternatives: candidates,
+  };
+  const action = runtimeExceptionNextAction({
+    runtimeException,
+    producer,
+    duplicate: false,
+    evidenceRoot: "/fixture",
+    outputRoot: "/fixture/output",
+  });
+
+  assert.equal(candidates[0].function, "failKeeperRoute");
+  assert.equal(candidates[0].line, 22);
+  assert.equal(candidates[0].sourceMatched, true);
+  assert.equal(candidates[0].callChain[0].function, "stepPlayers");
+  assert.deepEqual(candidates[0].argumentFacts, [
+    { path: "[0].action", value: 0 },
+    { path: "[0].id", value: "demo-player-01" },
+    { path: "[0].nativePlayerNumber", value: 12 },
+  ]);
+  assert.equal(action.kind, "repair-runtime-exception");
+  assert.equal(action.file, "src/cssoccer/keeperState.mjs");
+  assert.match(action.question, /before tick 51 could be compared/u);
+});
+
+test("maps diagnostic runtime stack lines back to product source", () => {
+  const error = new Error("keeper route failed");
+  error.stack = [
+    "Error: keeper route failed",
+    "    at failKeeperRoute (file:///tmp/frontier/src/cssoccer/keeperState.mjs:25:9)",
+  ].join("\n");
+  const failure = describeRuntimeException(error, {
+    tick: 8,
+    phase: "post_tick",
+    diagnosticSourceRoot: "/tmp/frontier/src/cssoccer",
+    sourceFiles: [{
+      name: "keeperState.mjs",
+      path: "src/cssoccer/keeperState.mjs",
+      text: "\n".repeat(40),
+    }],
+  });
+
+  assert.deepEqual(failure.source, {
+    file: "src/cssoccer/keeperState.mjs",
+    line: 23,
+    column: 9,
+  });
+});
+
+test("maps engine stack lines across both diagnostic transforms", () => {
+  const source = [
+    "export function createEngine() {",
+    "    inspect() {",
+    "      return engineInspection(current, nextTick);",
+    "    },",
+    "}",
+    "function stepEngine() {",
+    "  throw new Error(\"engine failed\");",
+    "}",
+  ].join("\n");
+  const error = new Error("engine failed");
+  error.stack = [
+    "Error: engine failed",
+    "    at stepEngine (file:///tmp/frontier/src/cssoccer/browserMatchEngine.mjs:12:3)",
+  ].join("\n");
+  const failure = describeRuntimeException(error, {
+    tick: 8,
+    phase: "post_tick",
+    diagnosticSourceRoot: "/tmp/frontier/src/cssoccer",
+    sourceFiles: [{
+      name: "browserMatchEngine.mjs",
+      path: "src/cssoccer/browserMatchEngine.mjs",
+      text: source,
+    }],
+  });
+
+  assert.equal(failure.source.line, 7);
+});
+
+test("groups a missing ball release under one native producer and executed runtime owner", () => {
+  const mismatches = [
+    ballMismatch("ball.in_air", "EXTERNS.H ball_inair; BALL.CPP", 0, 1, 0),
+    ballMismatch("ball.possession", "EXTERNS.H ball_poss; BALLINT.CPP", 9, 0, 9),
+    ballMismatch("ball.x_displacement", "EXTERNS.H ballxdis; BALL.CPP", 0, 4, 0),
+  ];
+  const fieldOrder = new Map(mismatches.map(({ fieldId }, index) => [fieldId, index]));
+  const exact = {
+    ...mismatches[0],
+    selector: createExactSelector(mismatches[0], fieldOrder),
+    route: {
+      schema: "cssoccer-differential-frontier-route@1",
+      id: "missing-transition",
+      question: "Which native transition is missing?",
+      diagnosticOnly: true,
+    },
+  };
+  const transitionClues = mismatches.map((mismatch) => ({
+    fieldId: mismatch.fieldId,
+    exact: mismatch.fieldId === exact.fieldId,
+    referenceChanged: true,
+    candidateChanged: false,
+    before: sample(mismatch.reference.valueType, mismatch.beforeValue, mismatch.beforeBits),
+    reference: mismatch.reference,
+    candidate: mismatch.candidate,
+  }));
+  const compound = buildCompoundTransition({
+    exact,
+    sameTickMismatches: mismatches,
+    transitionClues,
+    nativeFiles: [sourceFile("BALL.CPP", [
+      "void move_ball(void)",
+      "{",
+      "  ballxdis=next_xdis;",
+      "}",
+      "void shoot_ball(match_player *player)",
+      "{",
+      "  ball_inair=1;",
+      "  ball_poss=0;",
+      "  ballxdis=shot_xdis;",
+      "}",
+    ])],
+    declarations: [{
+      file: "src/cssoccer/browserMatchEngine.mjs",
+      name: "continueKickAction",
+      line: 70,
+      source: "function continueKickAction(player, ball) { return { player, ball }; }",
+    }],
+    callTrace: {
+      status: "captured",
+      records: [{
+        file: "src/cssoccer/browserMatchEngine.mjs",
+        function: "continueKickAction",
+        line: 70,
+        callDepth: 2,
+        input: { depth: 0, snapshot: { action: 15 } },
+        output: { depth: 0, snapshot: { action: 15 } },
+      }],
+    },
+  });
+  const action = nextAction({
+    exact,
+    producer: { status: "routing-gap" },
+    symbolicRouting: { status: "not-surfaced" },
+    compoundTransition: compound,
+    retainedMovement: "same",
+    duplicate: false,
+    evidenceRoot: "/fixture",
+    outputRoot: "/fixture/output",
+  });
+
+  assert.equal(compound.status, "surfaced");
+  assert.equal(compound.nativeProducer.function, "shoot_ball");
+  assert.equal(compound.nativeProducer.coverage, 3);
+  assert.equal(compound.runtimeOwner.function, "continueKickAction");
+  assert.equal(action.kind, "implement-compound-native-transition");
+  assert.equal(action.file, "src/cssoccer/browserMatchEngine.mjs");
+  assert.match(action.question, /as one transition/u);
+});
+
+test("uses the preceding possession owner to trace a non-player frontier", () => {
+  const subject = selectFrontierTraceSubject({
+    exact: {
+      selector: { domain: "ball", entityId: null },
+    },
+    sameTickMismatches: [],
+    previousDiagnosticState: {
+      possession: { owner: 9 },
+      players: [{ id: "demo-player-09", nativePlayerNumber: 9 }],
+    },
+    diagnosticState: null,
+  });
+
+  assert.deepEqual(subject, {
+    entityId: "demo-player-09",
+    nativePlayerNumber: 9,
+    reason: "preceding-possession-owner",
+  });
+});
+
 test("diagnostic transform wraps only top-level functions and exposes a frozen inspect seam", () => {
   const source = [
     "export function createEngine() {",
@@ -538,6 +813,25 @@ function exactMismatch() {
     reason: "numeric-bits",
     reference: sample("i16", 1, "0001"),
     candidate: sample("i16", 0, "0000"),
+  };
+}
+
+function ballMismatch(fieldId, sourceOwner, beforeValue, referenceValue, candidateValue) {
+  const valueType = fieldId.endsWith("displacement") ? "f32" : "i32";
+  const bits = (value) => valueType === "f32"
+    ? Buffer.from(new Float32Array([value]).buffer).toString("hex").match(/../gu).reverse().join("")
+    : Buffer.from(Int32Array.of(value).buffer).toString("hex").match(/../gu).reverse().join("");
+  return {
+    tick: 41,
+    phase: "post_tick",
+    phaseOrder: 0,
+    fieldId,
+    sourceOwner,
+    reason: "numeric-bits",
+    beforeValue,
+    beforeBits: bits(beforeValue),
+    reference: sample(valueType, referenceValue, bits(referenceValue)),
+    candidate: sample(valueType, candidateValue, bits(candidateValue)),
   };
 }
 

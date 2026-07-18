@@ -87,6 +87,7 @@ const TRACE_IMPORT = [
   `  from \"./${TRACE_RUNTIME_FILE}\";`,
   "",
 ].join("\n");
+const TRACE_IMPORT_LINE_COUNT = TRACE_IMPORT.split("\n").length - 1;
 const TRACE_EXCLUDED_FUNCTIONS = new Set([
   "clone",
   "deepFreeze",
@@ -437,6 +438,13 @@ async function createDiagnosticRuntime({
     createEngine,
     configureTrace: engineModule.configureCssoccerDifferentialFrontierTrace,
     readTrace: engineModule.readCssoccerDifferentialFrontierTrace,
+    describeError(error, coordinate) {
+      return describeRuntimeException(error, {
+        ...coordinate,
+        diagnosticSourceRoot,
+        sourceFiles,
+      });
+    },
     matchState,
     fields: contractModule.CSSOCCER_NATIVE_FIELDS,
     createTick: oracleModule.createCssoccerOracleTick,
@@ -523,6 +531,72 @@ function countNewlines(value, end) {
     if (value.charCodeAt(index) === 10) count += 1;
   }
   return count;
+}
+
+export function describeRuntimeException(error, {
+  tick,
+  phase,
+  diagnosticSourceRoot = null,
+  sourceFiles = [],
+} = {}) {
+  const name = typeof error?.name === "string" ? error.name : "Error";
+  const message = typeof error?.message === "string" ? error.message : String(error);
+  const sourceByName = new Map(sourceFiles.map((file) => [file.name, file]));
+  let source = null;
+  if (typeof error?.stack === "string") {
+    for (const line of error.stack.split(/\r?\n/u)) {
+      const match = line.match(
+        /\(?((?:file:\/\/)?[^()\s]+?\.mjs)(?:\?[^:\s)]*)?:(\d+):(\d+)\)?/u,
+      );
+      if (!match) continue;
+      let framePath;
+      try {
+        framePath = match[1].startsWith("file://")
+          ? fileURLToPath(match[1])
+          : match[1];
+      } catch {
+        continue;
+      }
+      const file = sourceByName.get(basename(framePath));
+      if (!file) continue;
+      const generatedLine = Number.parseInt(match[2], 10);
+      const fromDiagnosticCopy = diagnosticSourceRoot !== null
+        && resolve(framePath).startsWith(`${resolve(diagnosticSourceRoot)}${sep}`);
+      source = Object.freeze({
+        file: file.path,
+        line: fromDiagnosticCopy
+          ? mapDiagnosticSourceLine(file, generatedLine)
+          : generatedLine,
+        column: Number.parseInt(match[3], 10),
+      });
+      break;
+    }
+  }
+  return Object.freeze({
+    schema: "cssoccer-differential-frontier-runtime-exception@1",
+    tick,
+    phase,
+    phaseOrder: 0,
+    name,
+    message,
+    source,
+  });
+}
+
+function mapDiagnosticSourceLine(file, generatedLine) {
+  let line = generatedLine - TRACE_IMPORT_LINE_COUNT;
+  if (file.name !== "browserMatchEngine.mjs") return Math.max(1, line);
+  const anchorIndex = file.text.indexOf(DIAGNOSTIC_INSPECT_ANCHOR);
+  if (anchorIndex < 0) return Math.max(1, line);
+  const anchorLine = 1 + countNewlines(file.text, anchorIndex);
+  const originalLines = DIAGNOSTIC_INSPECT_ANCHOR.split("\n").length;
+  const replacementLines = DIAGNOSTIC_INSPECT_REPLACEMENT.split("\n").length;
+  if (line >= anchorLine + replacementLines) {
+    line -= replacementLines - originalLines;
+  } else if (line >= anchorLine) {
+    line = anchorLine + Math.min(line - anchorLine, originalLines - 1);
+  }
+  return Math.max(1, line);
 }
 
 async function createCandidateIdentity({
@@ -612,18 +686,26 @@ async function scanCurrentFrontier({
     let referenceAtMismatch = null;
     let candidateAtMismatch = null;
     let diagnosticState = null;
+    let runtimeException = null;
     for (let tickOffset = 0; tickOffset < header.tickRange.count; tickOffset += 1) {
       const tick = header.tickRange.start + tickOffset;
       const nativeSamples = [];
       for (let index = 0; index < header.fields.length; index += 1) {
         nativeSamples.push(await reader.nextSample());
       }
-      const projection = runtime.engine.capture({
-        tick,
-        phase: "post_tick",
-        bindings: runtime.bindings,
-        fields: runtime.fields,
-      });
+      let projection;
+      try {
+        projection = runtime.engine.capture({
+          tick,
+          phase: "post_tick",
+          bindings: runtime.bindings,
+          fields: runtime.fields,
+        });
+      } catch (error) {
+        runtimeException = runtime.describeError(error, { tick, phase: "post_tick" });
+        referenceAtMismatch = new Map(nativeSamples.map((sample) => [sample.fieldId, sample]));
+        break;
+      }
       const candidateSamples = runtime.createTick({
         tick,
         phase: "post_tick",
@@ -651,6 +733,23 @@ async function scanCurrentFrontier({
       previousCandidate = candidateById;
       previousDiagnosticState = diagnosticState;
     }
+    if (runtimeException !== null) {
+      return Object.freeze({
+        header,
+        fieldOrder,
+        selectedIds: Object.freeze(selectedIds),
+        exact: null,
+        runtimeException,
+        sameTickMismatches: Object.freeze([]),
+        transitionClues: Object.freeze([]),
+        previousReference,
+        previousCandidate,
+        referenceAtMismatch,
+        candidateAtMismatch: null,
+        previousDiagnosticState,
+        diagnosticState: null,
+      });
+    }
     const exact = mismatch === null ? null : {
       ...mismatch,
       selector: createExactSelector(mismatch, fieldOrder),
@@ -671,6 +770,7 @@ async function scanCurrentFrontier({
         ...exact,
         route: classifyMismatch(exact, transitionClues),
       }),
+      runtimeException: null,
       sameTickMismatches: Object.freeze(sameTickMismatches),
       transitionClues,
       previousReference,
@@ -695,6 +795,16 @@ async function buildEvidence({
   nativeSourceRoot,
   started,
 }) {
+  if (scan.runtimeException !== null) {
+    return buildRuntimeExceptionEvidence({
+      evidenceRoot,
+      outputRoot,
+      context,
+      runtime,
+      scan,
+      started,
+    });
+  }
   const previousPath = join(outputRoot, "current.json");
   const previous = existsSync(previousPath) ? await readJson(previousPath) : null;
   const retainedExact = context.retained.exact;
@@ -708,16 +818,27 @@ async function buildEvidence({
     scan,
     nativeSourceRoot,
   });
+  const traceSubject = selectFrontierTraceSubject(scan);
   const callTrace = await traceFrontierCallPath({
     runtime,
     scan,
-    nativePlayerNumber: scan.exact?.selector?.entityId
-      ? nativePlayerForEntity(scan.exact.selector.entityId, context.scenario)
-      : null,
+    traceSubject: traceSubject === null ? null : {
+      ...traceSubject,
+      nativePlayerNumber: traceSubject.nativePlayerNumber
+        ?? nativePlayerForEntity(traceSubject.entityId, context.scenario),
+    },
   });
   const nativeFiles = internal.nativeSourceRoot
     ? await loadNativeSourceFiles(internal.nativeSourceRoot, evidenceRoot)
     : [];
+  const compoundTransition = buildCompoundTransition({
+    exact: scan.exact,
+    sameTickMismatches: scan.sameTickMismatches,
+    transitionClues: scan.transitionClues,
+    nativeFiles,
+    declarations: runtime.traceDeclarations,
+    callTrace,
+  });
   const additionalSymbols = internal.nativePlayerChanges.map(({ sourceMember }) => sourceMember);
   const preferredNativeValueSymbols = scan.exact === null
     ? []
@@ -841,6 +962,7 @@ async function buildEvidence({
     current: {
       exact: scan.exact,
       exactContext,
+      runtimeException: null,
       sameTickMismatchCount: scan.sameTickMismatches.length,
       sameTickMismatches: scan.sameTickMismatches.slice(0, 16),
       transitionClues: scan.transitionClues,
@@ -862,10 +984,12 @@ async function buildEvidence({
       },
     },
     symbolicRouting,
+    compoundTransition,
     nextAction: nextAction({
       exact: scan.exact,
       producer,
       symbolicRouting,
+      compoundTransition,
       retainedMovement,
       duplicate,
       evidenceRoot,
@@ -878,6 +1002,7 @@ async function buildEvidence({
     exactContext,
     producer: evidence.producer,
     symbolicRouting,
+    compoundTransition,
   }).slice(0, 16);
   return Object.freeze(evidence);
 }
@@ -892,7 +1017,6 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
     nativeBrowserDifferences: [],
   };
   const entityId = scan.exact?.selector?.entityId;
-  if (!entityId) return Object.freeze(empty);
   const compiledProfilePath = join(
     evidenceRoot,
     ".local/cssoccer/compiled-path-inspector/current-profile.json",
@@ -900,6 +1024,15 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
   if (!existsSync(compiledProfilePath)) return Object.freeze(empty);
   const compiledProfile = await readJson(compiledProfilePath);
   verifyCompiledProfile(compiledProfile, context.native.bindings, context.scenario.sourceRevision);
+  const inferredSourceRoot = nativeSourceRoot
+    ? resolve(nativeSourceRoot)
+    : inferNativeSourceRoot(compiledProfile, evidenceRoot);
+  if (!entityId) {
+    return Object.freeze({
+      ...empty,
+      nativeSourceRoot: inferredSourceRoot,
+    });
+  }
   const mapPath = resolveArtifact(evidenceRoot, compiledProfile.compiled.map.path);
   const mapEvidence = await fileEvidence(mapPath);
   if (mapEvidence.sha256 !== compiledProfile.compiled.map.sha256) {
@@ -947,9 +1080,6 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
       native: nativeCurrent[path],
       browser: candidateCurrentFlat.get(path),
     }));
-  const inferredSourceRoot = nativeSourceRoot
-    ? resolve(nativeSourceRoot)
-    : inferNativeSourceRoot(compiledProfile, evidenceRoot);
   return Object.freeze({
     status: "available",
     nativeSourceRoot: inferredSourceRoot,
@@ -967,14 +1097,49 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
   });
 }
 
-async function traceFrontierCallPath({ runtime, scan, nativePlayerNumber }) {
+export function selectFrontierTraceSubject(scan) {
+  const exactEntity = scan?.exact?.selector?.entityId ?? null;
+  if (exactEntity !== null) {
+    return Object.freeze({
+      entityId: exactEntity,
+      nativePlayerNumber: null,
+      reason: "exact-entity",
+    });
+  }
+  for (const mismatch of scan?.sameTickMismatches ?? []) {
+    const match = mismatch.fieldId?.match(/^players\.([a-z0-9-]+)\./u);
+    if (!match) continue;
+    return Object.freeze({
+      entityId: match[1],
+      nativePlayerNumber: null,
+      reason: "same-tick-player-transition",
+    });
+  }
+  for (const state of [scan?.previousDiagnosticState, scan?.diagnosticState]) {
+    const owner = state?.possession?.owner;
+    if (!Number.isSafeInteger(owner) || owner <= 0 || !Array.isArray(state?.players)) continue;
+    const player = state.players.find((candidate) => (
+      candidate?.nativePlayerNumber === owner && typeof candidate?.id === "string"
+    ));
+    if (!player) continue;
+    return Object.freeze({
+      entityId: player.id,
+      nativePlayerNumber: owner,
+      reason: "preceding-possession-owner",
+    });
+  }
+  return null;
+}
+
+async function traceFrontierCallPath({ runtime, scan, traceSubject }) {
   const exact = scan.exact;
-  if (exact === null || exact.selector.entityId === null) {
+  if (exact === null || traceSubject === null) {
     return Object.freeze({
       schema: "cssoccer-differential-frontier-call-trace@1",
       status: "not-applicable",
       entityId: null,
       nativePlayerNumber: null,
+      subjectReason: null,
       truncated: false,
       records: Object.freeze([]),
     });
@@ -985,8 +1150,8 @@ async function traceFrontierCallPath({ runtime, scan, nativePlayerNumber }) {
     for (let tick = 0; tick <= exact.tick; tick += 1) {
       if (tick === exact.tick) {
         runtime.configureTrace({
-          entityId: exact.selector.entityId,
-          nativePlayerNumber,
+          entityId: traceSubject.entityId,
+          nativePlayerNumber: traceSubject.nativePlayerNumber,
         });
       }
       engine.capture({
@@ -1008,7 +1173,301 @@ async function traceFrontierCallPath({ runtime, scan, nativePlayerNumber }) {
   }
   return Object.freeze({
     ...captured,
+    subjectReason: traceSubject.reason,
     records: Object.freeze(captured.records.map(Object.freeze)),
+  });
+}
+
+async function traceRuntimeException({ runtime, failure }) {
+  const engine = runtime.createEngine();
+  let captured = null;
+  let replayFailure = null;
+  try {
+    for (let tick = 0; tick <= failure.tick; tick += 1) {
+      if (tick === failure.tick) runtime.configureTrace({ recordFailures: true });
+      try {
+        engine.capture({
+          tick,
+          phase: failure.phase,
+          bindings: runtime.bindings,
+          fields: runtime.fields,
+        });
+      } catch (error) {
+        replayFailure = runtime.describeError(error, { tick, phase: failure.phase });
+        captured = runtime.readTrace();
+        break;
+      }
+    }
+  } finally {
+    runtime.configureTrace(null);
+  }
+  if (replayFailure === null || captured === null) {
+    throw new DifferentialFrontierError(
+      "runtime-exception-not-reproduced",
+      "The diagnostic replay did not reproduce the browser runtime exception.",
+    );
+  }
+  if (
+    replayFailure.tick !== failure.tick
+    || replayFailure.name !== failure.name
+    || replayFailure.message !== failure.message
+  ) {
+    throw new DifferentialFrontierError(
+      "runtime-exception-replay-mismatch",
+      "The traced replay reached a different browser runtime exception.",
+      { expected: failure, actual: replayFailure },
+    );
+  }
+  return Object.freeze({
+    ...captured,
+    subjectReason: "runtime-exception",
+    failure: replayFailure,
+    records: Object.freeze(captured.records.map(Object.freeze)),
+  });
+}
+
+export function rankRuntimeExceptionTrace({
+  trace,
+  declarations,
+  runtimeException,
+  limit = 8,
+}) {
+  if (trace?.status !== "captured" || !Array.isArray(trace.records)) {
+    return Object.freeze([]);
+  }
+  const declarationByKey = new Map(declarations.map((entry) => [
+    `${entry.file ?? ""}\u0000${entry.name}`,
+    entry,
+  ]));
+  const declarationByName = new Map(declarations.map((entry) => [entry.name, entry]));
+  const failed = trace.records.filter((record) => (
+    record.error !== null && record.error !== undefined
+  ));
+  const recordById = new Map(failed.map((record) => [record.callId, record]));
+  const candidates = failed.map((record) => {
+    const declaration = declarationByKey.get(
+      `${record.file ?? ""}\u0000${record.function}`,
+    ) ?? declarationByName.get(record.function) ?? null;
+    const declarationLines = declaration?.source.split(/\r?\n/u).length ?? 0;
+    const sourceMatched = runtimeException.source !== null
+      && runtimeException.source.file === (record.file ?? declaration?.file)
+      && declaration !== null
+      && runtimeException.source.line >= declaration.line
+      && runtimeException.source.line < declaration.line + declarationLines;
+    const callChain = [];
+    let parentId = record.parentCallId;
+    while (parentId !== null && callChain.length < 12) {
+      const parent = recordById.get(parentId);
+      if (!parent) break;
+      callChain.push(Object.freeze({
+        file: parent.file,
+        function: parent.function,
+        line: parent.line,
+        callDepth: parent.callDepth,
+      }));
+      parentId = parent.parentCallId;
+    }
+    return Object.freeze({
+      file: record.file ?? declaration?.file ?? runtimeException.source?.file ?? null,
+      function: record.function,
+      line: sourceMatched ? runtimeException.source.line : record.line,
+      score: (sourceMatched ? 1_000 : 0) + Math.min(record.callDepth, 32) * 20,
+      callDepth: record.callDepth,
+      sourceMatched,
+      error: record.error,
+      argumentFacts: compactExceptionArgumentFacts(record.arguments),
+      callChain: Object.freeze(callChain),
+    });
+  });
+  return Object.freeze(candidates
+    .sort((left, right) => right.score - left.score
+      || right.callDepth - left.callDepth
+      || left.function.localeCompare(right.function))
+    .slice(0, limit));
+}
+
+function compactExceptionArgumentFacts(summary) {
+  const flat = flattenScalars(unwrapBoundedResult(summary), {
+    maxDepth: 7,
+    maxEntries: 300,
+  });
+  return Object.freeze([...flat.entries()]
+    .filter(([path]) => /(?:^|\.)(?:id|nativePlayer|nativePlayerNumber|action|owner|tick|inAir)$/u.test(path))
+    .slice(0, 16)
+    .map(([path, value]) => Object.freeze({ path, value })));
+}
+
+export function runtimeExceptionNextAction({
+  runtimeException,
+  producer,
+  duplicate,
+  evidenceRoot,
+  outputRoot,
+}) {
+  if (producer.status !== "surfaced") {
+    return Object.freeze({
+      kind: "runtime-exception-routing-gap",
+      file: runtimeException.source?.file ?? null,
+      function: null,
+      line: runtimeException.source?.line ?? null,
+      question: `The browser threw ${runtimeException.name}: ${runtimeException.message} before parity comparison, but the executed producer could not be bound.`,
+      evidencePath: relativeOrAbsolute(evidenceRoot, join(outputRoot, "current.json")),
+      rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+      doNotRerunBeforeRuntimeChanges: true,
+      note: "Repair the exception-routing seam before inspecting any later parity symptom.",
+    });
+  }
+  const selected = producer.alternatives[0];
+  return Object.freeze({
+    kind: "repair-runtime-exception",
+    file: producer.candidateFile,
+    function: producer.candidateFunction,
+    line: producer.candidateLine,
+    question: `Repair ${producer.candidateFunction}: it threw ${runtimeException.name} before tick ${String(runtimeException.tick)} could be compared (${runtimeException.message}).`,
+    exception: runtimeException,
+    argumentFacts: selected?.argumentFacts ?? [],
+    callChain: selected?.callChain ?? [],
+    rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+    doNotRerunBeforeRuntimeChanges: duplicate,
+    note: "This is an executed runtime blocker, not parity data. Rerun only after the named runtime path changes.",
+  });
+}
+
+async function buildRuntimeExceptionEvidence({
+  evidenceRoot,
+  outputRoot,
+  context,
+  runtime,
+  scan,
+  started,
+}) {
+  const previousPath = join(outputRoot, "current.json");
+  const previous = existsSync(previousPath) ? await readJson(previousPath) : null;
+  const callTrace = await traceRuntimeException({
+    runtime,
+    failure: scan.runtimeException,
+  });
+  const candidates = rankRuntimeExceptionTrace({
+    trace: callTrace,
+    declarations: runtime.traceDeclarations,
+    runtimeException: scan.runtimeException,
+  });
+  const selected = candidates[0] ?? null;
+  const producer = Object.freeze({
+    status: selected === null ? "routing-gap" : "surfaced",
+    candidateFile: selected?.file ?? null,
+    candidateFunction: selected?.function ?? null,
+    candidateLine: selected?.line ?? null,
+    confidence: selected === null ? "none" : "diagnostic-exception-high",
+    nativeFunction: null,
+    alternatives: candidates,
+    diagnosticOnly: true,
+  });
+  const previousException = previous?.current?.runtimeException ?? null;
+  const sameFailure = previousException?.tick === scan.runtimeException.tick
+    && previousException?.phase === scan.runtimeException.phase
+    && previousException?.name === scan.runtimeException.name
+    && previousException?.message === scan.runtimeException.message;
+  const duplicate = sameFailure
+    && previous?.bindings?.runtimeSnapshotSha256 === runtime.runtimeSnapshotSha256;
+  const symbolicRouting = emptySymbolicRouting();
+  const evidence = {
+    schema: DIFFERENTIAL_FRONTIER_EVIDENCE_SCHEMA,
+    status: "blocked",
+    authority: "diagnostic-current-runtime",
+    parityAuthority: false,
+    generatedAt: new Date().toISOString(),
+    elapsedMilliseconds: Math.round(performance.now() - started),
+    bindings: {
+      scenarioId: context.native.bindings.scenarioId,
+      scenarioSha256: context.native.bindings.scenarioSha256,
+      profileSha256: context.native.bindings.profileSha256,
+      inputSha256: context.native.bindings.inputSha256,
+      fieldContractSha256: context.native.bindings.contractSha256,
+      nativeStateSha256: context.nativeState.sha256,
+      nativeRawSha256: context.nativeRaw.sha256,
+      runtimeSnapshotSha256: runtime.runtimeSnapshotSha256,
+    },
+    engineIndependence: runtime.engineIndependence,
+    retained: {
+      generationId: context.retained.generationId,
+      publishedAt: context.retained.publishedAt,
+      scenarioSha256: context.retained.scenarioSha256,
+      exact: context.retained.exact,
+      movement: "blocked-before-comparison",
+    },
+    current: {
+      exact: null,
+      exactContext: null,
+      runtimeException: scan.runtimeException,
+      sameTickMismatchCount: 0,
+      sameTickMismatches: [],
+      transitionClues: [],
+      movementFromPreviousDiagnostic: sameFailure ? "same-runtime-exception" : "runtime-exception",
+      duplicateOfPreviousRuntime: duplicate,
+    },
+    internal: {
+      status: "not-applicable",
+      nativeSourceRoot: null,
+      player: null,
+      nativePlayerChanges: [],
+      browserPlayerChanges: [],
+      nativeBrowserDifferences: [],
+    },
+    producer: {
+      ...producer,
+      native: {
+        sourceOwner: null,
+        preferredValueSymbols: [],
+        writeSites: [],
+      },
+      browser: {
+        callTrace,
+        dynamicCandidates: candidates,
+        candidates,
+      },
+    },
+    symbolicRouting,
+    compoundTransition: null,
+    nextAction: runtimeExceptionNextAction({
+      runtimeException: scan.runtimeException,
+      producer,
+      duplicate,
+      evidenceRoot,
+      outputRoot,
+    }),
+  };
+  evidence.actionId = sha256Canonical({
+    schema: DIFFERENTIAL_FRONTIER_EVIDENCE_SCHEMA,
+    bindings: evidence.bindings,
+    runtimeException: scan.runtimeException,
+    producer: evidence.producer,
+  }).slice(0, 16);
+  return Object.freeze(evidence);
+}
+
+function emptySymbolicRouting() {
+  return Object.freeze({
+    status: "not-applicable",
+    transitions: Object.freeze([]),
+    nativeWriter: null,
+    nativeCallChain: null,
+    nativeBranchIdentity: Object.freeze({
+      status: "not-applicable",
+      branch: null,
+      discriminator: null,
+      candidates: Object.freeze([]),
+      failures: Object.freeze([]),
+    }),
+    nativeAlternatives: Object.freeze([]),
+    negativePath: null,
+    negativePathFocus: null,
+    nativeBranchMismatchFocus: null,
+    negativePathAlternatives: Object.freeze([]),
+    browserMapping: null,
+    staticBrowserMapping: null,
+    browserAlternatives: Object.freeze([]),
+    diagnosticOnly: true,
   });
 }
 
@@ -1700,6 +2159,207 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+export function rankCompoundNativeWriteSites(nativeFiles, fields, { limit = 8 } = {}) {
+  const byFunction = new Map();
+  for (const field of fields) {
+    const sites = findNativeWriteSites(nativeFiles, {
+      sourceOwner: field.sourceOwner,
+      limit: 80,
+    }).filter(({ write, function: functionName }) => write && functionName !== null);
+    for (const site of sites) {
+      const key = `${site.file}\u0000${site.function}`;
+      const current = byFunction.get(key) ?? {
+        file: site.file,
+        function: site.function,
+        line: site.line,
+        score: 0,
+        writesByField: new Map(),
+      };
+      const prior = current.writesByField.get(field.fieldId);
+      if (prior === undefined || site.score > prior.score) {
+        current.writesByField.set(field.fieldId, Object.freeze({
+          fieldId: field.fieldId,
+          sourceOwner: field.sourceOwner,
+          line: site.line,
+          source: site.source,
+          matchedSymbols: site.matchedSymbols,
+          score: site.score,
+        }));
+      }
+      current.line = Math.min(current.line, site.line);
+      byFunction.set(key, current);
+    }
+  }
+  return Object.freeze([...byFunction.values()]
+    .map((candidate) => {
+      const writes = [...candidate.writesByField.values()]
+        .sort((left, right) => left.fieldId.localeCompare(right.fieldId));
+      return Object.freeze({
+        file: candidate.file,
+        function: candidate.function,
+        line: candidate.line,
+        coverage: writes.length,
+        score: writes.length * 200 + writes.reduce((sum, write) => sum + write.score, 0),
+        writes: Object.freeze(writes),
+      });
+    })
+    .filter(({ coverage }) => coverage >= 2)
+    .sort((left, right) => right.coverage - left.coverage
+      || right.score - left.score
+      || left.file.localeCompare(right.file)
+      || left.line - right.line)
+    .slice(0, limit));
+}
+
+export function rankCompoundRuntimeOwners({
+  trace,
+  declarations,
+  fields,
+  nativeProducer,
+  limit = 8,
+}) {
+  if (trace?.status !== "captured" || !Array.isArray(trace.records)) {
+    return Object.freeze([]);
+  }
+  const declarationByKey = new Map(declarations.map((entry) => [
+    `${entry.file ?? ""}\u0000${entry.name}`,
+    entry,
+  ]));
+  const declarationByName = new Map(declarations.map((entry) => [entry.name, entry]));
+  const nativeTerms = nativeProducer.function.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean);
+  const familyTerms = new Set(nativeTerms);
+  if (familyTerms.has("shoot") || familyTerms.has("shot")) {
+    for (const term of ["shoot", "shot", "kick", "release", "ball"]) familyTerms.add(term);
+  }
+  if (familyTerms.has("pass")) {
+    for (const term of ["pass", "kick", "release", "ball"]) familyTerms.add(term);
+  }
+  const byFunction = new Map();
+  for (const record of trace.records) {
+    const declaration = declarationByKey.get(
+      `${record.file ?? ""}\u0000${record.function}`,
+    ) ?? declarationByName.get(record.function) ?? null;
+    if (declaration === null) continue;
+    const lowerName = record.function.toLowerCase();
+    const lowerSource = declaration.source.toLowerCase();
+    const matchedNameTerms = [...familyTerms].filter((term) => lowerName.includes(term));
+    const matchedSourceTerms = [...familyTerms].filter((term) => lowerSource.includes(term));
+    const matchedFamilyTerms = [...new Set([...matchedNameTerms, ...matchedSourceTerms])];
+    const matchedFields = [];
+    let fieldWriteCount = 0;
+    for (const field of fields) {
+      const leaf = field.fieldId.split(".").slice(1).join(".");
+      const focus = selectorSourceFocus(declaration.source, selectorSnapshotPaths(leaf));
+      if (!focus.mentions) continue;
+      matchedFields.push(field.fieldId);
+      if (focus.writes) fieldWriteCount += 1;
+    }
+    if (matchedFamilyTerms.length === 0 && matchedFields.length === 0) continue;
+    const sourceFocus = compoundRuntimeSourceFocus(declaration, familyTerms, fields);
+    const declarationLength = declaration.source.split(/\r?\n/u).length;
+    let score = matchedNameTerms.length * 120
+      + matchedSourceTerms.length * 22
+      + matchedFields.length * 24
+      + fieldWriteCount * 30
+      + sourceFocus.score;
+    if (lowerSource.includes(nativeProducer.function.toLowerCase())) score += 180;
+    if (record.output?.depth === 0) score += 35;
+    if (record.input?.depth === 0) score += 25;
+    score += Math.min(record.callDepth ?? 0, 12) * 10;
+    score += Math.max(0, 90 - declarationLength);
+    const candidate = Object.freeze({
+      file: record.file ?? declaration.file,
+      function: record.function,
+      line: sourceFocus.line,
+      callDepth: record.callDepth,
+      score,
+      role: "executed-owner",
+      matchedFamilyTerms: Object.freeze(matchedFamilyTerms),
+      matchedFields: Object.freeze(matchedFields),
+      fieldWriteCount,
+      source: sourceFocus.source,
+    });
+    const key = `${candidate.file}\u0000${candidate.function}`;
+    const prior = byFunction.get(key);
+    if (prior === undefined || candidate.score > prior.score) byFunction.set(key, candidate);
+  }
+  return Object.freeze([...byFunction.values()]
+    .sort((left, right) => right.score - left.score
+      || right.callDepth - left.callDepth
+      || left.file.localeCompare(right.file)
+      || left.line - right.line)
+    .slice(0, limit));
+}
+
+function compoundRuntimeSourceFocus(declaration, familyTerms, fields) {
+  const fieldTerms = [...new Set(fields.flatMap(({ fieldId }) => {
+    const leaf = fieldId.split(".").slice(1).join(".");
+    return selectorSnapshotPaths(leaf).map((path) => path.split(".").at(-1).toLowerCase());
+  }))];
+  const lines = declaration.source.split(/\r?\n/u);
+  let best = { line: declaration.line, score: 0, source: lines[0]?.trim() ?? "" };
+  for (let index = 0; index < lines.length; index += 1) {
+    const source = lines[index].trim();
+    const lower = source.toLowerCase();
+    const familyMatches = [...familyTerms].filter((term) => lower.includes(term)).length;
+    const fieldMatches = fieldTerms.filter((term) => lower.includes(term)).length;
+    if (familyMatches === 0 && fieldMatches === 0) continue;
+    const control = /\b(?:if|else|return|throw)\b/u.test(source);
+    const call = /[A-Za-z_$][\w$]*\s*\(/u.test(source);
+    const score = familyMatches * 35 + fieldMatches * 20 + (control ? 12 : 0) + (call ? 10 : 0);
+    if (score <= best.score) continue;
+    best = { line: declaration.line + index, score, source: source.slice(0, 260) };
+  }
+  return best;
+}
+
+export function buildCompoundTransition({
+  exact,
+  sameTickMismatches,
+  transitionClues,
+  nativeFiles,
+  declarations,
+  callTrace,
+}) {
+  if (exact?.selector?.domain !== "ball" || exact.route?.id !== "missing-transition") {
+    return null;
+  }
+  const clueByField = new Map(transitionClues.map((clue) => [clue.fieldId, clue]));
+  const fields = sameTickMismatches
+    .filter((mismatch) => mismatch.fieldId.startsWith("ball."))
+    .map((mismatch) => ({ ...mismatch, clue: clueByField.get(mismatch.fieldId) ?? null }))
+    .filter(({ clue }) => clue?.referenceChanged === true && clue?.candidateChanged === false)
+    .map((mismatch) => Object.freeze({
+      fieldId: mismatch.fieldId,
+      sourceOwner: mismatch.sourceOwner,
+      before: mismatch.clue.before,
+      reference: mismatch.reference,
+      candidate: mismatch.candidate,
+    }));
+  if (fields.length < 2) return null;
+  const nativeCandidates = rankCompoundNativeWriteSites(nativeFiles, fields);
+  const nativeProducer = nativeCandidates[0] ?? null;
+  if (nativeProducer === null) return null;
+  const runtimeOwners = rankCompoundRuntimeOwners({
+    trace: callTrace,
+    declarations,
+    fields,
+    nativeProducer,
+  });
+  return Object.freeze({
+    schema: "cssoccer-differential-frontier-compound-transition@1",
+    status: runtimeOwners.length > 0 ? "surfaced" : "native-producer-only",
+    kind: "missing-compound-transition",
+    domain: "ball",
+    fields: Object.freeze(fields),
+    nativeProducer,
+    nativeAlternatives: Object.freeze(nativeCandidates.slice(1, 4)),
+    runtimeOwner: runtimeOwners[0] ?? null,
+    runtimeAlternatives: Object.freeze(runtimeOwners.slice(1, 4)),
+    diagnosticOnly: true,
+  });
+}
+
 function classifyProducer(runtimeCandidates, nativeSites, dynamicCandidates) {
   const dynamic = dynamicCandidates[0] ?? null;
   const dynamicSecond = dynamicCandidates[1] ?? null;
@@ -1801,6 +2461,7 @@ export function nextAction({
   exact,
   producer,
   symbolicRouting,
+  compoundTransition = null,
   retainedMovement,
   duplicate,
   evidenceRoot,
@@ -1811,6 +2472,40 @@ export function nextAction({
       kind: "public-evaluation",
       question: "The diagnostic engine is exact; run the full capture and synchronous publisher.",
       command: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+    });
+  }
+  if (compoundTransition !== null) {
+    const native = compoundTransition.nativeProducer;
+    const runtimeOwner = compoundTransition.runtimeOwner;
+    const fieldIds = compoundTransition.fields.map(({ fieldId }) => fieldId);
+    if (runtimeOwner === null) {
+      return Object.freeze({
+        kind: "compound-transition-owner-gap",
+        file: null,
+        function: null,
+        line: null,
+        question: `Native ${native.function} jointly writes ${fieldIds.join(", ")}, but no executed browser owner was bound at the frontier.`,
+        nativeTransition: native,
+        groupedFields: compoundTransition.fields,
+        rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+        doNotRerunBeforeRuntimeChanges: true,
+        note: "Do not implement the fields independently; repair the trace owner seam first.",
+      });
+    }
+    return Object.freeze({
+      kind: "implement-compound-native-transition",
+      file: runtimeOwner.file,
+      function: runtimeOwner.function,
+      line: runtimeOwner.line,
+      question: `Native ${native.function} changes ${fieldIds.join(", ")} as one transition; implement that transition once at the executed ${runtimeOwner.function} boundary.`,
+      nativeTransition: native,
+      groupedFields: compoundTransition.fields,
+      runtimeOwner,
+      runtimeAlternatives: compoundTransition.runtimeAlternatives,
+      publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      rerunCommand: "node tools/run-differential-frontier.mjs --continue",
+      doNotRerunBeforeRuntimeChanges: duplicate,
+      note: "Treat the grouped fields as outputs of one source transition, not as separate constants or patches.",
     });
   }
   if (symbolicRouting.status === "native-branch-ambiguous") {
@@ -1947,6 +2642,7 @@ function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
     duplicateOfPreviousRuntime: evidence.current.duplicateOfPreviousRuntime,
     retainedExact: compactExact(evidence.retained.exact),
     currentExact: compactExact(exact),
+    runtimeException: evidence.current.runtimeException ?? null,
     route: exact?.route ?? null,
     producer: {
       status: evidence.producer.status,
@@ -1970,6 +2666,7 @@ function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
       })),
     },
     symbolicRouting: compactSymbolicRouting(evidence.symbolicRouting),
+    compoundTransition: compactCompoundTransition(evidence.compoundTransition),
     transitionClues: evidence.current.transitionClues.slice(0, 6).map((clue) => ({
       fieldId: clue.fieldId,
       referenceChanged: clue.referenceChanged,
@@ -1984,6 +2681,31 @@ function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
     })),
     nextAction: evidence.nextAction,
     evidencePath: relativeOrAbsolute(evidenceRoot, evidencePath),
+  });
+}
+
+function compactCompoundTransition(compound) {
+  if (compound === null || compound === undefined) return null;
+  const compactProducer = (candidate) => candidate === null ? null : Object.freeze({
+    file: candidate.file,
+    function: candidate.function,
+    line: candidate.line,
+    coverage: candidate.coverage,
+    writes: candidate.writes?.map(({ fieldId, line, source }) => ({ fieldId, line, source })),
+  });
+  return Object.freeze({
+    schema: compound.schema,
+    status: compound.status,
+    kind: compound.kind,
+    domain: compound.domain,
+    fields: compound.fields.map(({ fieldId, before, reference, candidate }) => ({
+      fieldId,
+      before,
+      reference,
+      candidate,
+    })),
+    nativeProducer: compactProducer(compound.nativeProducer),
+    runtimeOwner: compound.runtimeOwner,
   });
 }
 

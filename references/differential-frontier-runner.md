@@ -18,9 +18,18 @@ The packet contains:
 - whether the current runtime advanced, regressed, or duplicates the previous
   diagnostic run;
 - adjacent state transitions and bound native `match_player` changes;
+- one grouped native producer when several missing `ball.*` fields are outputs
+  of the same source transition, plus the executed browser owner where that
+  transition belongs;
 - the traced browser producer plus ranked alternatives;
 - ranked native write sites, excluding comparisons mistaken for assignments;
 - exactly one next action and the public evaluation command.
+
+If the browser throws before a field can be compared, the same command replays
+only to that coordinate with failure tracing enabled. Its packet names the
+executed throwing file, function, original source line, bounded argument facts,
+and parent call chain. Treat `repair-runtime-exception` as the earliest runtime
+blocker; do not inspect a later parity symptom first.
 
 Full evidence is retained under
 `.local/cssoccer/parity/frontier-runner/current.json`. Use `--full-json` only
