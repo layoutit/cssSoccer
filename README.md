@@ -4,6 +4,8 @@ A source-backed port of [Actua Soccer](https://github.com/Xrampino/Actua-Soccer)
 
 The current Full Match Alpha lets you control either team through two one-minute halves representing a complete 90-minute friendly. It includes live movement, passing, shooting, tackling, goals, restarts, fouls, offside, halftime, full time, pause, and rematch. It is a focused playable match, not the complete Actua Soccer game.
 
+<img width="1248" height="300" alt="cssSoccer kickoff, stadium grandstand, and goalmouth action" src="assets/cssoccer-full-match-alpha.png" />
+
 ## How to Play
 
 Use Node.js 20.19+ or 22.12+ and pnpm 10.33. The original source and game data are not stored in Git; place the pinned local inputs described in `references/spain-argentina-source-data.json`, then prepare the browser assets once:
