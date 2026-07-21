@@ -1,54 +1,43 @@
-# css.soccer: Full Match Alpha
+# cssSoccer ⚽
 
-A focused source-backed PolyCSS match demo: one Spain vs Argentina friendly,
-with either team available for local control. Two one-real-minute halves represent a
-complete 90-minute match at a fixed 20 Hz. This offers more match gameplay than
-the 1995 Actua Soccer demo; it is not the complete Actua Soccer game.
+A source-backed port of [Actua Soccer](https://github.com/Xrampino/Actua-Soccer) that renders a complete Spain vs Argentina match as real HTML/CSS 3D geometry through [PolyCSS](https://github.com/LayoutitStudio/polycss), without a WebGL or canvas renderer. cssSoccer prepares the original source and game data into browser-ready assets, then runs the match in JavaScript.
 
-The canonical browser route starts with a Spain-or-Argentina team choice, then
-advances only from current keyboard or touch input and browser-owned match state.
-It includes live movement, dribbling, passing,
-crossing, shooting, chipping, tackling, stealing, player and goalkeeper AI,
-goals, restarts, fouls, advantage, discipline, offside, halftime, ends swap,
-full time, pause, and rematch. There is no product replay route or alternate
-gameplay engine.
+The current Full Match Alpha lets you control either team through two one-minute halves representing a complete 90-minute friendly. It includes live movement, passing, shooting, tackling, goals, restarts, fouls, offside, halftime, full time, pause, and rematch. It is a focused playable match, not the complete Actua Soccer game.
 
-## Local setup
+## How to Play
 
-Use Node.js 20.19+ or 22.12+ and pnpm 10.33. The prepared match also requires
-the pinned, ignored source/data inputs described in
-`references/spain-argentina-source-data.json`; they are deliberately absent
-from Git.
+Use Node.js 20.19+ or 22.12+ and pnpm 10.33. The original source and game data are not stored in Git; place the pinned local inputs described in `references/spain-argentina-source-data.json`, then prepare the browser assets once:
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm source:setup
 pnpm prepare:cssoccer
+```
+
+After the assets exist, run the local dev server:
+
+```sh
 pnpm dev
 ```
 
-The browser consumes only deterministic prepared output under
-`build/generated/public/cssoccer/`. Original source, game data, native builds,
-oracle patches, captures, traces, and retained evidence stay local and ignored.
-Source parsing, geometry construction, atlas work, topology merging, and
-animation packaging happen before browser runtime.
+Choose Spain or Argentina in the opening screen. Use W/A/S/D to move, J to shoot or tackle, and K to pass, sprint, or steal. Arrow keys and Z provide the classic control layout, touch controls appear on coarse-pointer devices, Escape pauses, and Enter confirms.
 
-Native and differential tooling remains local development evidence only. It is
-not imported by the product graph:
+`pnpm build` builds the Vite app from the prepared assets. Run `pnpm prepare:cssoccer` again only when the source inputs or preparation code change.
 
-```sh
-pnpm source:setup
-pnpm source:verify
-node tools/run-differential-frontier.mjs --continue
-```
+## How It Works
 
-`pnpm oven:differential` reads its local transport module from
-`BURNLIST_DIFFERENTIAL_TESTING_TRANSPORT`. Native frame packaging reads an
-optional override from `FRAME_SEQUENCE_ORACLE_TOOL`.
+cssSoccer uses [PolyCSS](https://github.com/LayoutitStudio/polycss) to turn the pitch, stadium, players, officials, and ball into real DOM elements positioned with CSS `matrix3d(...)` transforms. The match is not drawn to a `<canvas>`.
 
-See `references/full-match-alpha.md` for the exact release scope and exclusions.
+The browser loads one manifest-driven scene from `build/generated/public/cssoccer/`. It does not parse the original source archives or construct geometry while the game is running. Generated browser assets are intentionally ignored by Git.
+
+## Build and Runtime
+
+The prepare step reads pinned Actua Soccer source and data, builds geometry and texture atlases, merges topology, packages animation, and writes deterministic browser assets under `build/generated/public/cssoccer/`.
+
+JavaScript owns the browser match loop, input, camera, players, goalkeepers, ball, rules, score, HUD, and PolyCSS DOM updates. Original source, game data, native builds, captures, and generated assets remain local and are not published in this repository.
+
+The exact Full Match Alpha scope and exclusions are recorded in `references/full-match-alpha.md`.
 
 ## License
 
-Repository-authored code is MIT licensed. Actua Soccer source, game data, and
-assets are not included and remain subject to their own terms.
+cssSoccer code is [MIT licensed](LICENSE). Actua Soccer source, game data, and assets are not included and remain subject to their own terms.

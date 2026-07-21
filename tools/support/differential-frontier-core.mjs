@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 
 export const DIFFERENTIAL_FRONTIER_EVIDENCE_SCHEMA =
   "cssoccer-differential-frontier-evidence@1";
-export const DIFFERENTIAL_FRONTIER_AGENT_SCHEMA =
-  "cssoccer-differential-frontier-agent@1";
+export const DIFFERENTIAL_FRONTIER_PACKET_SCHEMA =
+  "cssoccer-differential-frontier-packet@1";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 // Do not mistake the second byte of ==, !=, <=, or >= for an assignment.

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -89,8 +88,7 @@ export function parseCaptureArguments(argv, {
     rendererId: defaultRendererId,
     rendererLabel: defaultRendererLabel,
     frameExtension: "png",
-    frameTool: env.FRAME_SEQUENCE_ORACLE_TOOL
-      ?? join(homedir(), ".codex", "skills", "frame-sequence-oracle", "scripts", "frame-sequence.mjs"),
+    frameTool: env.FRAME_SEQUENCE_ORACLE_TOOL,
     replace: false,
     help: false,
   };

@@ -24,10 +24,10 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { canonicalJson, sha256Hex } from "./io.mjs";
 import { differentialScalar, typedSamplesEqual } from "./nativeParity.mjs";
 
-export const DIFFERENTIAL_TESTING_DATA_SCHEMA = "burnlist-differential-testing-data@1";
-export const DIFFERENTIAL_TESTING_BUNDLE_SCHEMA = "burnlist-differential-testing-bundle@1";
-export const DIFFERENTIAL_TESTING_SCENARIO_SCHEMA = "burnlist-differential-testing-scenario@1";
-export const DIFFERENTIAL_TESTING_FIELD_RECORD_SCHEMA = "burnlist-differential-testing-field-record@1";
+export const DIFFERENTIAL_TESTING_DATA_SCHEMA = "cssoccer-differential-testing-data@1";
+export const DIFFERENTIAL_TESTING_BUNDLE_SCHEMA = "cssoccer-differential-testing-bundle@1";
+export const DIFFERENTIAL_TESTING_SCENARIO_SCHEMA = "cssoccer-differential-testing-scenario@1";
+export const DIFFERENTIAL_TESTING_FIELD_RECORD_SCHEMA = "cssoccer-differential-testing-field-record@1";
 
 const SAMPLE_MARKER = "__CSSOCCER_STREAMED_FIELD_SAMPLES__";
 

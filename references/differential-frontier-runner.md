@@ -8,7 +8,7 @@ node tools/run-differential-frontier.mjs --continue
 
 It verifies the retained native and Differential Testing bindings, qualifies
 the current browser runtime independently, runs that runtime only through the
-first exact mismatch, and prints one compact agent packet. A temporary
+first exact mismatch, and prints one compact frontier packet. A temporary
 diagnostic copy of the engine traces the failing tick so the packet identifies
 the active browser file, function, and source line from execution.
 
@@ -38,8 +38,8 @@ when the compact packet is insufficient.
 If `duplicateOfPreviousRuntime` is true, do not spend another iteration
 rerunning it. Inspect the named producer and rerun only after a runtime edit.
 If the diagnostic runtime reaches exact completion, run the full browser
-capture and synchronous publisher; the diagnostic runner never publishes or
-authorizes parity by itself.
+capture and synchronous publisher; the diagnostic runner does not establish
+parity by itself.
 
 The runner reads original source, linked maps, native raw state, and retained
 captures only as bound local evidence. It writes no product data, modifies no

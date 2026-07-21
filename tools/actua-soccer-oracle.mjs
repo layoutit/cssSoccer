@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { cp, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -17,8 +16,7 @@ const fixtureContractBytes = await readFile(fixtureContractPath);
 const fixtureContract = JSON.parse(fixtureContractBytes.toString("utf8"));
 const sourceRoot = join(repoRoot, contract.checkout);
 const command = process.argv[2] ?? "help";
-const frameSequenceTool = process.env.FRAME_SEQUENCE_ORACLE_TOOL
-  ?? join(homedir(), ".codex", "skills", "frame-sequence-oracle", "scripts", "frame-sequence.mjs");
+const frameSequenceTool = process.env.FRAME_SEQUENCE_ORACLE_TOOL;
 const rawFlags = Object.freeze({
   active: 0x01,
   frame: 0x02,
@@ -2332,7 +2330,9 @@ async function frameFileEvidence(framesRoot) {
 }
 
 async function publishNativeFrameEvidence(retainedRoot, expectedFrames) {
-  if (!existsSync(frameSequenceTool)) throw new Error(`Frame-sequence oracle tool is missing: ${frameSequenceTool}.`);
+  if (!frameSequenceTool || !existsSync(frameSequenceTool)) {
+    throw new Error("Set FRAME_SEQUENCE_ORACLE_TOOL to the frame-sequence packaging script.");
+  }
   const framesA = join(retainedRoot, "runs", "canonical-a", "frames");
   const framesB = join(retainedRoot, "runs", "canonical-b", "frames");
   const evidenceRoot = join(retainedRoot, "frame-sequence");

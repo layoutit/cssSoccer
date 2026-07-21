@@ -118,7 +118,7 @@ export function loadHistoricalRows(outputRoot, transport, comparison) {
 export function parseArguments(argv, env = process.env) {
   const options = {
     title: "cssoccer exact gameplay differential",
-    transportModule: env.BURNLIST_DIFFERENTIAL_TESTING_TRANSPORT,
+    transportModule: env.CSSOCCER_DIFFERENTIAL_TESTING_TRANSPORT,
   };
   const valueFlags = new Map([
     ["--reference", "reference"],
@@ -174,7 +174,7 @@ function usage() {
   return [
     "Usage: node tools/publish-differential-testing.mjs \\",
     "  --reference <native.jsonl> --candidate <browser.jsonl> \\",
-    "  --output-root <atomic-bundle-root> --transport-module <burnlist transport module>",
+    "  --output-root <atomic-bundle-root> --transport-module <transport module>",
     "",
     "The output root receives generations/<sha256>/ and an atomically replaced current symlink.",
     "Only explicit gameplay-state fields are compared; camera.* remains in visual parity.",

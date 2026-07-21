@@ -32,7 +32,7 @@ import {
 } from "./compiled-path-inspector-core.mjs";
 import { runCurrentCompiledPathCheck } from "./run-compiled-path-check.mjs";
 import {
-  DIFFERENTIAL_FRONTIER_AGENT_SCHEMA,
+  DIFFERENTIAL_FRONTIER_PACKET_SCHEMA,
   DIFFERENTIAL_FRONTIER_EVIDENCE_SCHEMA,
   DifferentialFrontierError,
   buildTransitionClues,
@@ -98,7 +98,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     return null;
   }
   const result = await runDifferentialFrontier(options, dependencies);
-  const output = options.fullJson ? result : result.agentPacket;
+  const output = options.fullJson ? result : result.frontierPacket;
   process.stdout.write(`${JSON.stringify(output, null, options.fullJson ? 2 : 0)}\n`);
   return result;
 }
@@ -141,8 +141,8 @@ export async function runDifferentialFrontier(options = {}, dependencies = {}) {
       started,
     });
     const evidencePath = join(outputRoot, "current.json");
-    const agentPacket = buildAgentPacket(evidence, evidencePath, evidenceRoot);
-    const retained = Object.freeze({ ...evidence, agentPacket });
+    const frontierPacket = buildFrontierPacket(evidence, evidencePath, evidenceRoot);
+    const retained = Object.freeze({ ...evidence, frontierPacket });
     await atomicWriteJson(evidencePath, retained);
     return retained;
   } finally {
@@ -232,7 +232,7 @@ async function loadRetainedContext({ evidenceRoot, preparedRoot }) {
 async function loadRetainedDifferential({ differentialRoot, native, referenceSha256 }) {
   const manifestPath = join(differentialRoot, "current.json");
   const manifest = await readJson(manifestPath);
-  if (manifest?.schema !== "burnlist-differential-testing-bundle@1") {
+  if (manifest?.schema !== "cssoccer-differential-testing-bundle@1") {
     throw new DifferentialFrontierError(
       "retained-differential-missing",
       "Current Differential Testing bundle is unavailable.",
@@ -2902,11 +2902,11 @@ export function nextAction({
   });
 }
 
-function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
+function buildFrontierPacket(evidence, evidencePath, evidenceRoot) {
   const exact = evidence.current.exact;
   const internal = evidence.internal;
   return Object.freeze({
-    schema: DIFFERENTIAL_FRONTIER_AGENT_SCHEMA,
+    schema: DIFFERENTIAL_FRONTIER_PACKET_SCHEMA,
     status: evidence.status,
     actionId: evidence.actionId,
     elapsedMilliseconds: evidence.elapsedMilliseconds,
@@ -3347,7 +3347,7 @@ function usage() {
     "",
     "Runs the current browser engine only to the retained native first mismatch,",
     "preserves the full Exact envelope, surfaces native/browser producer candidates,",
-    "and prints one compact agent packet. It does not authorize or publish a patch.",
+    "and prints one compact frontier packet without modifying the runtime.",
   ].join("\n");
 }
 

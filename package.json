@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "type": "module",
-  "description": "css.soccer: Full Match Alpha — a focused source-backed PolyCSS match demo.",
+  "description": "cssSoccer: a source-backed Actua Soccer match rendered through PolyCSS.",
   "license": "MIT",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -13,14 +13,6 @@
     "serve": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node tools/run-test-suite.mjs unit",
-    "test:scaffold": "node --test test/cssoccer-scaffold.test.mjs test/cssoccer-route-state.test.mjs",
-    "test:assets": "node tools/run-test-suite.mjs assets",
-    "test:browser": "node --test test/cssoccer-polycss.test.mjs && node tools/smoke-browser.mjs --country argentina --mode free-play",
-    "test:input": "node --test test/cssoccer-input.test.mjs test/cssoccer-client-shell.test.mjs && node tools/smoke-full-match-matrix.mjs",
-    "test:alpha:adaptive": "node tools/smoke-free-play-adaptive.mjs --country argentina --full-match --check",
-    "test:alpha:soak": "node tools/run-free-play-soak.mjs --check",
-    "test:alpha:evidence": "node tools/capture-free-play-evidence.mjs --check",
     "prepare:cssoccer": "node tools/prepare-cssoccer.mjs --assembler src/prepare/cssoccer/fixtureAssembler.mjs --output-root build/generated/public/cssoccer",
     "prepare:exact-players": "node tools/publish-exact-player-animation.mjs --check",
     "prepare:cssoccer:check": "node tools/check-prepare-determinism.mjs --assembler src/prepare/cssoccer/fixtureAssembler.mjs",

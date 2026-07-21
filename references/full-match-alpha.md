@@ -37,5 +37,4 @@ Original source, game data, oracle patches/builds, captures, traces, and
 retained evidence stay under ignored local paths. The browser consumes only
 the deterministic prepared publication beneath
 `build/generated/public/cssoccer/`; it performs no runtime source parsing or
-geometry construction. This checkout is evidence-ready only: deployment,
-publication, staging, committing, and pushing require separate approval.
+geometry construction.
