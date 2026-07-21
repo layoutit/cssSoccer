@@ -51,13 +51,16 @@ export function parseWatcomMap(text) {
   }
   const entries = [];
   for (const [index, line] of text.split(/\r?\n/u).entries()) {
-    const match = line.match(/^\s*([0-9a-f]{4}):([0-9a-f]{8})(\+?)\s+(.+?)\s*$/iu);
+    const match = line.match(/^\s*([0-9a-f]{4}):([0-9a-f]{8})([+*]?)\s+(.+?)\s*$/iu);
     if (!match) continue;
     entries.push(Object.freeze({
       line: index + 1,
       segment: match[1].toLowerCase(),
       offset: Number.parseInt(match[2], 16),
+      marker: match[3] || null,
       movable: match[3] === "+",
+      localOnly: match[3] === "+",
+      unreferenced: match[3] === "*",
       declaration: match[4],
       raw: line,
     }));
@@ -108,7 +111,7 @@ export function parseWatcomRoutine(listingText, functionName) {
   const namePattern = symbolPattern(functionName);
   const starts = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^\s*([0-9a-f]{8})\s+(.+):\s*$/iu);
+    const match = lines[index].match(/^\s*([0-9a-f]{4,8})\s+(.+):\s*$/iu);
     if (!match || !namePattern.test(match[2])) continue;
     starts.push({ index, offset: Number.parseInt(match[1], 16), declaration: match[2] });
   }
@@ -147,7 +150,7 @@ export function parseWatcomRoutine(listingText, functionName) {
   for (let index = start.index + 1; index < endIndex; index += 1) {
     let source = lines[index];
     const wrapped = source.match(
-      /^\s*[0-9a-f]{8}\s+(?:[0-9a-f]{2}[ \t]+)*[0-9a-f]{2}\s*$/iu,
+      /^\s*[0-9a-f]{4,8}\s+(?:[0-9a-f]{2}[ \t]+)*[0-9a-f]{2}\s*$/iu,
     );
     if (wrapped && index + 1 < endIndex) {
       const continuation = lines[index + 1].match(/^\s+([a-z][a-z0-9]*)\s+(.+?)\s*$/iu);
@@ -251,6 +254,96 @@ export function inferMapValueType(declaration) {
   if (/\bshort\b/u.test(normalized)) return unsigned ? "u16" : "i16";
   if (/\bint\b/u.test(normalized) || /\blong\b/u.test(normalized)) return unsigned ? "u32" : "i32";
   return null;
+}
+
+export function readWatcomInitializedValue(listingText, request) {
+  if (typeof listingText !== "string" || listingText.length === 0) {
+    throw new TypeError("Watcom listing text must be non-empty.");
+  }
+  if (!isPlainObject(request)) throw new TypeError("Initialized-value request must be an object.");
+  requireSymbolName(request.name, "initialized symbol");
+  const elementIndex = request.elementIndex ?? 0;
+  if (!Number.isSafeInteger(elementIndex) || elementIndex < 0) {
+    throw new TypeError("Initialized symbol elementIndex must be a non-negative safe integer.");
+  }
+  const bytes = valueTypeBytes(request.valueType);
+  const lines = listingText.split(/\r?\n/u);
+  const pattern = symbolPattern(request.name);
+  let segment = null;
+  const labels = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const segmentMatch = lines[index].match(/^\s*Segment:\s+(\S+)/iu);
+    if (segmentMatch) {
+      segment = segmentMatch[1];
+      continue;
+    }
+    const label = lines[index].match(/^\s*([0-9a-f]{4,8})\s+(.+?):\s*$/iu);
+    if (!label || !pattern.test(label[2])) continue;
+    labels.push({
+      index,
+      line: index + 1,
+      segment,
+      declaration: label[2],
+      objectOffset: Number.parseInt(label[1], 16),
+    });
+  }
+  if (labels.length === 0) return null;
+  if (labels.length !== 1) {
+    throw new CompiledPathInspectorError(
+      "listing-data-symbol-ambiguous",
+      `Initialized symbol ${request.name} resolved to ${labels.length} object-data labels.`,
+      { symbol: request.name, labels },
+    );
+  }
+  const [label] = labels;
+  const start = label.objectOffset + elementIndex * bytes;
+  if (!Number.isSafeInteger(start) || start + bytes > 0x1_0000_0000) {
+    throw new CompiledPathInspectorError(
+      "listing-data-element-overflow",
+      `Initialized element ${request.name}[${elementIndex}] exceeds the object address space.`,
+    );
+  }
+  const values = new Map();
+  for (let index = label.index + 1; index < lines.length; index += 1) {
+    if (/^\s*Segment:/iu.test(lines[index])) break;
+    const data = parseWatcomDataLine(lines[index]);
+    if (!data) continue;
+    for (const [byteIndex, value] of data.bytes.entries()) {
+      values.set(data.offset + byteIndex, value);
+    }
+  }
+  const raw = Buffer.alloc(bytes);
+  for (let index = 0; index < bytes; index += 1) {
+    const value = values.get(start + index);
+    if (value === undefined) return null;
+    raw[index] = value;
+  }
+  const writes = lines.flatMap((line, index) => {
+    const instruction = parseInstructionLine(line, index + 1);
+    if (!instruction || !instructionWritesSymbol(instruction, request.name)) return [];
+    return [Object.freeze({
+      line: instruction.line,
+      offset: instruction.offset,
+      mnemonic: instruction.mnemonic,
+      raw: instruction.raw.trim(),
+    })];
+  });
+  return Object.freeze({
+    status: "object-initializer",
+    name: elementIndex === 0 ? request.name : `${request.name}[${elementIndex}]`,
+    baseName: request.name,
+    elementIndex,
+    valueType: request.valueType,
+    value: decodeTypedBytes(raw, request.valueType),
+    numericBits: [...raw].reverse().map((value) => value.toString(16).padStart(2, "0")).join(""),
+    rawBytesHex: raw.toString("hex"),
+    objectSegment: label.segment,
+    objectOffset: start,
+    objectOffsetHex: `0x${start.toString(16).padStart(8, "0")}`,
+    declaration: label.declaration,
+    listingLine: label.line,
+    writes: Object.freeze(writes),
+  });
 }
 
 export function valueTypeBytes(valueType) {
@@ -367,7 +460,7 @@ export function createProbeManifest({
   const normalizedDgroupSegment = dgroupSegment.toLowerCase();
   const reads = symbols.map((symbol, index) => {
     if (!isPlainObject(symbol)) throw new TypeError(`Probe symbol ${index} must be an object.`);
-    requireSymbolName(symbol.name, `probe symbol ${index}`);
+    requireProbeSymbolName(symbol.name, `probe symbol ${index}`);
     const valueType = symbol.valueType;
     const expectedBytes = valueTypeBytes(valueType);
     const bytes = symbol.bytes ?? expectedBytes;
@@ -559,7 +652,7 @@ export function canonicalJson(value) {
 }
 
 function parseInstructionLine(line, lineNumber) {
-  const match = line.match(/^\s*([0-9a-f]{8})\s+((?:(?:[0-9a-f]{2})[ \t]+)+)([a-z][a-z0-9]*)\s*(.*?)\s*$/iu);
+  const match = line.match(/^\s*([0-9a-f]{4,8})\s+((?:(?:[0-9a-f]{2})[ \t]+)+)([a-z][a-z0-9]*)\s*(.*?)\s*$/iu);
   if (!match) return null;
   return Object.freeze({
     offset: Number.parseInt(match[1], 16),
@@ -571,15 +664,58 @@ function parseInstructionLine(line, lineNumber) {
   });
 }
 
+function parseWatcomDataLine(line) {
+  const match = line.match(/^\s*([0-9a-f]{4,8})\s+(.+?)\s*$/iu);
+  if (!match) return null;
+  const bytes = [];
+  for (const token of match[2].trim().split(/\s+/u)) {
+    if (!/^[0-9a-f]{2}$/iu.test(token)) break;
+    bytes.push(Number.parseInt(token, 16));
+  }
+  return bytes.length === 0
+    ? null
+    : { offset: Number.parseInt(match[1], 16), bytes };
+}
+
+function instructionWritesSymbol(instruction, name) {
+  const firstOperand = instruction.operands.split(",", 1)[0] ?? "";
+  if (!symbolPattern(name).test(firstOperand)) return false;
+  return new Set([
+    "add", "and", "dec", "fist", "fistp", "fst", "fstp", "inc", "mov",
+    "or", "pop", "sal", "sar", "shl", "shr", "sub", "xor",
+  ]).has(instruction.mnemonic);
+}
+
+function decodeTypedBytes(buffer, valueType) {
+  switch (valueType) {
+    case "i8": return buffer.readInt8(0);
+    case "u8": return buffer.readUInt8(0);
+    case "i16": return buffer.readInt16LE(0);
+    case "u16": return buffer.readUInt16LE(0);
+    case "i32": return buffer.readInt32LE(0);
+    case "u32": return buffer.readUInt32LE(0);
+    case "f32": return buffer.readFloatLE(0);
+    case "f64": return buffer.readDoubleLE(0);
+    default: throw new CompiledPathInspectorError(
+      "value-type-unsupported",
+      `Unsupported compiled-path value type ${String(valueType)}.`,
+    );
+  }
+}
+
 function normalizeSymbolRequest(request) {
   if (typeof request === "string") {
     requireSymbolName(request, "requested symbol");
-    return { name: request, valueType: null };
+    return { name: request, elementIndex: null, valueType: null };
   }
   if (!isPlainObject(request)) throw new TypeError("Requested symbol must be a name or object.");
   requireSymbolName(request.name, "requested symbol");
+  const elementIndex = request.elementIndex ?? null;
+  if (elementIndex !== null && (!Number.isSafeInteger(elementIndex) || elementIndex < 0)) {
+    throw new TypeError("Requested symbol elementIndex must be a non-negative safe integer.");
+  }
   if (request.valueType !== undefined && request.valueType !== null) valueTypeBytes(request.valueType);
-  return { name: request.name, valueType: request.valueType ?? null };
+  return { name: request.name, elementIndex, valueType: request.valueType ?? null };
 }
 
 function constantWriteValue(reference, valueType) {
@@ -665,6 +801,15 @@ function validateProbeReads(reads) {
 function requireSymbolName(value, label) {
   if (typeof value !== "string" || !/^[A-Za-z_?$@][A-Za-z0-9_?$@.]*$/u.test(value)) {
     throw new TypeError(`${label} must be a simple compiled symbol name.`);
+  }
+}
+
+function requireProbeSymbolName(value, label) {
+  if (
+    typeof value !== "string"
+    || !/^[A-Za-z_?$@][A-Za-z0-9_?$@.]*(?:\[\d+\])?$/u.test(value)
+  ) {
+    throw new TypeError(`${label} must be a compiled symbol or typed array element.`);
   }
 }
 

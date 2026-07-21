@@ -11,7 +11,7 @@ const WRITE_PATTERN = /(?:\+\+|--|(?<![=!<>])(?:<<|>>|[+\-*/%&|^])?=(?!=))/u;
 const FUNCTION_PATTERN = /^\s*(?:(?:static|inline|extern|const|unsigned|signed|long|short|void|int|char|float|double|bool|struct|class|auto)\s+|[A-Za-z_]\w*(?:::\w+)?[\s*&]+)+([A-Za-z_~]\w*)\s*\([^;]*\)\s*(?:const\s*)?\{?\s*$/u;
 const CONTROL_WORDS = new Set(["if", "for", "while", "switch", "catch"]);
 const EVIDENCE_FILES = new Set([
-  "browserEngineIndependence.mjs",
+  "freePlayEngineIndependence.mjs",
   "client.mjs",
   "debugApi.mjs",
   "nativeFieldContract.mjs",

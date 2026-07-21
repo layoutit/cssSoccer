@@ -1,0 +1,716 @@
+{
+  "schema": "cssoccer-static-source-data@1",
+  "id": "spain-argentina-full-match",
+  "status": "ready",
+  "publication": {
+    "sourceAndOriginalData": "local-only",
+    "generatedBrowserAssets": "ignored-local-only-pending-separate-deployment-approval",
+    "publishedRepositoryArtifact": "preparation-code-and-fact-descriptor-only",
+    "originalByteRedistribution": false
+  },
+  "source": {
+    "repository": "https://github.com/Xrampino/Actua-Soccer.git",
+    "revision": "b40bd6d1e50e052030c5f0884fbe3deda7e9fa4b",
+    "sourceImportRevision": "6375c0a35c20cffe699fd160543229b1b1581e57",
+    "license": "CC-BY-NC-ND-4.0",
+    "officialArchive": {
+      "url": "https://www.gremlinarchive.com/wp-content/uploads/2017/03/ActuaSoccerSourceCode.zip",
+      "sha256": "74f6baba9cfdba69da9e5068295bda6634611bbdf506e5768a36d38149155177"
+    },
+    "playableDemoRendererArchive": {
+      "distributionPage": "https://www.dosgamesarchive.com/download/actua-soccer",
+      "downloadUrl": "https://image.dosgamesarchive.com/games/acts-dem.zip",
+      "archiveFile": "acts-dem.zip",
+      "archiveSha256": "14f9470d497d18195fe847f07987dbfa6a5e5c334b0c96af7b38d3bec26c4480",
+      "files": [
+        {
+          "name": "ACTREND.DAT",
+          "bytes": 12652256,
+          "sha256": "740dd963858397b465544e0c2a99ee14c0a68c7df07ce5cc3e925de25ad35ca2"
+        },
+        {
+          "name": "ACTREND.OFF",
+          "bytes": 3440,
+          "records": 430,
+          "sha256": "b3df2b2767cbaebb7e21364e71b897c6336d46b9814c4baba442e50ef2ab696d"
+        }
+      ],
+      "selectorAuthority": {
+        "repository": "https://github.com/TalonBraveInfo/gremlin-soccer",
+        "revision": "2232754037ba7e2dfbf3f0d7dbe4dd6574380225",
+        "file": "game.equ",
+        "blobSha": "6317e9556555b04ce06badbf8749c2093f7b4137"
+      },
+      "demoVariantBindings": {
+        "pitchSelector": 1920,
+        "pitchRecordIndex": 240,
+        "pitchBytes": 16384,
+        "reason": "the playable demo omits three late KGRID records without placeholders before BM_PA"
+      },
+      "publication": "decoded generated PNG only; original demo records stay ignored local"
+    },
+    "retailPlayerRendererSupplement": {
+      "dataRoute": "user-supplied-retail-data",
+      "archiveFile": "Actua_Soccer_Win_ISO_EN.zip",
+      "archiveBytes": 292435102,
+      "archiveSha256": "1c6edf9e3dcefdc92bee79daca87ef64f795e7f423123b13637150c077a530c7",
+      "files": [
+        {
+          "name": "ACTREND.DAT",
+          "bytes": 12906808,
+          "sha256": "843c6da5abe934b547248ce45e0179ddb9518cff07729ff919cfc8a7c8464d7e"
+        },
+        {
+          "name": "ACTREND.OFF",
+          "bytes": 3512,
+          "records": 439,
+          "sha256": "af154fe774eb2386628457c79e53738dd990d09083a122761848f6dcbc4b3f9f"
+        }
+      ],
+      "records": [
+        {
+          "symbol": "TMD_TEXDATA",
+          "selector": 8,
+          "recordIndex": 1,
+          "bytes": 32192,
+          "sha256": "6f690e01a5a7a91d10ca13feab3bf15263e86fdbacfd0a1f1d47c54891d0408b",
+          "use": "retail texture slots 549 through 578"
+        },
+        {
+          "symbol": "BM_XARGENTI",
+          "selector": 96,
+          "recordIndex": 12,
+          "bytes": 65536,
+          "sha256": "0a34eb62484405d7e85343da33dcd49b3269640a887bc7c819e8c22fbbfaddac",
+          "use": "complete 256 by 256 Argentina torso page"
+        },
+        {
+          "symbol": "COL_XARGENTI",
+          "selector": 1144,
+          "recordIndex": 143,
+          "bytes": 72,
+          "sha256": "7de6d99471e4d19b09cb9c5af6e814df8806d2051d16356e92c260888fc8c0af",
+          "use": "Argentina 24-entry kit palette"
+        },
+        {
+          "symbol": "BM_NUMBERS1",
+          "selector": 1936,
+          "recordIndex": 242,
+          "bytes": 13824,
+          "sha256": "73ad7e3909571db26911a37cb5edea9156d81b8fd68277dc3e3f2903c24ba962",
+          "use": "Spain dorsal source page"
+        },
+        {
+          "symbol": "BM_NUMBERS2",
+          "selector": 1944,
+          "recordIndex": 243,
+          "bytes": 13824,
+          "sha256": "60f83beccbc6fd8f01bdd0a479a79432e213e0c55c4e6b747073ddbcd3a6e276",
+          "use": "Argentina dorsal source page"
+        }
+      ],
+      "composition": "demo renderer base plus retail Argentina torso, retail Argentina palette, and retail number slots 549 through 578",
+      "publication": "generated decoded atlases only; retail bytes remain ignored local"
+    },
+    "retailGameDataArchive": {
+      "dataRoute": "user-supplied-retail-data",
+      "files": [
+        {
+          "name": "DATA.DAT",
+          "bytes": 5638620,
+          "sha256": "88821b4e3f328ab022265a0a72fef7ef954d94f5d54c1ef7d6cee06a08236c80"
+        },
+        {
+          "name": "DATA.OFF",
+          "bytes": 1000,
+          "records": 125,
+          "sha256": "e755e5dc147edec8c9e63446a612fe2d1cf60928a90aa70017ec29ad56678e6c"
+        }
+      ],
+      "publication": "local source authority only; original records are not published"
+    },
+    "byteRangeSemantics": "zero-based half-open [start,end)",
+    "files": [
+      {
+        "name": "FILES.C",
+        "bytes": 62213,
+        "sha256": "80c5c13ee829465c8daef3aa816deadda872c32cafffd37f9fcd565f9820a92b"
+      },
+      {
+        "name": "DATA.H",
+        "bytes": 10608,
+        "sha256": "7dba31d4e9af11b4c7686faa1bf75802142579db99bd41b23d5bfcd065f0bb99"
+      },
+      {
+        "name": "3DENG.H",
+        "bytes": 4609,
+        "sha256": "d3190ed25b638927071b028f25aeabf6e6af9f3d6498cd1abd20478ed61a17a3"
+      },
+      {
+        "name": "3DENG.C",
+        "bytes": 256740,
+        "sha256": "9a9f29dcc2fa984bac746c885810e5b32ccee421448272534bc81469a0c4991b"
+      },
+      {
+        "name": "DEFINES.H",
+        "bytes": 181976,
+        "sha256": "c4859a60656d038093422a8f9084eb7b32f520125f21ce6ed65f1219a1524ee1"
+      },
+      {
+        "name": "GAMEDATA.CPP",
+        "bytes": 331995,
+        "sha256": "47d25e02a7a9b47c03ce21aa8305be93b4534c4b2e1bcbec987b66f77a775e12"
+      },
+      {
+        "name": "FOOTBALL.CPP",
+        "bytes": 83214,
+        "sha256": "4054e55bbd5471ad0fa76c192562ee269f4ea0978e38f61d2eb0782439128b10"
+      },
+      {
+        "name": "RULES.CPP",
+        "bytes": 61810,
+        "sha256": "e0e3ebab5f36ec4d60f2ec6f1b4c797661855017c770a6820dc3152ce75a0ef8"
+      },
+      {
+        "name": "DISPLAY.CPP",
+        "bytes": 12439,
+        "sha256": "215bc1200c0af42eecb4c0bc73a3fdfb73e21f2eaab4681f2170d9c808f7fbca"
+      },
+      {
+        "name": "DATA.EQU",
+        "bytes": 3799,
+        "sha256": "39c8d978ca1a3762e0cf09d72db2e7de17f57992aee74c44bc9d5395c0a005fe"
+      },
+      {
+        "name": "EURO.EQU",
+        "bytes": 3683,
+        "sha256": "1141b74e2423de6cea9ce418372aa326b1bb8225e2ddee3f8384c62966a35664"
+      },
+      {
+        "name": "FAP.EQU",
+        "bytes": 957,
+        "sha256": "93f493b5b52a4012e4182f134a7f16de6dd5cfe5b6cbcdcaadd566d41d892e30"
+      }
+    ],
+    "evidenceSpans": [
+      {
+        "fact": "20 Hz runtime, fixed competition ids, simulation ids, and national team ids",
+        "file": "DEFINES.H",
+        "lines": [47, 104],
+        "spans": [
+          {
+            "lines": [47, 70],
+            "bytes": [918, 1351],
+            "sha256": "ef1e33ee917dbda6856ee59bc7253d9f8a099f5047311559df7ca5ca4c535aee"
+          },
+          {
+            "lines": [83, 104],
+            "bytes": [1557, 1966],
+            "sha256": "29feb534d9cc26d4a165b0f7f87d40cd669924dc633975825e04fac07d55fa21"
+          }
+        ]
+      },
+      {
+        "fact": "archive offset record is offset followed by size",
+        "file": "DEFINES.H",
+        "lines": [708, 711],
+        "bytes": [16992, 17072],
+        "sha256": "a1d203b9490b02b76a14fb47f139e93a2f68f62ba90ef6e197ba8e844361c57a"
+      },
+      {
+        "fact": "player and team source structures",
+        "file": "DEFINES.H",
+        "lines": [758, 829],
+        "bytes": [17769, 18900],
+        "sha256": "7fbf6e0d539f75a66e9854101d4a234ca687c217406daa05592537b233a416b3"
+      },
+      {
+        "fact": "Spain team render symbols",
+        "file": "FILES.C",
+        "lines": [6, 10],
+        "bytes": [199, 654],
+        "sha256": "0927fd6de86643b00990cf5e3c8c45e8ee8b7c620b8d459666d0c595f94af767"
+      },
+      {
+        "fact": "Argentina team render symbols",
+        "file": "FILES.C",
+        "lines": [25, 28],
+        "bytes": [2178, 2624],
+        "sha256": "3b66773e93be71e304f3b60e79ec17feebd6e624b5d60c20fb1a7e9c6c029d04"
+      },
+      {
+        "fact": "Spain stadium source entry",
+        "file": "FILES.C",
+        "lines": [121, 141],
+        "bytes": [6668, 7075],
+        "sha256": "d282d71e519a20094ee58fec0d56ecb0208004347580c50e281db761673de677"
+      },
+      {
+        "fact": "native scalar and renderer object layouts",
+        "file": "3DENG.H",
+        "lines": [13, 138],
+        "spans": [
+          {
+            "lines": [13, 35],
+            "bytes": [275, 707],
+            "sha256": "9659fb65e9c5a0b9f28c433664cca671efc9ac958b165e6680bc53beed288489"
+          },
+          {
+            "lines": [130, 138],
+            "bytes": [1828, 1930],
+            "sha256": "03421a41de51aadeabff33236ec060cda531d3b2ca1a706ab08656da657358a7"
+          }
+        ]
+      },
+      {
+        "fact": "motion capture, rendered player, and match setup layouts",
+        "file": "3DENG.H",
+        "lines": [175, 236],
+        "spans": [
+          {
+            "lines": [175, 205],
+            "bytes": [2425, 2875],
+            "sha256": "68ad15b5e87133224a5fb229bc1b70ae9771d3abe62a054eaf703fb4e6e4592d"
+          },
+          {
+            "lines": [223, 236],
+            "bytes": [3036, 3251],
+            "sha256": "f3e931c770dd44a2199940c78b7ca2f03e4cf9def01b7275b8d8bdcbfa1b1935"
+          }
+        ]
+      },
+      {
+        "fact": "25 renderer people consist of two elevens and three officials",
+        "file": "DATA.H",
+        "lines": [259, 286],
+        "bytes": [6896, 7330],
+        "sha256": "d5b93472525b97bb1e3650f6d8fb565c1505f5e700fc16b80158268addabe317"
+      },
+      {
+        "fact": "eight-byte selector indexing into offset records",
+        "file": "3DENG.C",
+        "lines": [3687, 3737],
+        "bytes": [85780, 86865],
+        "sha256": "ef1cf7ed9551cac87346671f1ab7f089ba8cacbf17df297437075ddefd92f3c1"
+      },
+      {
+        "fact": "pitch bounds are 1280 by 800 native units",
+        "file": "3DENG.C",
+        "lines": [8864, 8876],
+        "bytes": [226119, 226438],
+        "sha256": "c2cc391637fb553f046525b4dbad5ee9c87266f9f479e1a9c9eba96c741d2f22"
+      },
+      {
+        "fact": "renderer player indices map to two teams and three officials",
+        "file": "3DENG.C",
+        "lines": [9040, 9060],
+        "bytes": [230225, 230886],
+        "sha256": "f73a17690d5fbdb0fb2db1f347e00f5d28b76ef9e74eabe1856e7ad73a743bd4"
+      },
+      {
+        "fact": "ball, pitch, markings, goals, and flags have fixed renderer coordinates",
+        "file": "3DENG.C",
+        "lines": [9107, 9144],
+        "bytes": [233206, 234650],
+        "sha256": "24490c28d94b7cda00ee68212b8af6cae1323458ad65becf7d6f0c90d489a69e"
+      },
+      {
+        "fact": "gameplay coordinates map to renderer coordinates as x,z,-y",
+        "file": "DISPLAY.CPP",
+        "lines": [38, 45],
+        "bytes": [1132, 1376],
+        "sha256": "87488091b9b6451af3411d5e31bfa7b85dc216cf6c2fef18b51f435188cd15b5"
+      },
+      {
+        "fact": "pitch scale is 16 native units per yard",
+        "file": "DISPLAY.CPP",
+        "lines": [156, 266],
+        "spans": [
+          {
+            "lines": [156, 165],
+            "bytes": [3847, 4076],
+            "sha256": "31a3fa9e7ae727e26a10fdf05fffc51973576d5643314463455ab4ced1fadb7d"
+          },
+          {
+            "lines": [238, 266],
+            "bytes": [5699, 6410],
+            "sha256": "0cbc7cf6799a68ccb1fad80652d3c78e8540c1095db2d1bebee20483f0fa7039"
+          }
+        ]
+      },
+      {
+        "fact": "native selectable time table does not contain time factor 2",
+        "file": "FOOTBALL.CPP",
+        "lines": [50, 50],
+        "bytes": [1304, 1340],
+        "sha256": "30821681097f3493f2d103999aa2f8eacb82887ab1f12ea86f081a4e097003cb"
+      },
+      {
+        "fact": "team user tokens and two runtime team slots",
+        "file": "FOOTBALL.CPP",
+        "lines": [882, 1246],
+        "spans": [
+          {
+            "lines": [882, 920],
+            "bytes": [15427, 16060],
+            "sha256": "6f5364fb5d616a6b0bf89d4884f3d5ca1efa442c7a0deeedaaa2e54c07f35180"
+          },
+          {
+            "lines": [1207, 1246],
+            "bytes": [21295, 22024],
+            "sha256": "7d5c61cea647ca0309eee7a0f3d434c01fd9362140d72aa70d9a201894b5f91c"
+          }
+        ]
+      },
+      {
+        "fact": "runtime player slots 0 through 21 split eleven per team",
+        "file": "FOOTBALL.CPP",
+        "lines": [1251, 1335],
+        "bytes": [22186, 24331],
+        "sha256": "cd4096dbe0ca0974b59fbacde8129939bfed2adaf643793f6f1f355567b0a15d"
+      },
+      {
+        "fact": "time factor is normally selected from the native time table",
+        "file": "FOOTBALL.CPP",
+        "lines": [3394, 3450],
+        "bytes": [76418, 77531],
+        "sha256": "f8c8d483023ca782c61434e138bc63ebd6e39dc40b096ca5bddc3fb84bbbd235"
+      },
+      {
+        "fact": "match clock advances by 90 divided by time factor and REAL_SPEED",
+        "file": "RULES.CPP",
+        "lines": [571, 600],
+        "bytes": [12269, 12881],
+        "sha256": "ac573a1ef05134e7b3656825c9cef1f715108d921985eebb2ae5877690964180"
+      },
+      {
+        "fact": "GAMEDATA.CPP contains two demo templates and is not asserted as Spain or Argentina roster authority",
+        "file": "GAMEDATA.CPP",
+        "lines": [62, 64],
+        "bytes": [1348, 1382],
+        "sha256": "2fe645585da9de54b19e25dd45e4cdfdefac3eb5ee03ad940eaa91b19a964f76"
+      }
+    ]
+  },
+  "archiveFormat": {
+    "indexRecordBytes": 8,
+    "endianness": "little",
+    "fields": [
+      {
+        "name": "offset",
+        "type": "uint32le",
+        "byteOffset": 0
+      },
+      {
+        "name": "size",
+        "type": "uint32le",
+        "byteOffset": 4
+      }
+    ],
+    "selectorToRecord": "selector / 8",
+    "validation": "records are monotonic, non-overlapping, within the paired DAT file, and cover it through the final byte"
+  },
+  "archives": [
+    {
+      "id": "euro",
+      "data": {
+        "name": "EURO.DAT",
+        "bytes": 12346272,
+        "byteRange": [0, 12346272],
+        "sha256": "024accf02afeeeeebc43af649754191ac1b192f5c955fb5335e50d8acc2f7177"
+      },
+      "index": {
+        "name": "EURO.OFF",
+        "bytes": 968,
+        "byteRange": [0, 968],
+        "sha256": "dd6952d351ac9335b931070eb97d3321ec5238b60a20530ed9b8098adb08df3a",
+        "records": 121,
+        "first": { "selector": 0, "recordIndex": 0, "offset": 0, "size": 307200 },
+        "last": { "selector": 960, "recordIndex": 120, "offset": 12340672, "size": 5600 }
+      }
+    },
+    {
+      "id": "eurorend",
+      "data": {
+        "name": "EUROREND.DAT",
+        "bytes": 6613404,
+        "byteRange": [0, 6613404],
+        "sha256": "0c38ab865fcd1d62d7c0f3f88b861f4c43643caf402dea6fbe9b0f042fd340cb"
+      },
+      "index": {
+        "name": "EUROREND.OFF",
+        "bytes": 1832,
+        "byteRange": [0, 1832],
+        "sha256": "96e6cea4bb91667cd204faa928696006048cf35a4e0baabefe83eca5d06dcb87",
+        "records": 229,
+        "first": { "selector": 0, "recordIndex": 0, "offset": 0, "size": 768 },
+        "last": { "selector": 1824, "recordIndex": 228, "offset": 6600144, "size": 13260 }
+      }
+    },
+    {
+      "id": "fap",
+      "data": {
+        "name": "FAP.DAT",
+        "bytes": 1452928,
+        "byteRange": [0, 1452928],
+        "sha256": "4eb101f8b8bd44eca0b8824400476e4a8dbb704eb43c926e4d5bea5dbba26ff3"
+      },
+      "index": {
+        "name": "FAP.OFF",
+        "bytes": 216,
+        "byteRange": [0, 216],
+        "sha256": "3b12f01cf551a6c7866ddcfd6784d8b37b78e5cb4d7b5167278ed0a88e09227c",
+        "records": 27,
+        "first": { "selector": 0, "recordIndex": 0, "offset": 0, "size": 10241 },
+        "last": { "selector": 208, "recordIndex": 26, "offset": 1452880, "size": 48 }
+      }
+    },
+    {
+      "id": "fapf",
+      "data": {
+        "name": "FAPF.DAT",
+        "bytes": 279252,
+        "byteRange": [0, 279252],
+        "sha256": "be064e6f13b91e2ebad8451e787a1bfe085aef256fc328433b7112d751fc1a67"
+      },
+      "index": {
+        "name": "FAPF.OFF",
+        "bytes": 32,
+        "byteRange": [0, 32],
+        "sha256": "cc5b48e34a6fc64f61e8d64bd72fb73ffb81499a51ebd1c94ee10c8b8152a967",
+        "records": 4,
+        "first": { "selector": 0, "recordIndex": 0, "offset": 0, "size": 10241 },
+        "last": { "selector": 24, "recordIndex": 3, "offset": 279204, "size": 48 }
+      }
+    }
+  ],
+  "fixture": {
+    "id": "spain-argentina-full-match",
+    "sceneId": "spain-argentina-full-match",
+    "home": {
+      "country": "spain",
+      "label": "Spain",
+      "sourceTeamId": 2,
+      "nativeTeamSlot": "A",
+      "nativeUserToken": -1,
+      "sourceSymbols": {
+        "body": "BM_XLATINO",
+        "kit": "BM_XSPAIN",
+        "limbs": "BM_LIMBS2",
+        "numbers": "BM_NUMBERS1",
+        "kitPalette": "COL_XSPAIN",
+        "bodyPalette": "COL_XLATINO",
+        "homeHighlight": "COL_HR",
+        "awayHighlight": "COL_AR"
+      },
+      "teamAssetSelectors": [
+        { "symbol": "BIN_SPAIN", "selector": 296, "recordIndex": 37, "byteRange": [4531150, 4551480], "bytes": 20330, "sha256": "e3b2ef9fece408a8a33e92e435a83a2e3ba572c8392ffab920508076648af19d" },
+        { "symbol": "BIN_SPAIN2", "selector": 656, "recordIndex": 82, "byteRange": [5415708, 5420892], "bytes": 5184, "sha256": "70874af96eac5c775796e5952762a2383be2400fffa5f28cd25f5fdbbc9cb675" }
+      ]
+    },
+    "away": {
+      "country": "argentina",
+      "label": "Argentina",
+      "sourceTeamId": 20,
+      "nativeTeamSlot": "B",
+      "nativeUserToken": -2,
+      "sourceSymbols": {
+        "body": "BM_XLATINO",
+        "kit": "BM_XARGENTI",
+        "limbs": "BM_LIMBS1",
+        "numbers": "BM_NUMBERS2",
+        "kitPalette": "COL_XARGENTI",
+        "bodyPalette": "COL_XLATINO",
+        "homeHighlight": "COL_HB",
+        "awayHighlight": "COL_AB"
+      },
+      "teamAssetSelectors": [
+        { "symbol": "BIN_ARGENTIA", "selector": 440, "recordIndex": 55, "byteRange": [4897090, 4917420], "bytes": 20330, "sha256": "715ff950c11f026ffa21f6ac9610a4fcfff8e1ea3e0a98c681910d6701bd7f02" },
+        { "symbol": "BIN_ARGENTI2", "selector": 800, "recordIndex": 100, "byteRange": [5509020, 5514204], "bytes": 5184, "sha256": "19cf6ff8480373c8c7f4918565a0ce5193920d8bf0ce10ac25b2de7bd6bcdea2" }
+      ]
+    },
+    "competition": {
+      "id": 0,
+      "symbol": "FRIENDLY"
+    },
+    "simulationMode": {
+      "id": 1,
+      "symbol": "SIMULATION"
+    },
+    "venue": {
+      "sourceStadiumEntryIndex": 2,
+      "homeTeamSourceId": 2,
+      "nativeProfileBindingRequired": true
+    },
+    "controlCountries": ["spain", "argentina"],
+    "defaultControlCountry": "spain",
+    "duration": {
+      "gameMinutesPerHalf": 45,
+      "playMinutesPerHalf": 1,
+      "fullMatchPlayMinutes": 2,
+      "timeFactor": 2,
+      "tickRateHz": 20,
+      "gameClockSecondsPerTick": 2.25,
+      "ticksPerHalf": 1200,
+      "fullMatchPlayTicks": 2400,
+      "liveBallOverrun": {
+        "allowed": true,
+        "maxTicksPerHalf": 200,
+        "clockResetAtEndSwap": "keep-minutes-reset-seconds"
+      },
+      "publiclyConfigurable": false,
+      "sourceTimeFactors": [5, 10, 20, 40, 90],
+      "requiresLocalOraclePatch": true,
+      "durationMeaning": "fixed regulation clock; the source may finish a live-ball sequence within the bounded native-profile overrun before each whistle"
+    }
+  },
+  "coordinates": {
+    "nativeUnitsPerYard": 16,
+    "gameplay": {
+      "axes": [
+        { "name": "x", "meaning": "goal-line to goal-line", "min": 0, "max": 1280 },
+        { "name": "y", "meaning": "touchline to touchline", "min": 0, "max": 800 },
+        { "name": "z", "meaning": "vertical", "min": null, "max": null }
+      ],
+      "pitchYards": { "length": 80, "width": 50 },
+      "ballCentre": [640, 400, 0]
+    },
+    "rendererAndPrepared": {
+      "mappingFromGameplay": ["x", "z", "-y"],
+      "axes": [
+        { "name": "x", "meaning": "goal-line to goal-line" },
+        { "name": "y", "meaning": "vertical" },
+        { "name": "z", "meaning": "negative touchline direction" }
+      ],
+      "pitchBounds": { "x": [0, 1280], "y": [0, null], "z": [-800, 0] },
+      "ballCentre": [640, 0, -400],
+      "handedness": "right-handed"
+    }
+  },
+  "retainedScene": {
+    "id": "spain-argentina-full-match",
+    "mode": "map-scene",
+    "staticObjectIds": [
+      "pitch-00",
+      "pitch-markings-00",
+      "goal-x0-00",
+      "goal-x1280-00",
+      "corner-flag-x0-z0",
+      "corner-flag-x1280-z0",
+      "corner-flag-x0-z-800",
+      "corner-flag-x1280-z-800",
+      "stadium-spain-02"
+    ],
+    "actors": [
+      { "id": "spain-player-01", "kind": "player", "country": "spain", "nativeRuntimeIndex": 0, "nativeRendererIndex": 0 },
+      { "id": "spain-player-02", "kind": "player", "country": "spain", "nativeRuntimeIndex": 1, "nativeRendererIndex": 1 },
+      { "id": "spain-player-03", "kind": "player", "country": "spain", "nativeRuntimeIndex": 2, "nativeRendererIndex": 2 },
+      { "id": "spain-player-04", "kind": "player", "country": "spain", "nativeRuntimeIndex": 3, "nativeRendererIndex": 3 },
+      { "id": "spain-player-05", "kind": "player", "country": "spain", "nativeRuntimeIndex": 4, "nativeRendererIndex": 4 },
+      { "id": "spain-player-06", "kind": "player", "country": "spain", "nativeRuntimeIndex": 5, "nativeRendererIndex": 5 },
+      { "id": "spain-player-07", "kind": "player", "country": "spain", "nativeRuntimeIndex": 6, "nativeRendererIndex": 6 },
+      { "id": "spain-player-08", "kind": "player", "country": "spain", "nativeRuntimeIndex": 7, "nativeRendererIndex": 7 },
+      { "id": "spain-player-09", "kind": "player", "country": "spain", "nativeRuntimeIndex": 8, "nativeRendererIndex": 8 },
+      { "id": "spain-player-10", "kind": "player", "country": "spain", "nativeRuntimeIndex": 9, "nativeRendererIndex": 9 },
+      { "id": "spain-player-11", "kind": "player", "country": "spain", "nativeRuntimeIndex": 10, "nativeRendererIndex": 10 },
+      { "id": "argentina-player-01", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 11, "nativeRendererIndex": 11 },
+      { "id": "argentina-player-02", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 12, "nativeRendererIndex": 12 },
+      { "id": "argentina-player-03", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 13, "nativeRendererIndex": 13 },
+      { "id": "argentina-player-04", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 14, "nativeRendererIndex": 14 },
+      { "id": "argentina-player-05", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 15, "nativeRendererIndex": 15 },
+      { "id": "argentina-player-06", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 16, "nativeRendererIndex": 16 },
+      { "id": "argentina-player-07", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 17, "nativeRendererIndex": 17 },
+      { "id": "argentina-player-08", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 18, "nativeRendererIndex": 18 },
+      { "id": "argentina-player-09", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 19, "nativeRendererIndex": 19 },
+      { "id": "argentina-player-10", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 20, "nativeRendererIndex": 20 },
+      { "id": "argentina-player-11", "kind": "player", "country": "argentina", "nativeRuntimeIndex": 21, "nativeRendererIndex": 21 },
+      { "id": "referee-00", "kind": "official", "country": null, "nativeRuntimeIndex": null, "nativeRendererIndex": 22 },
+      { "id": "assistant-referee-01", "kind": "official", "country": null, "nativeRuntimeIndex": null, "nativeRendererIndex": 23 },
+      { "id": "assistant-referee-02", "kind": "official", "country": null, "nativeRuntimeIndex": null, "nativeRendererIndex": 24 },
+      { "id": "ball-00", "kind": "ball", "country": null, "nativeRuntimeIndex": null, "nativeRendererIndex": null }
+    ]
+  },
+  "unavailableStaticInputs": [
+    {
+      "name": "ACTREND.EQU",
+      "status": "absent-from-pinned-source-tree",
+      "impact": "EUROREND asset selector-to-semantic bindings are not inferred from ordinal position"
+    }
+  ],
+  "excluded": [
+    "teams other than Spain and Argentina",
+    "a reversed Argentina-home fixture",
+    "competitions other than FRIENDLY",
+    "durations other than fixed one-minute halves",
+    "a public duration selector",
+    "tournament, qualification, league, cup, practice, and network flows",
+    "menus and team-selection routes",
+    "runtime parsing of original source or DAT/OFF files",
+    "audio",
+    "missions or non-match modes"
+  ],
+  "nativeProfileBindings": {
+    "schema": "cssoccer-native-profile-bindings@1",
+    "status": "ready",
+    "fixtureContractSha256": "0d2f0790fe207b3587bbbcecf5fe3ae7fa19444cda6850c6ab8f5a9ddfb7213f",
+    "oraclePatchSha256": "45619d771b22f2c038bcbf6e1af78435879107fa803618acd31a8aaf8d04fb41",
+    "nativeDataSetSha256": "4512f9be02ff6da87eb004ba1501ab846b5b73616de301acc852c7b9b8fa5ba2",
+    "scenarioSha256": "5fc29151faf3ff344c37562b42148322ae0b976385cd8615fcccfcf8b529eb81",
+    "commandScenarioSha256": "b747bb27b5c94eaa533cfcd8332c9f02cc8b30384d62a375055936b39ec621b3",
+    "fieldContractSha256": "6d21511c288f9553628079ffeaa4a6538d4eb1a8e4b36acb4f1d0c44de42a76e",
+    "seedSha256": "a245b4a7d7408a7ebd00322117cbf84e6bde91b2b84fc36fff2bd08de02e3925",
+    "timingSha256": "fa16599af26c5c8b274bc9618b1c8c13c15840e0fc8021ec2ebeab8a84218e41",
+    "capture": {
+      "canonicalProfile": "argentina-control",
+      "profileSha256": "ea2df6e20494efbaa95e3d292db2a25969d8dc0c255d0d7c2c6393f8a5713acc",
+      "buildSha256": "5db9d52f4dec6e71d2a1df1009c803967455a3683b1c87e271669165ef43a3e3",
+      "sourceSha256": "136874496399a7acb712b28b6effb53f689c84ca373fb42af67ebf20f3b8cc45",
+      "rawSha256": "1b46cb63a708d6af237d3af91d6c5846bc456e93ef6b5d731a1d36cbcaffabdb",
+      "stateSha256": "eb858bed9ad9d36670e97a98ea49235d8009246ded16e00dcb54c5dc1aef2fdd",
+      "phaseMarkersSha256": "4f21e5e46366499f501e91433722be15d1e7588a3847d0433232a74abd992236",
+      "framesSha256": "77bbd34f6de060995fd8e2d5c5eb2aa9dd23f1ce88cb793b77d2657eef4c85f2",
+      "ticks": 2725,
+      "terminalTick": 2724,
+      "terminalMatchHalf": 11,
+      "frameCount": 30,
+      "clockAdvanceCounts": [1223, 1200],
+      "regulationTicks": 2400,
+      "liveBallOverrunTicks": [23, 0],
+      "playTicks": 2423,
+      "fullMatchPlaySeconds": 121.15
+    },
+    "patches": {
+      "quickRunnerPatchSetSha256": "30902ecc884f12c191f3ee492fddb7310ac2198d2ba477a6b19c55357ac41d6a",
+      "fullRunnerPatchSetSha256": "f6ae19d246c836076f5bd3ba7d753a589a8b009efd8c23bf1600ceb833b9c1a5",
+      "executablePatchSetSha256": "f391d0f1372edce30b7aa2034f096b7fa7b4fa3d7051b29e65e6017bdbf666c4",
+      "inputAdapterSha256": "f154db2eaf37ee51602a3a53fe418ef2e33405643581125e0d4e2369f9a8d372"
+    },
+    "transport": {
+      "revision": "6fb8c075d709032f666d1729f606dd3fcfa6c2d0",
+      "binarySha256": "7678e4c97ad8efdfbe0038e29a6595e0ed91581e92109071d511788bffaffabe",
+      "sourcePatchSha256": "4f1026bc431135f640de2076ce7d4562ec17a3f9262fcae9185c177652d00c6c"
+    },
+    "profiles": {
+      "spain-control": {
+        "country": "spain",
+        "teamSlot": "A",
+        "fixtureProfileSha256": "220b8fb8d9b08e0547fce59c9ddfef163248344a91827b6a76acd207eab24aed",
+        "quickExecutableSha256": "49fdee507727cf15dbcd0aa4aa1aaab27acdc75ee3fab75aac5f0d3b64daa85d",
+        "fullMatchExecutableSha256": "de32ccc187ea10c4789a9257d563e3402948f46b1ed154bf77a010e6f4e75401",
+        "rosterSha256": "20ff35fd02816431bc1d8704927f83b105f287e2783fc461ce1bc74531c499d2",
+        "tacticsSha256": "bf857de3c59c473e31b6737bb4edfce11c450f870b259afba8d7843821a845c4",
+        "kitSha256": "9da7015bb209bf13c951dbf3013c1271bd0451bf4f807f9e2227b13ba665fdd3"
+      },
+      "argentina-control": {
+        "country": "argentina",
+        "teamSlot": "B",
+        "fixtureProfileSha256": "53b26d42dd8d20211c71dc075a79d11da21aa93229951d5da221aa22351595b4",
+        "quickExecutableSha256": "9f7f37062957bfcb9ab3f84adc84714c981c879314dd18ea110d79e54a26e775",
+        "fullMatchExecutableSha256": "112d06d258857fc8506d2ad1653052890b07d27af45f159106fd7b99069d9d9d",
+        "rosterSha256": "1a381f299ace229d9de1d1f1205de4d4f46870d9ad16feb5779406d573887745",
+        "tacticsSha256": "bf857de3c59c473e31b6737bb4edfce11c450f870b259afba8d7843821a845c4",
+        "kitSha256": "7cd0249ab949c836d72f1b155f4740ae53d00c3441ec573879fb61ede49f02ba"
+      }
+    }
+  }
+}

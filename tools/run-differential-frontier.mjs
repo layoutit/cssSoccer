@@ -60,22 +60,14 @@ import {
   sha256,
   sha256Canonical,
 } from "./support/differential-frontier-core.mjs";
+import {
+  classifyCssoccerFreePlayComparisonField,
+  createCssoccerFreePlayScenarioAdapter,
+  parseCssoccerFreePlayCommandScenario,
+} from "./support/free-play-scenario-adapter.mjs";
 
 const TOOL_ROOT = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_WORKSPACE_ROOT = dirname(TOOL_ROOT);
-const DIAGNOSTIC_INSPECT_ANCHOR = [
-  "    inspect() {",
-  "      return engineInspection(current, nextTick);",
-  "    },",
-].join("\n");
-const DIAGNOSTIC_INSPECT_REPLACEMENT = [
-  "    inspect() {",
-  "      return {",
-  "        ...engineInspection(current, nextTick),",
-  "        diagnosticState: current,",
-  "      };",
-  "    },",
-].join("\n");
 const SOURCE_EXTENSIONS = new Set([".C", ".CPP", ".H"]);
 const TRACE_RUNTIME_FILE = "__differential-frontier-trace-runtime.mjs";
 const TRACE_RUNTIME_SOURCE_PATH = join(
@@ -128,6 +120,8 @@ export async function runDifferentialFrontier(options = {}, dependencies = {}) {
     preparedRoot,
     native: context.native,
     profile: context.profile,
+    scenario: context.scenario,
+    commandScenarioText: context.commandScenarioText,
   });
   try {
     const scan = await scanCurrentFrontier({
@@ -188,20 +182,29 @@ async function loadRetainedContext({ evidenceRoot, preparedRoot }) {
     nativeProfile: resolveArtifact(evidenceRoot, profileArtifact.path),
     nativeScenario: resolveArtifact(evidenceRoot, scenarioArtifact.path),
     differentialRoot: join(evidenceRoot, ".local/cssoccer/parity/differential/current"),
+    commandScenario: join(evidenceRoot, ".local/cssoccer/oracle/fixture/command-scenario.jsonl"),
   };
-  const [stateEvidence, rawEvidence, profileEvidence, scenarioEvidence] = await Promise.all([
+  const [stateEvidence, rawEvidence, profileEvidence, scenarioEvidence, commandEvidence] = await Promise.all([
     fileEvidence(paths.nativeState),
     fileEvidence(paths.nativeRaw),
     fileEvidence(paths.nativeProfile),
     fileEvidence(paths.nativeScenario),
+    fileEvidence(paths.commandScenario),
   ]);
   verifyArtifact(stateEvidence, stateArtifact, "native state");
   verifyArtifact(rawEvidence, rawArtifact, "native raw");
   verifyArtifact(profileEvidence, profileArtifact, "native profile");
   verifyArtifact(scenarioEvidence, scenarioArtifact, "native scenario");
-  const [profile, scenario] = await Promise.all([
+  if (commandEvidence.sha256 !== native.bindings.inputSha256) {
+    throw new DifferentialFrontierError(
+      "command-scenario-binding",
+      "Bound free-play command scenario does not match the native input identity.",
+    );
+  }
+  const [profile, scenario, commandScenarioText] = await Promise.all([
     readJson(paths.nativeProfile),
     readJson(paths.nativeScenario),
+    readFile(paths.commandScenario, "utf8"),
   ]);
   verifyNativeBindings({ native, profile, scenario });
   const retained = await loadRetainedDifferential({
@@ -219,6 +222,7 @@ async function loadRetainedContext({ evidenceRoot, preparedRoot }) {
     nativeRaw: rawEvidence,
     profile,
     scenario,
+    commandScenarioText,
     retained,
     prepared: { facts, scene, factsPath, scenePath },
     paths,
@@ -295,31 +299,64 @@ async function loadRetainedDifferential({ differentialRoot, native, referenceSha
   });
 }
 
+async function collectRuntimeSourceFiles(sourceRoot, workspaceRoot, rootNames) {
+  const queue = rootNames.map((name) => join(sourceRoot, name));
+  const visited = new Set();
+  const files = [];
+  while (queue.length > 0) {
+    const path = resolve(queue.shift());
+    if (visited.has(path)) continue;
+    if (!path.startsWith(`${resolve(sourceRoot)}${sep}`) || !existsSync(path)) {
+      throw new DifferentialFrontierError(
+        "runtime-import-boundary",
+        `Free-play runtime import is unavailable or outside src/cssoccer: ${path}.`,
+      );
+    }
+    visited.add(path);
+    const text = await readFile(path, "utf8");
+    files.push(Object.freeze({
+      name: basename(path),
+      path: relative(workspaceRoot, path),
+      text,
+    }));
+    const pattern = /\b(?:import|export)\s+(?:[^"']*?\s+from\s*)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
+    for (const match of text.matchAll(pattern)) {
+      const specifier = match[1] ?? match[2];
+      if (!specifier.startsWith(".")) continue;
+      const direct = resolve(dirname(path), specifier);
+      const imported = existsSync(direct) ? direct : `${direct}.mjs`;
+      queue.push(imported);
+    }
+  }
+  return Object.freeze(files.sort((left, right) => left.name.localeCompare(right.name)));
+}
+
 async function createDiagnosticRuntime({
   workspaceRoot,
   outputRoot,
   preparedRoot,
   native,
   profile,
+  scenario,
+  commandScenarioText,
 }) {
   const sourceRoot = join(workspaceRoot, "src/cssoccer");
-  const entries = (await readdir(sourceRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  if (entries.length === 0) {
+  const sourceFiles = await collectRuntimeSourceFiles(sourceRoot, workspaceRoot, [
+    "freePlayEngineIndependence.mjs",
+    "freePlayEngine.mjs",
+    "freePlayProjection.mjs",
+    "freePlayState.mjs",
+    "nativeFieldContract.mjs",
+    "oracleState.mjs",
+  ]);
+  if (sourceFiles.length === 0) {
     throw new DifferentialFrontierError("runtime-source-missing", "Browser runtime modules are unavailable.");
   }
   const runtimeFiles = {};
-  const sourceFiles = [];
-  for (const entry of entries) {
-    const path = join(sourceRoot, entry.name);
-    const text = await readFile(path, "utf8");
-    runtimeFiles[`src/cssoccer/${entry.name}`] = sha256(text);
-    sourceFiles.push(Object.freeze({ name: entry.name, path: relative(workspaceRoot, path), text }));
-  }
-  const engineFile = sourceFiles.find(({ name }) => name === "browserMatchEngine.mjs");
+  for (const file of sourceFiles) runtimeFiles[file.path] = sha256(file.text);
+  const engineFile = sourceFiles.find(({ name }) => name === "freePlayEngine.mjs");
   if (!engineFile) {
-    throw new DifferentialFrontierError("runtime-engine-missing", "Browser match engine source is unavailable.");
+    throw new DifferentialFrontierError("runtime-engine-missing", "Free-play engine source is unavailable.");
   }
   const traceDeclarations = [];
   const diagnosticSources = new Map();
@@ -328,9 +365,10 @@ async function createDiagnosticRuntime({
       Object.freeze({ ...declaration, file: file.path })
     ));
     traceDeclarations.push(...declarations);
-    diagnosticSources.set(file.name, file.name === "browserMatchEngine.mjs"
-      ? createDiagnosticEngineSource(file.text, declarations, { file: file.path })
-      : createDiagnosticModuleSource(file.text, declarations, { file: file.path }));
+    diagnosticSources.set(
+      file.name,
+      createDiagnosticModuleSource(file.text, declarations, { file: file.path }),
+    );
   }
   const engineDeclarations = traceDeclarations.filter(({ file }) => file === engineFile.path);
   const traceRuntimeSource = await readFile(TRACE_RUNTIME_SOURCE_PATH, "utf8");
@@ -361,18 +399,20 @@ async function createDiagnosticRuntime({
   );
   const [
     engineModule,
-    matchModule,
+    stateModule,
+    projectionModule,
     contractModule,
     oracleModule,
     independenceModule,
-    presentationModule,
+    traceModule,
   ] = await Promise.all([
-    importModule("browserMatchEngine.mjs"),
-    importModule("matchState.mjs"),
+    importModule("freePlayEngine.mjs"),
+    importModule("freePlayState.mjs"),
+    importModule("freePlayProjection.mjs"),
     importModule("nativeFieldContract.mjs"),
     importModule("oracleState.mjs"),
-    importModule("browserEngineIndependence.mjs"),
-    importModule("polycssScene.mjs"),
+    importModule("freePlayEngineIndependence.mjs"),
+    importModule(TRACE_RUNTIME_FILE),
   ]);
   const facts = await readJson(join(preparedRoot, "facts", `${native.fixtureId}.json`));
   const scene = await readJson(join(preparedRoot, "scenes", `${native.fixtureId}.json`));
@@ -380,7 +420,7 @@ async function createDiagnosticRuntime({
   if (typeof selectedCountry !== "string") {
     throw new DifferentialFrontierError("runtime-country-missing", "Native profile has no selected country.");
   }
-  const matchState = matchModule.createCssoccerMatchState({
+  const initialState = stateModule.createCssoccerFreePlayState({
     preparedFacts: facts,
     preparedScene: scene,
     selectedCountry,
@@ -394,37 +434,41 @@ async function createDiagnosticRuntime({
     )),
     traceRuntimeSha256: sha256(traceRuntimeSource),
   });
-  const engineIndependence = await independenceModule.qualifyCssoccerBrowserEngineIndependence({
-    matchState,
+  const commandScenario = parseCssoccerFreePlayCommandScenario(commandScenarioText, {
+    buildSha256: candidateIdentity.buildSha256,
+    commandSha256: native.bindings.inputSha256,
+    fieldContractSha256: native.bindings.contractSha256,
+    profileSha256: native.bindings.profileSha256,
+    scenarioSha256: native.bindings.scenarioSha256,
+    seed: scenario.fixture.seed.value,
+    sourceSha256: candidateIdentity.sourceSha256,
+    timestepMilliseconds: Math.round(scenario.fixture.timing.timestepSeconds * 1000),
+  });
+  const engineIndependence = await independenceModule.qualifyCssoccerFreePlayEngineIndependence({
+    freePlayState: initialState,
+    scenario: commandScenario,
     candidateIdentity,
+    nativeIdentity: {
+      sourceSha256: native.bindings.sourceSha256,
+      buildSha256: native.bindings.buildSha256,
+    },
     cryptoImpl: webcrypto,
   });
-  const preset = presentationModule.CSSOCCER_PRESENTATION_CAMERA_PRESET;
-  const camera = Object.freeze({
-    presetId: preset.id,
-    status: preset.status,
-    target: scene.cameraAnchor.target,
-    perspective: preset.perspective,
-    rotX: preset.rotX,
-    rotY: preset.rotY,
-    zoom: preset.zoom,
-  });
-  const createEngine = () => engineModule.createCssoccerBrowserMatchEngine({
-    matchState,
-    preparedFacts: facts,
-    preparedScene: scene,
-    camera,
-  });
-  if (
-    typeof engineModule.configureCssoccerDifferentialFrontierTrace !== "function"
-    || typeof engineModule.readCssoccerDifferentialFrontierTrace !== "function"
-  ) {
-    throw new DifferentialFrontierError(
-      "runtime-trace-seam",
-      "Temporary browser runtime did not expose its diagnostic call trace.",
-    );
-  }
-  const engine = createEngine();
+  const createDriver = async () => {
+    const engine = engineModule.createCssoccerFreePlayEngine({ initialState });
+    return createCssoccerFreePlayScenarioAdapter({
+      cryptoImpl: webcrypto,
+      engine,
+      projectSnapshot: (snapshot) => projectionModule.projectCssoccerFreePlaySnapshot({
+        snapshot,
+        preparedScene: scene,
+        fields: contractModule.CSSOCCER_NATIVE_FIELDS,
+      }),
+      scenario: commandScenario,
+    });
+  };
+  const driver = await createDriver();
+  const traceController = traceModule.differentialFrontierTraceController;
   return Object.freeze({
     workspaceRoot,
     sourceFiles: Object.freeze(sourceFiles),
@@ -434,10 +478,14 @@ async function createDiagnosticRuntime({
     traceDeclarations: Object.freeze(traceDeclarations),
     candidateIdentity,
     engineIndependence,
-    engine,
-    createEngine,
-    configureTrace: engineModule.configureCssoccerDifferentialFrontierTrace,
-    readTrace: engineModule.readCssoccerDifferentialFrontierTrace,
+    driver,
+    createDriver,
+    configureTrace(config) {
+      traceController.configure(config);
+    },
+    readTrace() {
+      return traceController.read();
+    },
     describeError(error, coordinate) {
       return describeRuntimeException(error, {
         ...coordinate,
@@ -445,13 +493,9 @@ async function createDiagnosticRuntime({
         sourceFiles,
       });
     },
-    matchState,
     fields: contractModule.CSSOCCER_NATIVE_FIELDS,
     createTick: oracleModule.createCssoccerOracleTick,
-    bindings: oracleModule.createCssoccerOracleBindings(matchState, {
-      sourceSha256: candidateIdentity.sourceSha256,
-      buildSha256: candidateIdentity.buildSha256,
-    }),
+    bindings: engineIndependence.bindings,
     async cleanup() {
       await rm(diagnosticRoot, { recursive: true, force: true });
     },
@@ -480,24 +524,9 @@ export function topLevelFunctionDeclarations(source) {
 export function createDiagnosticEngineSource(
   source,
   declarations,
-  { file = "src/cssoccer/browserMatchEngine.mjs" } = {},
+  { file = "src/cssoccer/freePlayEngine.mjs" } = {},
 ) {
-  const occurrences = source.split(DIAGNOSTIC_INSPECT_ANCHOR).length - 1;
-  if (occurrences !== 1) {
-    throw new DifferentialFrontierError(
-      "runtime-diagnostic-seam",
-      "Browser engine inspection seam changed; refusing an unbound diagnostic transform.",
-      { occurrences },
-    );
-  }
-  const inspectable = source.replace(
-    DIAGNOSTIC_INSPECT_ANCHOR,
-    DIAGNOSTIC_INSPECT_REPLACEMENT,
-  );
-  return createDiagnosticModuleSource(inspectable, declarations, {
-    exposeControl: true,
-    file,
-  });
+  return createDiagnosticModuleSource(source, declarations, { file });
 }
 
 export function createDiagnosticModuleSource(
@@ -584,19 +613,7 @@ export function describeRuntimeException(error, {
 }
 
 function mapDiagnosticSourceLine(file, generatedLine) {
-  let line = generatedLine - TRACE_IMPORT_LINE_COUNT;
-  if (file.name !== "browserMatchEngine.mjs") return Math.max(1, line);
-  const anchorIndex = file.text.indexOf(DIAGNOSTIC_INSPECT_ANCHOR);
-  if (anchorIndex < 0) return Math.max(1, line);
-  const anchorLine = 1 + countNewlines(file.text, anchorIndex);
-  const originalLines = DIAGNOSTIC_INSPECT_ANCHOR.split("\n").length;
-  const replacementLines = DIAGNOSTIC_INSPECT_REPLACEMENT.split("\n").length;
-  if (line >= anchorLine + replacementLines) {
-    line -= replacementLines - originalLines;
-  } else if (line >= anchorLine) {
-    line = anchorLine + Math.min(line - anchorLine, originalLines - 1);
-  }
-  return Math.max(1, line);
+  return Math.max(1, generatedLine - TRACE_IMPORT_LINE_COUNT);
 }
 
 async function createCandidateIdentity({
@@ -626,16 +643,23 @@ async function createCandidateIdentity({
       schema: "cssoccer-frontier-diagnostic-harness@1",
       files: {
         "tools/run-differential-frontier.mjs": runnerSha256,
-        "src/cssoccer/browserEngineIndependence.mjs": runtimeFiles["src/cssoccer/browserEngineIndependence.mjs"],
-        "src/cssoccer/browserMatchEngine.mjs": runtimeFiles["src/cssoccer/browserMatchEngine.mjs"],
+        "src/cssoccer/freePlayEngineIndependence.mjs": runtimeFiles["src/cssoccer/freePlayEngineIndependence.mjs"],
+        "src/cssoccer/freePlayEngine.mjs": runtimeFiles["src/cssoccer/freePlayEngine.mjs"],
+        "src/cssoccer/freePlayProjection.mjs": runtimeFiles["src/cssoccer/freePlayProjection.mjs"],
+        "src/cssoccer/freePlayState.mjs": runtimeFiles["src/cssoccer/freePlayState.mjs"],
       },
-      diagnosticInspectTransformSha256: transformSha256,
+      diagnosticTransformSha256: transformSha256,
       diagnosticTraceRuntimeSha256: traceRuntimeSha256,
     }),
     captureAdapterSha256: sha256Canonical({
       schema: "cssoccer-frontier-capture-adapter@1",
       files: {
         "tools/run-differential-frontier.mjs": runnerSha256,
+        "tools/support/free-play-scenario-adapter.mjs": sha256(await readFile(
+          join(TOOL_ROOT, "support/free-play-scenario-adapter.mjs"),
+          "utf8",
+        )),
+        "src/cssoccer/freePlayProjection.mjs": runtimeFiles["src/cssoccer/freePlayProjection.mjs"],
         "src/cssoccer/nativeFieldContract.mjs": runtimeFiles["src/cssoccer/nativeFieldContract.mjs"],
         "src/cssoccer/oracleState.mjs": runtimeFiles["src/cssoccer/oracleState.mjs"],
       },
@@ -687,6 +711,7 @@ async function scanCurrentFrontier({
     let candidateAtMismatch = null;
     let diagnosticState = null;
     let runtimeException = null;
+    const classifiedMismatches = [];
     for (let tickOffset = 0; tickOffset < header.tickRange.count; tickOffset += 1) {
       const tick = header.tickRange.start + tickOffset;
       const nativeSamples = [];
@@ -695,12 +720,10 @@ async function scanCurrentFrontier({
       }
       let projection;
       try {
-        projection = runtime.engine.capture({
-          tick,
-          phase: "post_tick",
-          bindings: runtime.bindings,
-          fields: runtime.fields,
-        });
+        projection = await runtime.driver.stepNext();
+        if (projection.tick !== tick || projection.phase !== "post_tick") {
+          throw new Error(`Free-play scenario returned non-contiguous projection tick ${projection.tick}.`);
+        }
       } catch (error) {
         runtimeException = runtime.describeError(error, { tick, phase: "post_tick" });
         referenceAtMismatch = new Map(nativeSamples.map((sample) => [sample.fieldId, sample]));
@@ -712,7 +735,7 @@ async function scanCurrentFrontier({
         fields: runtime.fields,
         values: projection.values,
       });
-      diagnosticState = runtime.engine.inspect().diagnosticState;
+      diagnosticState = runtime.driver.snapshot().match;
       const nativeById = new Map(nativeSamples.map((sample) => [sample.fieldId, sample]));
       const candidateById = new Map(candidateSamples.map((sample) => [sample.fieldId, sample]));
       const failures = selectedIds
@@ -722,9 +745,26 @@ async function scanCurrentFrontier({
           candidateById.get(fieldId),
           header.fields[fieldOrder.get(fieldId)],
         ));
-      if (failures.length > 0) {
-        [mismatch] = failures;
-        sameTickMismatches = failures;
+      const activeFailures = [];
+      for (const failure of failures) {
+        const classification = classifyCssoccerFreePlayComparisonField(
+          projection.comparisonBoundary,
+          failure.fieldId,
+        );
+        if (classification === null) {
+          activeFailures.push(failure);
+        } else {
+          classifiedMismatches.push(Object.freeze({
+            tick,
+            phase: "post_tick",
+            ...failure,
+            classification,
+          }));
+        }
+      }
+      if (activeFailures.length > 0) {
+        [mismatch] = activeFailures;
+        sameTickMismatches = activeFailures;
         referenceAtMismatch = nativeById;
         candidateAtMismatch = candidateById;
         break;
@@ -748,6 +788,7 @@ async function scanCurrentFrontier({
         candidateAtMismatch: null,
         previousDiagnosticState,
         diagnosticState: null,
+        classifiedMismatches: Object.freeze(classifiedMismatches),
       });
     }
     const exact = mismatch === null ? null : {
@@ -779,6 +820,7 @@ async function scanCurrentFrontier({
       candidateAtMismatch,
       previousDiagnosticState,
       diagnosticState,
+      classifiedMismatches: Object.freeze(classifiedMismatches),
     });
   } finally {
     await reader.close();
@@ -818,7 +860,7 @@ async function buildEvidence({
     scan,
     nativeSourceRoot,
   });
-  const traceSubject = selectFrontierTraceSubject(scan);
+  const traceSubject = selectFrontierTraceSubject(scan, context.scenario);
   const callTrace = await traceFrontierCallPath({
     runtime,
     scan,
@@ -858,6 +900,13 @@ async function buildEvidence({
   const nativeWriter = nativeSites.find(({ write, matchedPreferredValue }) => (
     write && matchedPreferredValue
   )) ?? nativeSites.find(({ write }) => write) ?? null;
+  const compiledPath = await resolveNumericCompiledPath({
+    exact: scan.exact,
+    nativeWriter,
+    bindings: context.native.bindings,
+    evidenceRoot,
+    outputRoot,
+  });
   const nativeCallerBranches = nativeWriter?.function
     ? findNativeCallerBranches(nativeFiles, {
         callee: nativeWriter.function,
@@ -879,9 +928,10 @@ async function buildEvidence({
     transitionSymbols,
     callTrace,
   });
-  const negativePathCandidates = rankNegativePathTrace({
+  const negativePathCandidates = rankRelevantNegativePathTrace({
     trace: callTrace,
     declarations: runtime.traceDeclarations,
+    exact: scan.exact,
   });
   const negativePathFocus = deriveNegativePathFocus({
     negativePath: negativePathCandidates[0] ?? null,
@@ -906,15 +956,17 @@ async function buildEvidence({
     nativeBranchMismatchFocus,
   });
   const nativeFunctions = [...new Set(nativeSites.map((site) => site.function).filter(Boolean))];
-  const runtimeCandidates = scan.exact === null ? [] : findRuntimeProducerCandidates(
-    runtime.sourceFiles,
-    {
-      selector: scan.exact.selector,
-      sourceOwner: scan.exact.sourceOwner,
-      nativeFunctions,
-      internalSymbols: additionalSymbols,
-    },
-  );
+  const runtimeCandidates = scan.exact === null
+    ? []
+    : mergeRuntimeCandidates(
+        directFreePlayProjectionCandidate(runtime.sourceFiles, scan.exact),
+        findRuntimeProducerCandidates(runtime.sourceFiles, {
+          selector: scan.exact.selector,
+          sourceOwner: scan.exact.sourceOwner,
+          nativeFunctions,
+          internalSymbols: additionalSymbols,
+        }),
+      );
   const dynamicCandidates = scan.exact === null ? [] : rankDynamicProducerTrace({
     trace: callTrace,
     declarations: runtime.traceDeclarations,
@@ -965,6 +1017,8 @@ async function buildEvidence({
       runtimeException: null,
       sameTickMismatchCount: scan.sameTickMismatches.length,
       sameTickMismatches: scan.sameTickMismatches.slice(0, 16),
+      classifiedMismatchCount: scan.classifiedMismatches.length,
+      classifiedMismatches: scan.classifiedMismatches,
       transitionClues: scan.transitionClues,
       movementFromPreviousDiagnostic: priorMovement,
       duplicateOfPreviousRuntime: duplicate,
@@ -985,6 +1039,7 @@ async function buildEvidence({
     },
     symbolicRouting,
     compoundTransition,
+    compiledPath,
     nextAction: nextAction({
       exact: scan.exact,
       producer,
@@ -1003,6 +1058,7 @@ async function buildEvidence({
     producer: evidence.producer,
     symbolicRouting,
     compoundTransition,
+    compiledPath,
   }).slice(0, 16);
   return Object.freeze(evidence);
 }
@@ -1012,6 +1068,8 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
     status: scan.exact === null ? "not-required" : "not-available",
     nativeSourceRoot: null,
     player: null,
+    browserPlayerBefore: null,
+    browserPlayerAfter: null,
     nativePlayerChanges: [],
     browserPlayerChanges: [],
     nativeBrowserDifferences: [],
@@ -1044,6 +1102,10 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
     throw new DifferentialFrontierError("compiled-teams-segment", "Native teams symbol is outside retained DGROUP.");
   }
   const nativePlayerNumber = nativePlayerForEntity(entityId, context.scenario);
+  const runtimeEntityId = runtimeEntityForNativeSlot(
+    scan.diagnosticState ?? scan.previousDiagnosticState,
+    nativePlayerNumber,
+  ) ?? entityId;
   const raw = parseCssoraw2(await readFile(context.paths.nativeRaw), {
     ranges: context.profile.transport.rawRanges,
   });
@@ -1066,8 +1128,8 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
     nativePlayerNumber,
     structSha256,
   });
-  const candidateCurrent = candidatePlayerContext(scan.diagnosticState, entityId);
-  const candidatePrevious = candidatePlayerContext(scan.previousDiagnosticState, entityId);
+  const candidateCurrent = candidatePlayerContext(scan.diagnosticState, runtimeEntityId);
+  const candidatePrevious = candidatePlayerContext(scan.previousDiagnosticState, runtimeEntityId);
   const candidateCurrentFlat = flattenScalars(candidateCurrent ?? {});
   const candidatePreviousFlat = flattenScalars(candidatePrevious ?? {});
   const nativePlayerChanges = changedNativeMembers(nativePrevious, nativeCurrent, structSha256);
@@ -1085,25 +1147,39 @@ async function buildInternalContext({ evidenceRoot, context, scan, nativeSourceR
     nativeSourceRoot: inferredSourceRoot,
     player: {
       entityId,
+      runtimeEntityId,
       nativePlayerNumber,
       control: nativeCurrent.control,
       shirtRange: nativeCurrent.shirtRange,
       structSha256,
       teamsAddress: `${teams.segment}:0x${teams.offset.toString(16).padStart(8, "0")}`,
     },
+    browserPlayerBefore: candidatePrevious,
+    browserPlayerAfter: candidateCurrent,
     nativePlayerChanges: Object.freeze(nativePlayerChanges),
     browserPlayerChanges,
     nativeBrowserDifferences: Object.freeze(nativeBrowserDifferences),
   });
 }
 
-export function selectFrontierTraceSubject(scan) {
+export function selectFrontierTraceSubject(scan, scenario = null) {
   const exactEntity = scan?.exact?.selector?.entityId ?? null;
   if (exactEntity !== null) {
+    const nativePlayerNumber = scenario === null
+      ? null
+      : nativePlayerForEntity(exactEntity, scenario);
+    const runtimeEntityId = nativePlayerNumber === null
+      ? null
+      : runtimeEntityForNativeSlot(
+          scan.diagnosticState ?? scan.previousDiagnosticState,
+          nativePlayerNumber,
+        );
     return Object.freeze({
-      entityId: exactEntity,
-      nativePlayerNumber: null,
-      reason: "exact-entity",
+      entityId: runtimeEntityId ?? exactEntity,
+      nativePlayerNumber,
+      reason: runtimeEntityId !== null && runtimeEntityId !== exactEntity
+        ? "exact-native-slot-entity"
+        : "exact-entity",
     });
   }
   for (const mismatch of scan?.sameTickMismatches ?? []) {
@@ -1115,10 +1191,31 @@ export function selectFrontierTraceSubject(scan) {
       reason: "same-tick-player-transition",
     });
   }
+  const previousPlayers = scan?.previousDiagnosticState?.openingLivePlayers?.players
+    ?? scan?.previousDiagnosticState?.players;
+  const currentPlayers = scan?.diagnosticState?.openingLivePlayers?.players
+    ?? scan?.diagnosticState?.players;
+  if (Array.isArray(previousPlayers) && Array.isArray(currentPlayers)) {
+    const previousById = new Map(previousPlayers.map((player) => [player.id, player]));
+    const changedBallState = currentPlayers.find((player) => {
+      const previous = previousById.get(player.id);
+      return previous !== undefined
+        && Number.isSafeInteger(player.ballState)
+        && player.ballState !== previous.ballState;
+    });
+    if (changedBallState !== undefined) {
+      return Object.freeze({
+        entityId: changedBallState.id,
+        nativePlayerNumber: changedBallState.nativePlayerNumber,
+        reason: "global-frontier-player-transition",
+      });
+    }
+  }
   for (const state of [scan?.previousDiagnosticState, scan?.diagnosticState]) {
     const owner = state?.possession?.owner;
-    if (!Number.isSafeInteger(owner) || owner <= 0 || !Array.isArray(state?.players)) continue;
-    const player = state.players.find((candidate) => (
+    const players = state?.openingLivePlayers?.players ?? state?.players;
+    if (!Number.isSafeInteger(owner) || owner <= 0 || !Array.isArray(players)) continue;
+    const player = players.find((candidate) => (
       candidate?.nativePlayerNumber === owner && typeof candidate?.id === "string"
     ));
     if (!player) continue;
@@ -1129,6 +1226,65 @@ export function selectFrontierTraceSubject(scan) {
     });
   }
   return null;
+}
+
+export async function resolveNumericCompiledPath({
+  exact,
+  nativeWriter,
+  bindings,
+  evidenceRoot,
+  outputRoot,
+  runCompiledPathCheck = runCurrentCompiledPathCheck,
+}) {
+  if (exact?.route?.id !== "numeric-producer" || !nativeWriter?.function) return null;
+  const symbolNames = [...new Set(nativeWriter.matchedSymbols ?? [])]
+    .filter((name) => typeof name === "string" && /^[A-Za-z_?$@][A-Za-z0-9_?$@.]*$/u.test(name));
+  if (symbolNames.length === 0) return null;
+  const objectName = basename(nativeWriter.file).replace(/\.(?:c|cpp)$/iu, "");
+  const symbols = symbolNames.map((name) => `${name}:${exact.reference.valueType}`);
+  try {
+    const action = await runCompiledPathCheck({
+      workspaceRoot: evidenceRoot,
+      workRoot: join(outputRoot, "numeric-compiled-path"),
+      functionName: nativeWriter.function,
+      objectName,
+      symbols,
+      exactOverride: exact,
+      exactOverrideBindings: bindings,
+    });
+    if (!compiledActionMatchesExact(action, exact)) {
+      return Object.freeze({
+        status: "exact-mismatch",
+        function: nativeWriter.function,
+        object: objectName,
+        symbols: Object.freeze(symbolNames),
+      });
+    }
+    return Object.freeze({
+      status: "bound",
+      function: nativeWriter.function,
+      object: objectName,
+      symbols: Object.freeze(action.symbols.map((symbol) => Object.freeze({
+        name: symbol.name,
+        valueType: symbol.valueType,
+        runtime: symbol.runtime,
+        references: symbol.references,
+        nextF32Stores: symbol.nextF32Stores,
+      }))),
+      authority: action.runtime.authority,
+      parityAuthority: action.runtime.parityAuthority,
+      evidencePath: action.evidencePath,
+    });
+  } catch (error) {
+    return Object.freeze({
+      status: "gap",
+      function: nativeWriter.function,
+      object: objectName,
+      symbols: Object.freeze(symbolNames),
+      code: typeof error?.code === "string" ? error.code : "numeric-compiled-path-failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function traceFrontierCallPath({ runtime, scan, traceSubject }) {
@@ -1144,7 +1300,7 @@ async function traceFrontierCallPath({ runtime, scan, traceSubject }) {
       records: Object.freeze([]),
     });
   }
-  const engine = runtime.createEngine();
+  const driver = await runtime.createDriver();
   let captured = null;
   try {
     for (let tick = 0; tick <= exact.tick; tick += 1) {
@@ -1154,12 +1310,10 @@ async function traceFrontierCallPath({ runtime, scan, traceSubject }) {
           nativePlayerNumber: traceSubject.nativePlayerNumber,
         });
       }
-      engine.capture({
-        tick,
-        phase: exact.phase,
-        bindings: runtime.bindings,
-        fields: runtime.fields,
-      });
+      const projection = await driver.stepNext();
+      if (projection.tick !== tick || projection.phase !== exact.phase) {
+        throw new Error("Free-play trace scenario returned a non-contiguous projection.");
+      }
       if (tick === exact.tick) captured = runtime.readTrace();
     }
   } finally {
@@ -1179,19 +1333,17 @@ async function traceFrontierCallPath({ runtime, scan, traceSubject }) {
 }
 
 async function traceRuntimeException({ runtime, failure }) {
-  const engine = runtime.createEngine();
+  const driver = await runtime.createDriver();
   let captured = null;
   let replayFailure = null;
   try {
     for (let tick = 0; tick <= failure.tick; tick += 1) {
       if (tick === failure.tick) runtime.configureTrace({ recordFailures: true });
       try {
-        engine.capture({
-          tick,
-          phase: failure.phase,
-          bindings: runtime.bindings,
-          fields: runtime.fields,
-        });
+        const projection = await driver.stepNext();
+        if (projection.tick !== tick || projection.phase !== failure.phase) {
+          throw new Error("Free-play exception trace returned a non-contiguous projection.");
+        }
       } catch (error) {
         replayFailure = runtime.describeError(error, { tick, phase: failure.phase });
         captured = runtime.readTrace();
@@ -1402,6 +1554,8 @@ async function buildRuntimeExceptionEvidence({
       runtimeException: scan.runtimeException,
       sameTickMismatchCount: 0,
       sameTickMismatches: [],
+      classifiedMismatchCount: scan.classifiedMismatches?.length ?? 0,
+      classifiedMismatches: scan.classifiedMismatches ?? [],
       transitionClues: [],
       movementFromPreviousDiagnostic: sameFailure ? "same-runtime-exception" : "runtime-exception",
       duplicateOfPreviousRuntime: duplicate,
@@ -1669,7 +1823,7 @@ export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8
     `${entry.file ?? ""}\u0000${entry.name}`,
     entry,
   ]));
-  const paths = selectorSnapshotPaths(exact.selector.leaf);
+  const paths = selectorSnapshotPaths(exact.selector);
   const candidateValue = exact.candidate.value;
   const byFunction = new Map();
   for (const record of trace.records) {
@@ -1686,13 +1840,14 @@ export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8
     if (record.input?.depth === 1) score += 38;
     else if (record.input?.depth === 0) score += 44;
     else if (Number.isSafeInteger(record.input?.depth)) score += Math.max(3, 25 - record.input.depth * 4);
-    if (sourceFocus.writes) score += 65;
+    if (sourceFocus.qualifiedWrite) score += 120;
+    else if (sourceFocus.writes) score += 65;
     else if (sourceFocus.mentions) score += 18;
     if (after.found && Object.is(after.value, candidateValue)) score += 30;
     if (before.found && after.found && !Object.is(before.value, after.value)) score += 24;
-    score += Math.min(record.callDepth, 8) * 3;
+    score += Math.min(record.callDepth, 8) * (sourceFocus.qualifiedWrite ? 43 : 3);
     const candidate = Object.freeze({
-      file: record.file ?? declaration.file ?? "src/cssoccer/browserMatchEngine.mjs",
+      file: record.file ?? declaration.file ?? "src/cssoccer/freePlayEngine.mjs",
       function: record.function,
       line: record.line,
       score,
@@ -1703,6 +1858,7 @@ export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8
       after: after.found ? after.value : null,
       candidateValueMatched: after.found && Object.is(after.value, candidateValue),
       writesSelectedField: sourceFocus.writes,
+      qualifiedFieldWrite: sourceFocus.qualifiedWrite,
       source: sourceFocus.line,
     });
     const prior = byFunction.get(record.function);
@@ -1714,6 +1870,11 @@ export function rankDynamicProducerTrace({ trace, declarations, exact, limit = 8
       || right.callDepth - left.callDepth
       || left.line - right.line)
     .slice(0, limit));
+}
+
+export function rankRelevantNegativePathTrace({ trace, declarations, exact, limit = 8 }) {
+  if (exact?.route?.id === "numeric-producer") return Object.freeze([]);
+  return rankNegativePathTrace({ trace, declarations, limit });
 }
 
 export function rankNegativePathTrace({ trace, declarations, limit = 8 }) {
@@ -1734,13 +1895,13 @@ export function rankNegativePathTrace({ trace, declarations, limit = 8 }) {
     ) ?? declarationByName.get(record.function) ?? null;
     let score = signal.score;
     if (/resolve|decid|select|qualif|valid|pass|candidate/iu.test(record.function)) score += 48;
-    if (record.file && record.file !== "src/cssoccer/browserMatchEngine.mjs") score += 36;
+    if (record.file && record.file !== "src/cssoccer/freePlayEngine.mjs") score += 36;
     if (record.input?.depth === 0) score += 24;
     else if (Number.isSafeInteger(record.input?.depth)) score += Math.max(4, 20 - record.input.depth * 4);
     score += Math.min(record.callDepth ?? 0, 8) * 4;
     if (score < 150) continue;
     candidates.push(Object.freeze({
-      file: record.file ?? declaration?.file ?? "src/cssoccer/browserMatchEngine.mjs",
+      file: record.file ?? declaration?.file ?? "src/cssoccer/freePlayEngine.mjs",
       function: record.function,
       line: record.line,
       score,
@@ -2093,7 +2254,33 @@ function nestedTraceValue(root, path) {
   return current;
 }
 
-function selectorSnapshotPaths(leaf) {
+function selectorSnapshotPaths(selectorOrLeaf) {
+  const selector = typeof selectorOrLeaf === "string"
+    ? { domain: null, leaf: selectorOrLeaf }
+    : selectorOrLeaf;
+  const leaf = selector?.leaf;
+  if (selector?.domain === "ball") {
+    const ballPaths = {
+      x: ["position.x"],
+      x_displacement: ["displacement.x", "xDisplacement"],
+      y: ["position.y"],
+      y_displacement: ["displacement.y", "yDisplacement"],
+      z: ["position.z"],
+      z_displacement: ["displacement.z", "zDisplacement"],
+    };
+    if (Object.hasOwn(ballPaths, leaf)) return Object.freeze(ballPaths[leaf]);
+  }
+  if (selector?.domain === "players") {
+    const playerPaths = {
+      x: ["position.x"],
+      x_displacement: ["goDisplacement.x", "displacement.x", "xDisplacement"],
+      y: ["position.y"],
+      y_displacement: ["goDisplacement.y", "displacement.y", "yDisplacement"],
+      z: ["position.z"],
+      z_displacement: ["goDisplacement.z", "displacement.z", "zDisplacement"],
+    };
+    if (Object.hasOwn(playerPaths, leaf)) return Object.freeze(playerPaths[leaf]);
+  }
   const paths = {
     action: ["action", "actionId"],
     animation: ["animation"],
@@ -2133,7 +2320,31 @@ function firstSnapshotValue(snapshot, paths) {
 }
 
 function selectorSourceFocus(source, paths) {
-  const terms = [...new Set(paths.map((path) => path.split(".").at(-1)))];
+  for (const path of paths.filter((entry) => entry.includes("."))) {
+    const parts = path.split(".");
+    const parent = parts.at(-2);
+    const leaf = parts.at(-1);
+    const direct = new RegExp(
+      `\\b${escapeRegExp(parent)}\\s*\\.\\s*${escapeRegExp(leaf)}\\s*(?:[+\\-*/%&|^]?=)`,
+      "u",
+    );
+    const objectLiteral = new RegExp(
+      `\\b${escapeRegExp(parent)}\\b\\s*(?::|=)\\s*\\{[\\s\\S]{0,900}?\\b${escapeRegExp(leaf)}\\s*:`,
+      "u",
+    );
+    const match = direct.exec(source) ?? objectLiteral.exec(source);
+    if (match !== null) {
+      const lineIndex = source.slice(0, match.index).split(/\r?\n/u).length - 1;
+      const lines = source.split(/\r?\n/u);
+      return {
+        writes: true,
+        qualifiedWrite: true,
+        mentions: true,
+        line: lines.slice(lineIndex, lineIndex + 5).map((line) => line.trim()).join(" ").slice(0, 260),
+      };
+    }
+  }
+  const terms = [...new Set(paths.filter((path) => !path.includes(".")))];
   const lines = source.split(/\r?\n/u);
   let mention = null;
   for (const line of lines) {
@@ -2145,10 +2356,20 @@ function selectorSourceFocus(source, paths) {
       "u",
     );
     if (writePattern.test(line)) {
-      return { writes: true, mentions: true, line: line.trim().slice(0, 220) };
+      return {
+        writes: true,
+        qualifiedWrite: false,
+        mentions: true,
+        line: line.trim().slice(0, 220),
+      };
     }
   }
-  return { writes: false, mentions: mention !== null, line: mention };
+  return {
+    writes: false,
+    qualifiedWrite: false,
+    mentions: mention !== null,
+    line: mention,
+  };
 }
 
 function snakeToCamel(value) {
@@ -2249,7 +2470,10 @@ export function rankCompoundRuntimeOwners({
     let fieldWriteCount = 0;
     for (const field of fields) {
       const leaf = field.fieldId.split(".").slice(1).join(".");
-      const focus = selectorSourceFocus(declaration.source, selectorSnapshotPaths(leaf));
+      const focus = selectorSourceFocus(
+        declaration.source,
+        selectorSnapshotPaths({ domain: "ball", leaf }),
+      );
       if (!focus.mentions) continue;
       matchedFields.push(field.fieldId);
       if (focus.writes) fieldWriteCount += 1;
@@ -2294,7 +2518,8 @@ export function rankCompoundRuntimeOwners({
 function compoundRuntimeSourceFocus(declaration, familyTerms, fields) {
   const fieldTerms = [...new Set(fields.flatMap(({ fieldId }) => {
     const leaf = fieldId.split(".").slice(1).join(".");
-    return selectorSnapshotPaths(leaf).map((path) => path.split(".").at(-1).toLowerCase());
+    return selectorSnapshotPaths({ domain: "ball", leaf })
+      .map((path) => path.split(".").at(-1).toLowerCase());
   }))];
   const lines = declaration.source.split(/\r?\n/u);
   let best = { line: declaration.line, score: 0, source: lines[0]?.trim() ?? "" };
@@ -2404,6 +2629,56 @@ function classifyProducer(runtimeCandidates, nativeSites, dynamicCandidates) {
   });
 }
 
+function directFreePlayProjectionCandidate(files, exact) {
+  const file = files.find(({ name }) => name === "freePlayProjection.mjs");
+  if (!file || typeof exact?.fieldId !== "string") return null;
+  const lines = file.text.split(/\r?\n/u);
+  const declarations = topLevelFunctionDeclarations(file.text);
+  let lineIndex = lines.findIndex((line) => line.includes(JSON.stringify(exact.fieldId)));
+  let declaration = lineIndex < 0
+    ? null
+    : declarations.filter(({ line }) => line <= lineIndex + 1).at(-1);
+  if (declaration === null) {
+    const domainFunction = {
+      ball: "projectBall",
+      camera: "projectCameraFields",
+      clock: "projectClock",
+      lifecycle: "projectLifecycle",
+      players: "projectPlayers",
+      rng: "projectRng",
+      rules: "projectRules",
+      score: "projectScore",
+    }[exact.fieldId.split(".", 1)[0]];
+    declaration = declarations.find(({ name }) => name === domainFunction) ?? null;
+    lineIndex = declaration === null ? -1 : declaration.line - 1;
+  }
+  if (lineIndex < 0 || declaration === null) return null;
+  const site = Object.freeze({
+    file: file.path,
+    line: lineIndex + 1,
+    function: declaration?.name ?? "projectCssoccerFreePlaySnapshot",
+    classification: "runtime",
+    score: 512,
+    write: true,
+    matchedTerms: Object.freeze([exact.fieldId]),
+    source: lines[lineIndex].trim().slice(0, 260),
+  });
+  return Object.freeze({
+    file: file.path,
+    classification: "runtime",
+    score: site.score,
+    sites: Object.freeze([site]),
+  });
+}
+
+function mergeRuntimeCandidates(direct, candidates) {
+  if (direct === null) return candidates;
+  return Object.freeze([
+    direct,
+    ...candidates.filter(({ file }) => file !== direct.file),
+  ]);
+}
+
 function buildSymbolicRouting({
   nativeWriter,
   symbolicTransitions,
@@ -2471,7 +2746,7 @@ export function nextAction({
     return Object.freeze({
       kind: "public-evaluation",
       question: "The diagnostic engine is exact; run the full capture and synchronous publisher.",
-      command: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      command: "pnpm capture:free-play:check && pnpm oven:differential",
     });
   }
   if (compoundTransition !== null) {
@@ -2502,7 +2777,7 @@ export function nextAction({
       groupedFields: compoundTransition.fields,
       runtimeOwner,
       runtimeAlternatives: compoundTransition.runtimeAlternatives,
-      publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      publicEvaluationCommand: "pnpm capture:free-play:check && pnpm oven:differential",
       rerunCommand: "node tools/run-differential-frontier.mjs --continue",
       doNotRerunBeforeRuntimeChanges: duplicate,
       note: "Treat the grouped fields as outputs of one source transition, not as separate constants or patches.",
@@ -2539,7 +2814,7 @@ export function nextAction({
         rejectionReason: negative.rejectionReason,
         result: negative.result,
         supportingCalls: negative.supportingCalls,
-        publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+        publicEvaluationCommand: "pnpm capture:free-play:check && pnpm oven:differential",
         rerunCommand: "node tools/run-differential-frontier.mjs --continue",
         doNotRerunBeforeRuntimeChanges: duplicate,
         note: "The native branch discriminator outranks a browser helper with a different decision family.",
@@ -2564,7 +2839,7 @@ export function nextAction({
       sourceBranches: focus === null ? negative.sourceBranches : [],
       supportingCalls: negative.supportingCalls,
       unexecutedStaticMapping: compactMappingCandidate(symbolicRouting.staticBrowserMapping),
-      publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      publicEvaluationCommand: "pnpm capture:free-play:check && pnpm oven:differential",
       rerunCommand: "node tools/run-differential-frontier.mjs --continue",
       doNotRerunBeforeRuntimeChanges: duplicate,
       note: "Only executed negative-path evidence is primary. The static mapping candidate is advisory until the trace reaches it.",
@@ -2596,7 +2871,7 @@ export function nextAction({
         after,
         symbol,
       })),
-      publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      publicEvaluationCommand: "pnpm capture:free-play:check && pnpm oven:differential",
       rerunCommand: "node tools/run-differential-frontier.mjs --continue",
       doNotRerunBeforeRuntimeChanges: duplicate,
       note: "Use the surfaced native dispatch table to implement the branch family; rerun only after the runtime mapping changes.",
@@ -2609,7 +2884,7 @@ export function nextAction({
       function: producer.candidateFunction,
       line: producer.candidateLine,
       question: exact.route.question,
-      publicEvaluationCommand: "pnpm capture:browser:full-match:check && pnpm oven:differential",
+      publicEvaluationCommand: "pnpm capture:free-play:check && pnpm oven:differential",
       rerunCommand: "node tools/run-differential-frontier.mjs --continue",
       doNotRerunBeforeRuntimeChanges: duplicate,
       note: duplicate
@@ -2667,6 +2942,7 @@ function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
     },
     symbolicRouting: compactSymbolicRouting(evidence.symbolicRouting),
     compoundTransition: compactCompoundTransition(evidence.compoundTransition),
+    compiledPath: evidence.compiledPath,
     transitionClues: evidence.current.transitionClues.slice(0, 6).map((clue) => ({
       fieldId: clue.fieldId,
       referenceChanged: clue.referenceChanged,
@@ -2674,6 +2950,15 @@ function buildAgentPacket(evidence, evidencePath, evidenceRoot) {
       reference: clue.reference,
       candidate: clue.candidate,
     })),
+    classifiedPreLoop: {
+      count: evidence.current.classifiedMismatchCount ?? 0,
+      fields: (evidence.current.classifiedMismatches ?? []).slice(0, 8).map((entry) => ({
+        tick: entry.tick,
+        fieldId: entry.fieldId,
+        kind: entry.classification.kind,
+        sourceBoundary: entry.classification.sourceBoundary,
+      })),
+    },
     internalChanges: internal.nativePlayerChanges.slice(0, 8).map((change) => ({
       sourceMember: change.sourceMember,
       before: change.before,
@@ -2822,7 +3107,7 @@ function verifyNativeBindings({ native, profile, scenario }) {
   const actual = {
     scenarioSha256: scenario.scenarioSha256,
     profileSha256: profile.profileSha256,
-    inputSha256: profile.binding?.commandStreamSha256,
+    inputSha256: profile.binding?.commandScenarioSha256,
     buildSha256: profile.buildSha256,
     sourceRevision: scenario.sourceRevision,
   };
@@ -2917,6 +3202,16 @@ function inferNativeSourceRoot(compiledProfile, evidenceRoot) {
   const first = Object.values(compiledProfile.compiled.objects ?? {})[0];
   if (!first?.path) return null;
   return dirname(resolveArtifact(evidenceRoot, first.path));
+}
+
+function runtimeEntityForNativeSlot(state, nativePlayerNumber) {
+  const players = state?.openingLivePlayers?.players ?? state?.players;
+  if (!Array.isArray(players)) return null;
+  const player = players.find((candidate) => (
+    candidate?.nativePlayerNumber === nativePlayerNumber
+    && typeof candidate?.id === "string"
+  ));
+  return player?.id ?? null;
 }
 
 function nativePlayerForEntity(entityId, scenario) {

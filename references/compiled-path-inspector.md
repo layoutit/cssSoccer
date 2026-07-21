@@ -23,6 +23,12 @@ node tools/run-compiled-path-check.mjs \
   --symbol zone_hgt:f32
 ```
 
+Typed array elements use the same bound action and an explicit zero-based
+index, for example `--symbol 'save_offs[102]:f32'`. When WDIS exposes immutable
+initialized bytes for a linked local-only array, the inspector decodes that
+element directly from the object listing. Otherwise it resolves the linked
+address and subjects it to the retained-range or bounded-probe checks.
+
 That one command:
 
 - reads the selected scenario and current checked Exact coordinate;

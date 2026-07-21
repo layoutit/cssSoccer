@@ -15,7 +15,6 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import {
   COMPILED_PATH_QUERY_SCHEMA,
@@ -30,8 +29,10 @@ import { inspectCompiledPath } from "./inspect-compiled-path.mjs";
 export const CURRENT_COMPILED_PATH_PROFILE_SCHEMA = "cssoccer-current-compiled-path-profile@1";
 export const CURRENT_COMPILED_PATH_ACTION_SCHEMA = "cssoccer-current-compiled-path-action@1";
 
-const execute = promisify(execFile);
 const toolRoot = resolve(fileURLToPath(new URL("../", import.meta.url)));
+const PROBE_TIMEOUT_MILLISECONDS = 60_000;
+const PROBE_LOG_POLL_MILLISECONDS = 100;
+const PROBE_KILL_GRACE_MILLISECONDS = 250;
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main(process.argv.slice(2));
@@ -295,7 +296,10 @@ export async function runCurrentCompiledPathCheck(options, dependencies = {}) {
       rawPath: join(actionRoot, "probe.raw"),
       actionRoot,
     });
-    const requested = compiledEvidence.compiledPath.symbols.map((symbol) => ({
+    const initializedValues = compiledInitializerValues(compiledEvidence.compiledPath.symbols);
+    const requested = compiledEvidence.compiledPath.symbols
+      .filter((symbol) => symbol.initializedValue === null)
+      .map((symbol) => ({
       name: symbol.name,
       valueType: symbol.valueType,
       bytes: symbol.bytes,
@@ -307,7 +311,7 @@ export async function runCurrentCompiledPathCheck(options, dependencies = {}) {
       parityAuthority: false,
       mode: "read-only",
       activeTick: exact.activeTick,
-      values: decoded.values,
+      values: [...initializedValues, ...decoded.values],
       rawPath: outcome.rawPath,
       rawSha256: decoded.rawSha256,
       recordCount: decoded.recordCount,
@@ -318,28 +322,36 @@ export async function runCurrentCompiledPathCheck(options, dependencies = {}) {
       },
     };
   } else {
-    const requested = compiledEvidence.compiledPath.symbols.map((symbol) => ({
+    const initializedValues = compiledInitializerValues(compiledEvidence.compiledPath.symbols);
+    const requested = compiledEvidence.compiledPath.symbols
+      .filter((symbol) => symbol.initializedValue === null)
+      .map((symbol) => ({
       name: symbol.name,
       valueType: symbol.valueType,
       bytes: symbol.bytes,
       offset: symbol.linkedAddress.offset,
     }));
-    const decoded = decodeCssorawValues(
-      await readFile(resolveInputPath(workspaceRoot, profile.retained.nativeRawPath)),
-      exact.activeTick,
-      requested,
-    );
+    const decoded = requested.length === 0
+      ? null
+      : decodeCssorawValues(
+        await readFile(resolveInputPath(workspaceRoot, profile.retained.nativeRawPath)),
+        exact.activeTick,
+        requested,
+      );
+    const compiledOnly = requested.length === 0;
     runtime = {
-      authority: "retained-native-capture",
+      authority: compiledOnly ? "bound-watcom-initializer" : "retained-native-and-watcom",
       parityAuthority: true,
-      mode: "retained-read",
+      mode: compiledOnly ? "compiled-read" : "retained-read",
       activeTick: exact.activeTick,
-      values: decoded.values,
-      rawPath: resolveInputPath(workspaceRoot, profile.retained.nativeRawPath),
-      rawSha256: decoded.rawSha256,
-      recordCount: decoded.recordCount,
+      values: [...initializedValues, ...(decoded?.values ?? [])],
+      rawPath: compiledOnly ? null : resolveInputPath(workspaceRoot, profile.retained.nativeRawPath),
+      rawSha256: decoded?.rawSha256 ?? null,
+      recordCount: decoded?.recordCount ?? null,
       process: null,
-      qualification: { status: "retained" },
+      qualification: compiledOnly
+        ? { status: "compiled-initializer", immutableWithinObject: true }
+        : { status: "retained" },
     };
   }
 
@@ -378,6 +390,19 @@ export async function runCurrentCompiledPathCheck(options, dependencies = {}) {
   };
   await atomicWrite(actionPath, `${JSON.stringify(actionEvidence, null, 2)}\n`);
   return hotPacket;
+}
+
+function compiledInitializerValues(symbols) {
+  return symbols.flatMap((symbol) => symbol.initializedValue === null ? [] : [{
+    name: symbol.name,
+    valueType: symbol.valueType,
+    value: symbol.initializedValue.value,
+    numericBits: symbol.initializedValue.numericBits,
+    offset: symbol.linkedAddress.offset,
+    offsetHex: symbol.linkedAddress.offsetHex,
+    objectOffset: symbol.initializedValue.objectOffset,
+    objectOffsetHex: symbol.initializedValue.objectOffsetHex,
+  }]);
 }
 
 export function decodeCssorawValues(buffer, activeTick, requested) {
@@ -469,6 +494,7 @@ async function runReadOnlyProbe({ workspaceRoot, profile, queryManifestPath, raw
   const oracleContract = JSON.parse(await readFile(join(workspaceRoot, "references", "actua-soccer-oracle.json"), "utf8"));
   const fixtureContract = JSON.parse(await readFile(join(workspaceRoot, "references", "spain-argentina-match.json"), "utf8"));
   const dosRoot = join(runStage, "EURO96");
+  const probeLogPath = join(dosRoot, "GAME", "PROBE.LOG");
   const launch = oracleContract.runner.launch;
   const programArguments = fixtureContract.oracle.capture.launch.arguments;
   const args = [
@@ -501,10 +527,13 @@ async function runReadOnlyProbe({ workspaceRoot, profile, queryManifestPath, raw
   ];
   const startedAt = Date.now();
   try {
-    const outcome = await execute(queryTransportPath, args, {
+    const outcome = await runMonitoredProbeProcess(queryTransportPath, args, {
       cwd: workspaceRoot,
-      timeout: 60_000,
       maxBuffer: 16 * 1024 * 1024,
+      logPath: probeLogPath,
+      timeoutMilliseconds: PROBE_TIMEOUT_MILLISECONDS,
+      pollMilliseconds: PROBE_LOG_POLL_MILLISECONDS,
+      killGraceMilliseconds: PROBE_KILL_GRACE_MILLISECONDS,
       env: {
         ...process.env,
         SDL_VIDEODRIVER: "dummy",
@@ -540,6 +569,126 @@ async function runReadOnlyProbe({ workspaceRoot, profile, queryManifestPath, raw
   } finally {
     await rm(runStage, { recursive: true, force: true });
   }
+}
+
+export function classifyNativeProbeLog(text) {
+  if (typeof text !== "string" || text.length === 0) return null;
+  const markers = [
+    { kind: "dos4gw-error", pattern: /DOS\/4GW error[^\r\n]*/iu },
+    { kind: "general-protection-fault", pattern: /general protection fault[^\r\n]*/iu },
+    { kind: "watcom-runtime-error", pattern: /run-time error R\d+[^\r\n]*/iu },
+  ];
+  for (const { kind, pattern } of markers) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    const lines = text.split(/\r?\n/u);
+    const markerLine = lines.findIndex((line) => line.includes(match[0]));
+    const excerpt = lines
+      .slice(Math.max(0, markerLine - 2), Math.min(lines.length, markerLine + 3))
+      .join("\n")
+      .slice(0, 2048);
+    return { kind, marker: match[0].slice(0, 512), excerpt };
+  }
+  return null;
+}
+
+export async function runMonitoredProbeProcess(command, args, options) {
+  const {
+    logPath,
+    timeoutMilliseconds = PROBE_TIMEOUT_MILLISECONDS,
+    pollMilliseconds = PROBE_LOG_POLL_MILLISECONDS,
+    killGraceMilliseconds = PROBE_KILL_GRACE_MILLISECONDS,
+    ...processOptions
+  } = options;
+  if (typeof logPath !== "string" || logPath.length === 0) {
+    throw new TypeError("Monitored native probe requires a log path.");
+  }
+  const startedAt = Date.now();
+  let latestLog = "";
+  let stopReason = null;
+  let polling = false;
+
+  return new Promise((resolveProcess, rejectProcess) => {
+    let timeout = null;
+    let poll = null;
+    let forceKill = null;
+    let finished = false;
+
+    const child = execFile(command, args, processOptions, (error, stdout = "", stderr = "") => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      clearInterval(poll);
+      clearTimeout(forceKill);
+      void (async () => {
+        try {
+          latestLog = await readFile(logPath, "utf8");
+        } catch (readError) {
+          if (readError?.code !== "ENOENT") latestLog = latestLog || String(readError);
+        }
+        const crash = classifyNativeProbeLog(latestLog);
+        if (crash) stopReason = { type: "crash", crash };
+        const processEvidence = {
+          wallMilliseconds: Date.now() - startedAt,
+          exitCode: child.exitCode,
+          signalCode: child.signalCode,
+        };
+        if (stopReason?.type === "crash") {
+          rejectProcess(new CompiledPathInspectorError(
+            "query-native-crash",
+            `Read-only native query crashed: ${stopReason.crash.marker}`,
+            { ...processEvidence, ...stopReason.crash },
+          ));
+          return;
+        }
+        if (stopReason?.type === "timeout") {
+          rejectProcess(new CompiledPathInspectorError(
+            "query-transport-timeout",
+            `Read-only native query exceeded ${timeoutMilliseconds}ms and was terminated.`,
+            processEvidence,
+          ));
+          return;
+        }
+        if (error) {
+          rejectProcess(new CompiledPathInspectorError(
+            "query-transport-process",
+            `Read-only native query process failed: ${error.message}`,
+            { ...processEvidence, processCode: error.code ?? null },
+          ));
+          return;
+        }
+        resolveProcess({ stdout, stderr });
+      })();
+    });
+
+    const requestStop = (reason) => {
+      if (stopReason || finished || child.exitCode !== null || child.signalCode !== null) return;
+      stopReason = reason;
+      clearInterval(poll);
+      child.kill("SIGTERM");
+      forceKill = setTimeout(() => {
+        if (!finished && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, killGraceMilliseconds);
+    };
+
+    poll = setInterval(() => {
+      if (polling || finished || stopReason) return;
+      polling = true;
+      void readFile(logPath, "utf8")
+        .then((text) => {
+          latestLog = text;
+          const crash = classifyNativeProbeLog(text);
+          if (crash) requestStop({ type: "crash", crash });
+        })
+        .catch((error) => {
+          if (error?.code !== "ENOENT") latestLog = String(error);
+        })
+        .finally(() => {
+          polling = false;
+        });
+    }, pollMilliseconds);
+    timeout = setTimeout(() => requestStop({ type: "timeout" }), timeoutMilliseconds);
+  });
 }
 
 async function loadRetainedContext(workspaceRoot, profile = null) {
@@ -949,9 +1098,14 @@ function parseArguments(args) {
 
 function normalizeSymbols(values) {
   return values.map((value) => {
-    const [name, valueType, ...rest] = value.split(":");
-    if (!name || rest.length > 0) throw new TypeError(`Invalid --symbol ${value}.`);
-    return { name, valueType: valueType || null };
+    const [reference, valueType, ...rest] = value.split(":");
+    const match = reference?.match(/^([A-Za-z_?$@][A-Za-z0-9_?$@.]*)(?:\[(\d+)\])?$/u);
+    if (!match || rest.length > 0) throw new TypeError(`Invalid --symbol ${value}.`);
+    return {
+      name: match[1],
+      elementIndex: match[2] === undefined ? null : Number(match[2]),
+      valueType: valueType || null,
+    };
   });
 }
 

@@ -10,12 +10,145 @@
     "url": "https://www.gremlinarchive.com/wp-content/uploads/2017/03/ActuaSoccerSourceCode.zip",
     "sha256": "74f6baba9cfdba69da9e5068295bda6634611bbdf506e5768a36d38149155177"
   },
+  "runner": {
+    "schema": "cssoccer-actua-soccer-runner@1",
+    "outputRoot": ".local/cssoccer/oracle/runner",
+    "sourceArtifacts": {
+      "TEST.EXE": "760d752bd5cf967d30295578a8c4e1b9118f93d83ceaacedc70a79f8166bd63e",
+      "FOOT.EXE": "64dfed661f808f33aa4228e60295a2c3342002011d8726362107b13d7c6a787f",
+      "DOS4GW.EXE": "dd9f4f342533f99570475b62e53231a468de2e3d83e4fc31e80c27d3a7d6b49c",
+      "EURO.DAT": "024accf02afeeeeebc43af649754191ac1b192f5c955fb5335e50d8acc2f7177",
+      "EUROREND.DAT": "0c38ab865fcd1d62d7c0f3f88b861f4c43643caf402dea6fbe9b0f042fd340cb",
+      "FAP.DAT": "4eb101f8b8bd44eca0b8824400476e4a8dbb704eb43c926e4d5bea5dbba26ff3",
+      "SCRIPT.96": "1708407b32cff2a071bc08d97a1a4a9a40d2dedfa5e1517f17588130472f669e",
+      "MAKEFILE": "845bc583c8eb2a5d70112c9d5c295cba3031a69ccae959daecf2eb7b287be47b",
+      "INFO.LNK": "e85214f8f43f5a3ec429801bf0644fb37ecbdbefb067506eef0cd37d3bf428d9"
+    },
+    "tools": {
+      "dosboxX": {
+        "version": "2026.07.02",
+        "releaseArchiveSha256": "26cfa89a1740c95e0ef5e2e441182f56cec097776f3b6ee899866cd298af563c",
+        "path": ".local/cssoccer/tools/dosbox-x-2026.07.02/dosbox-x-sdl2/dosbox-x.app/Contents/MacOS/dosbox-x",
+        "sha256": "02b7152f3db248f1dbcbe2a69e76fb9464d873894c21878ae3f56b686e953942"
+      },
+      "openWatcomDisassembler": {
+        "version": "2.0-2026-07-13",
+        "releaseArchiveSha256": "941acdaaa0171c812548924203c6275a50f0494cf8ac22f373645d8dc3ce84cb",
+        "path": ".local/cssoccer/tools/open-watcom-2_0-2026-07-13/binw/wdis.exe",
+        "sha256": "014c2214811175d559bbcc3344a95e6cafeabaa59540dbdafe09183c32e2d219"
+      },
+      "ffmpeg": {
+        "version": "4.1.5",
+        "path": ".local/cssoccer/tools/ffmpeg-4.1.5/ffmpeg",
+        "sha256": "a2ad6f0fc42a3c8f5183ef1d53e906d6bb35478d14a6b67175c30ce6c17e9214"
+      },
+      "ffprobe": {
+        "version": "5.0.1",
+        "path": ".local/cssoccer/tools/ffprobe-5.0.1/ffprobe",
+        "sha256": "c846d5db9d3b5bc33f987725e21f3ea14953931221c191575918e907ad6c18ff"
+      }
+    },
+    "patches": [
+      {
+        "name": "deterministic-mouse-sample",
+        "offset": 375413,
+        "expected": "66c745e003008d5dc48d55e0b833000000e8b9770700",
+        "replacement": "c745ccf4010000c745d040010000c745c80100000090"
+      },
+      {
+        "name": "hold-left-button",
+        "offset": 375468,
+        "expected": "750b",
+        "replacement": "9090"
+      },
+      {
+        "name": "start-match-without-unstable-hit-projection",
+        "offset": 349911,
+        "expected": "83f806750b",
+        "replacement": "9090909090"
+      },
+      {
+        "name": "pin-supported-mcga-match-path",
+        "offset": 748061,
+        "expected": "0f85e2000000",
+        "replacement": "909090909090"
+      },
+      {
+        "name": "skip-unused-menu-buffer-fpu-loop",
+        "offset": 747758,
+        "expected": "f3a531c08b",
+        "replacement": "e9e5000000"
+      },
+      {
+        "name": "force-rolling-demo-match-path",
+        "offset": 432316,
+        "expected": "7518",
+        "replacement": "9090"
+      },
+      {
+        "name": "shorten-rolling-demo-frame-budget",
+        "offset": 432331,
+        "expected": "40060000",
+        "replacement": "64000000"
+      },
+      {
+        "name": "advance-rolling-demo-clock-during-render",
+        "offset": 433403,
+        "expected": "e8fc390000eb07",
+        "replacement": "ff0df014040090"
+      },
+      {
+        "name": "return-friendly-match-to-exit-frontend",
+        "offset": 390144,
+        "expected": "00",
+        "replacement": "3f"
+      }
+    ],
+    "patchedExecutableSha256": "4e31c9807529c23c2cb9068ecc9fc07191bdb0b97059f3593a983926a100f044",
+    "launch": {
+      "arguments": ["-FRIENDLY", "-V1"],
+      "watchdogSeconds": 25,
+      "expectedMaxRuntimeSeconds": 20,
+      "cpuCore": "normal",
+      "cpuCycles": 100000,
+      "dos": {
+        "quitWarning": false,
+        "repairMcbCorruption": true,
+        "minimumMcbSegment": "1000"
+      },
+      "expectedExitCodes": [0],
+      "bootMarkers": [
+        "DEALLOCATING MEMORY BEFORE RUNNING MATCH.",
+        "MATCH INTERFACE DATA:",
+        "Motion capture frames:",
+        "Intialising data objects...",
+        "Geting VESA information...",
+        "ALLOCATING MEMORY AFTER RUNNING MATCH AND RETURNING TO FRONTEND.",
+        "DEALLOCATING MEMORY BEFORE EXITING TO DOS."
+      ],
+      "capture": {
+        "width": 640,
+        "height": 400,
+        "minimumBytes": 1000000,
+        "proofFrameIndex": 30
+      }
+    }
+  },
   "requiredFiles": [
     "3DENG.C",
     "BALL.CPP",
     "FOOTBALL.CPP",
     "INTELL.CPP",
     "MATHS.CPP",
-    "NET.GRE"
+    "NET.GRE",
+    "TEST.EXE",
+    "FOOT.EXE",
+    "DOS4GW.EXE",
+    "EURO.DAT",
+    "EUROREND.DAT",
+    "FAP.DAT",
+    "SCRIPT.96",
+    "MAKEFILE",
+    "INFO.LNK"
   ]
 }

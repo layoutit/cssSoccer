@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>css.soccer: Full Match Alpha</title>
+  </head>
+  <body>
+    <main id="app" aria-label="css.soccer Full Match Alpha, Spain versus Argentina">
+      <section
+        id="scene"
+        aria-label="Prepared Spain versus Argentina match"
+        tabindex="0"
+      ></section>
+
+      <section
+        id="country-choice"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="country-choice-title"
+        aria-describedby="country-choice-description"
+        hidden
+      >
+        <div id="country-choice-panel">
+          <p id="country-choice-release">Full Match Alpha</p>
+          <h1 id="country-choice-title">Choose your team</h1>
+          <p id="country-choice-description">Spain vs Argentina · Full 90-minute match</p>
+          <div id="country-choice-actions">
+            <button type="button" data-country-choice="spain" aria-label="Play as Spain">
+              <strong>Spain</strong>
+              <span>Home</span>
+            </button>
+            <button type="button" data-country-choice="argentina" aria-label="Play as Argentina">
+              <strong>Argentina</strong>
+              <span>Away</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="match-hud"
+        aria-label="Native Actua match display"
+        popover="manual"
+        hidden
+      >
+        <time id="hud-clock" datetime="PT0M0S" aria-label="0 minutes 0 seconds">
+          <span data-native-hud-glyph-slot="0" aria-hidden="true" hidden></span>
+          <span data-native-hud-glyph-slot="1" data-glyph="0" aria-hidden="true"></span>
+          <span data-native-hud-glyph-slot="2" data-glyph=":" aria-hidden="true"></span>
+          <span data-native-hud-glyph-slot="3" data-glyph="0" aria-hidden="true"></span>
+          <span data-native-hud-glyph-slot="4" data-glyph="0" aria-hidden="true"></span>
+        </time>
+      </section>
+
+      <section id="touch-controls" aria-label="Touch match controls">
+        <div id="touch-directions" aria-label="Movement controls">
+          <button type="button" data-cssoccer-control="move-up" aria-label="Move up" aria-pressed="false"><span aria-hidden="true">▲</span></button>
+          <button type="button" data-cssoccer-control="move-left" aria-label="Move left" aria-pressed="false"><span aria-hidden="true">◀</span></button>
+          <button type="button" data-cssoccer-control="move-down" aria-label="Move down" aria-pressed="false"><span aria-hidden="true">▼</span></button>
+          <button type="button" data-cssoccer-control="move-right" aria-label="Move right" aria-pressed="false"><span aria-hidden="true">▶</span></button>
+        </div>
+        <div id="touch-actions" aria-label="Action controls">
+          <button type="button" data-cssoccer-control="fire-1" aria-label="Shoot or tackle" aria-pressed="false"><span aria-hidden="true">A</span></button>
+          <button type="button" data-cssoccer-control="fire-2" aria-label="Pass, sprint, or steal" aria-pressed="false"><span aria-hidden="true">B</span></button>
+        </div>
+      </section>
+
+      <output id="status" role="status" aria-live="polite">Loading prepared match…</output>
+    </main>
+    <script type="module" src="/src/cssoccer/main.mjs"></script>
+  </body>
+</html>

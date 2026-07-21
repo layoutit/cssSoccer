@@ -3,11 +3,41 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "type": "module",
-  "description": "A source-backed Actua Soccer PolyCSS port.",
+  "description": "css.soccer: Full Match Alpha — a focused source-backed PolyCSS match demo.",
   "license": "MIT",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "serve": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node tools/run-test-suite.mjs unit",
+    "test:scaffold": "node --test test/cssoccer-scaffold.test.mjs test/cssoccer-route-state.test.mjs",
+    "test:assets": "node tools/run-test-suite.mjs assets",
+    "test:browser": "node --test test/cssoccer-polycss.test.mjs && node tools/smoke-browser.mjs --country argentina --mode free-play",
+    "test:input": "node --test test/cssoccer-input.test.mjs test/cssoccer-client-shell.test.mjs && node tools/smoke-full-match-matrix.mjs",
+    "test:alpha:adaptive": "node tools/smoke-free-play-adaptive.mjs --country argentina --full-match --check",
+    "test:alpha:soak": "node tools/run-free-play-soak.mjs --check",
+    "test:alpha:evidence": "node tools/capture-free-play-evidence.mjs --check",
+    "prepare:cssoccer": "node tools/prepare-cssoccer.mjs --assembler src/prepare/cssoccer/fixtureAssembler.mjs --output-root build/generated/public/cssoccer",
+    "prepare:exact-players": "node tools/publish-exact-player-animation.mjs --check",
+    "prepare:cssoccer:check": "node tools/check-prepare-determinism.mjs --assembler src/prepare/cssoccer/fixtureAssembler.mjs",
+    "oracle:capture:full-match:check": "node tools/actua-soccer-oracle.mjs capture-full-match",
+    "capture:free-play:check": "node tools/capture-free-play-parity.mjs --check",
+    "oven:differential": "node --max-old-space-size=96 tools/publish-differential-testing.mjs --reference .local/cssoccer/oracle/native/retained/runs/canonical-a/state.jsonl --candidate .local/cssoccer/parity/free-play/retained/runs/canonical-a/state.jsonl --output-root .local/cssoccer/parity/differential",
+    "perf:trace": "node tools/performance-trace-oven.mjs --check",
+    "oracle:verify-fixture": "node tools/actua-soccer-oracle.mjs verify-fixture",
+    "oracle:verify-runner": "node tools/actua-soccer-oracle.mjs verify-runner",
     "source:setup": "node tools/actua-soccer-oracle.mjs setup",
     "source:verify": "node tools/actua-soccer-oracle.mjs verify"
+  },
+  "dependencies": {
+    "@layoutit/polycss": "^0.2.8"
+  },
+  "devDependencies": {
+    "happy-dom": "20.10.3",
+    "vite": "^7.3.1"
   }
 }
-

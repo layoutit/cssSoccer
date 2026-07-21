@@ -14,6 +14,7 @@ import {
   locateCaptureCoverage,
   parseWatcomMap,
   parseWatcomRoutine,
+  readWatcomInitializedValue,
   selectWatcomMapSymbol,
   sha256,
   sha256Canonical,
@@ -34,7 +35,7 @@ Routine Size: 21 bytes,    Routine Base: _TEXT + 0010
 `;
 
 const MAP = `
-0001:0003ab97+ void __near get_target( char, int, int, int, int, float __near &, float __near &, int (__near *)[10][2])
+0001:0003ab97* void __near get_target( char, int, int, int, int, float __near &, float __near &, int (__near *)[10][2])
 0003:0003cf0c  float __near zone_hgt
 `;
 
@@ -46,6 +47,29 @@ const WRAPPED_WRITE_LISTING = `
 0000002B  C3                  ret
 
 Routine Size: 12 bytes,    Routine Base: _TEXT + 0020
+`;
+
+const FOUR_DIGIT_OFFSET_LISTING = `
+5C78                    void __near init_kick_act( match_player __near *, int, float ):
+5D5A  B8 00 00 00 00   mov        eax,offset float __near b_xoff
+5D5F  D9 45 10         fld        dword ptr 0x10[ebp]
+5D62  D9 18            fstp       dword ptr [eax]
+5D64  C3               ret
+
+Routine Size: 238 bytes,    Routine Base: _TEXT + 5C78
+`;
+
+const INITIALIZED_ARRAY_LISTING = `
+00000010            void __near rotate_offs( int, float __near &, float __near & ):
+00000010  D9 80 00 00 00 00   fld        dword ptr float __near save_offs[][eax]
+00000016  C3                  ret
+
+Routine Size: 7 bytes,    Routine Base: _TEXT + 0010
+
+Segment: _DATA DWORD USE32 000001A4 bytes
+0000                    float __near save_offs[]:
+0190  5C EB 2C C1 53 23 01 42 A0 97 F0 40 31 B3 B0 C0
+01A0  F5 F6 E3 3F
 `;
 
 test("indexes a Watcom function and identifies observable f32 stores", () => {
@@ -81,6 +105,46 @@ test("folds wrapped Watcom instructions and reports constant global writes", () 
   );
 });
 
+test("indexes WDIS routines whose object offsets use four hex digits", () => {
+  const routine = parseWatcomRoutine(FOUR_DIGIT_OFFSET_LISTING, "init_kick_act");
+  const analysis = analyzeWatcomRoutine(routine, [{ name: "b_xoff", valueType: "f32" }]);
+
+  assert.equal(routine.objectOffset, 0x5c78);
+  assert.equal(routine.declaredBytes, 238);
+  assert.equal(analysis.instructionCount, 4);
+  assert.equal(analysis.symbols[0].referenced, true);
+  assert.equal(analysis.symbols[0].references[0].offset, 0x5d5a);
+  assert.equal(analysis.f32Stores[0].offset, 0x5d62);
+});
+
+test("retains a referenced typed array element as a distinct compiled symbol", () => {
+  const listing = FOUR_DIGIT_OFFSET_LISTING.replaceAll("b_xoff", "save_offs[]");
+  const routine = parseWatcomRoutine(listing, "init_kick_act");
+  const analysis = analyzeWatcomRoutine(routine, [{
+    name: "save_offs",
+    elementIndex: 102,
+    valueType: "f32",
+  }]);
+
+  assert.equal(analysis.symbols[0].referenced, true);
+  assert.equal(analysis.symbols[0].name, "save_offs");
+  assert.equal(analysis.symbols[0].elementIndex, 102);
+});
+
+test("decodes an indexed initialized value directly from its bound WDIS object data", () => {
+  const initialized = readWatcomInitializedValue(INITIALIZED_ARRAY_LISTING, {
+    name: "save_offs",
+    elementIndex: 102,
+    valueType: "f32",
+  });
+
+  assert.equal(initialized.value, 7.5185089111328125);
+  assert.equal(initialized.numericBits, "40f097a0");
+  assert.equal(initialized.objectOffset, 0x198);
+  assert.equal(initialized.objectSegment, "_DATA");
+  assert.deepEqual(initialized.writes, []);
+});
+
 test("resolves the executable-specific symbol and reports a range immediately after it", () => {
   const entries = parseWatcomMap(MAP);
   const mappedFunction = selectWatcomMapSymbol(entries, "get_target");
@@ -92,6 +156,8 @@ test("resolves the executable-specific symbol and reports a range immediately af
   });
 
   assert.equal(mappedFunction.segment, "0001");
+  assert.equal(mappedFunction.marker, "*");
+  assert.equal(mappedFunction.unreferenced, true);
   assert.equal(mappedGlobal.segment, "0003");
   assert.equal(mappedGlobal.offset, 0x3cf0c);
   assert.equal(inferMapValueType(mappedGlobal.declaration), "f32");

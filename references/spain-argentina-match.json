@@ -1,0 +1,363 @@
+{
+  "schema": "cssoccer-native-fixture-contract@1",
+  "id": "spain-argentina-full-match",
+  "source": {
+    "revision": "b40bd6d1e50e052030c5f0884fbe3deda7e9fa4b",
+    "executable": "TEST.EXE",
+    "teamRecordSource": "FOOT.EXE",
+    "script": "SCRIPT.96"
+  },
+  "teamRecordLayout": {
+    "bytes": 872,
+    "playerOffset": 144,
+    "playerBytes": 33,
+    "players": 22,
+    "startersPerTeam": 11,
+    "byteOrder": "little-endian",
+    "packing": "Open Watcom /zp4"
+  },
+  "fixture": {
+    "home": {
+      "country": "spain",
+      "label": "Spain",
+      "sourceTeamId": 2,
+      "nativeTeamSlot": "A",
+      "sourceOffset": 1043024,
+      "runtimeOffset": 1274188,
+      "expected": {
+        "name": "Spain",
+        "coach": "Javier Clemente",
+        "nickname": "Spain",
+        "countryCode": "SP",
+        "ranking": 1,
+        "teamNumber": 2,
+        "bigFlag": 256,
+        "formation": 0,
+        "autoFormation": 0,
+        "computerFormation": 9,
+        "teamSha256": "2853c8297116529ba467935015722a0c2aa50b081ddc46e5691a032b2a86c0e3",
+        "rosterSha256": "20ff35fd02816431bc1d8704927f83b105f287e2783fc461ce1bc74531c499d2",
+        "startersSha256": "96ebd3e4ad001a564b36c717dade828b29e0c7fe302afd783ce97bf9c5eb3d22",
+        "tacticsSha256": "bf857de3c59c473e31b6737bb4edfce11c450f870b259afba8d7843821a845c4",
+        "starterNames": [
+          "A. Zubizaretta",
+          "M.A. Nadal",
+          "A. Ferrer",
+          "F. Abelardo",
+          "S.G. Voro",
+          "J.A. Goicoechea",
+          "J. Guardiola",
+          "J. Guerrero",
+          "J. Salinas",
+          "M. Felipe",
+          "F. Hierro"
+        ]
+      },
+      "kitBinding": {
+        "kind": "source-symbol-and-selector-binding-no-payload-claim",
+        "bigFlag": 256,
+        "body": "BM_XLATINO",
+        "kit": "BM_XSPAIN",
+        "limbs": "BM_LIMBS2",
+        "numbers": "BM_NUMBERS1",
+        "kitPalette": "COL_XSPAIN",
+        "bodyPalette": "COL_XLATINO",
+        "homeHighlight": "COL_HR",
+        "awayHighlight": "COL_AR",
+        "assetSelectors": [
+          { "symbol": "BIN_SPAIN", "selector": 296 },
+          { "symbol": "BIN_SPAIN2", "selector": 656 }
+        ],
+        "sha256": "9da7015bb209bf13c951dbf3013c1271bd0451bf4f807f9e2227b13ba665fdd3"
+      }
+    },
+    "away": {
+      "country": "argentina",
+      "label": "Argentina",
+      "sourceTeamId": 20,
+      "nativeTeamSlot": "B",
+      "sourceOffset": 1058720,
+      "runtimeOffset": 1275060,
+      "expected": {
+        "name": "Argentina",
+        "coach": "Daniel Passarella",
+        "nickname": "Argentina",
+        "countryCode": "AR",
+        "ranking": 9,
+        "teamNumber": 20,
+        "bigFlag": 400,
+        "formation": 0,
+        "autoFormation": 0,
+        "computerFormation": 9,
+        "teamSha256": "c3eb1e1b61a8ca947649368f047d4f156707c797650df3da8b5d188fa69e8f60",
+        "rosterSha256": "1a381f299ace229d9de1d1f1205de4d4f46870d9ad16feb5779406d573887745",
+        "startersSha256": "1d41efb1ebbdc44088176f0d81bcdd368ec9bbf4c828f13efaa276909d3714aa",
+        "tacticsSha256": "bf857de3c59c473e31b6737bb4edfce11c450f870b259afba8d7843821a845c4",
+        "starterNames": [
+          "S. Goycoechea",
+          "S. Vazquez",
+          "J.A. Chamot",
+          "R. Sensini",
+          "O. Ruggeri",
+          "F. Redondo",
+          "J. Basualdo",
+          "D. Simeone",
+          "C. Caniggia",
+          "G. Batistuta",
+          "A. Ortega"
+        ]
+      },
+      "kitBinding": {
+        "kind": "source-symbol-and-selector-binding-no-payload-claim",
+        "bigFlag": 400,
+        "body": "BM_XLATINO",
+        "kit": "BM_XARGENTI",
+        "limbs": "BM_LIMBS1",
+        "numbers": "BM_NUMBERS2",
+        "kitPalette": "COL_XARGENTI",
+        "bodyPalette": "COL_XLATINO",
+        "homeHighlight": "COL_HB",
+        "awayHighlight": "COL_AB",
+        "assetSelectors": [
+          { "symbol": "BIN_ARGENTIA", "selector": 440 },
+          { "symbol": "BIN_ARGENTI2", "selector": 800 }
+        ],
+        "sha256": "7cd0249ab949c836d72f1b155f4740ae53d00c3441ec573879fb61ede49f02ba"
+      }
+    },
+    "controlCountries": ["spain", "argentina"],
+    "canonicalProfile": "argentina-control",
+    "ownershipSymmetryProfile": "spain-control",
+    "users": 1,
+    "autoPlayer": -1,
+    "rules": {
+      "competition": { "id": 0, "symbol": "FRIENDLY" },
+      "simulation": { "id": 1, "symbol": "SIMULATION" },
+      "offside": false,
+      "wind": false,
+      "substitutes": false,
+      "bookings": true,
+      "freeKicks": true,
+      "audio": false,
+      "drawsFinal": true,
+      "extraTime": false,
+      "penalties": false
+    },
+    "rulesSha256": "666827a162f23d43dd8d9fc43b2b838a63fc05b31bce2c5aaa2f35c6012f8613",
+    "timing": {
+      "tickRateHz": 20,
+      "timestepSeconds": 0.05,
+      "timeFactor": 2,
+      "playMinutesPerHalf": 1,
+      "fullMatchPlayMinutes": 2,
+      "gameMinutesPerHalf": 45,
+      "ticksPerHalf": 1200,
+      "fullMatchPlayTicks": 2400,
+      "liveBallOverrun": {
+        "allowed": true,
+        "maxTicksPerHalf": 200,
+        "clockResetAtEndSwap": "keep-minutes-reset-seconds"
+      },
+      "publiclyConfigurable": false
+    },
+    "timingSha256": "fa16599af26c5c8b274bc9618b1c8c13c15840e0fc8021ec2ebeab8a84218e41",
+    "seed": {
+      "value": 3523,
+      "algorithmBinding": "GetRnd2-call-sites-replaced-with-fixed-eax"
+    },
+    "seedSha256": "a245b4a7d7408a7ebd00322117cbf84e6bde91b2b84fc36fff2bd08de02e3925"
+  },
+  "oracle": {
+    "testCommandScenario": {
+      "schema": "cssoccer-native-test-command-scenario@1",
+      "ticks": 2725,
+      "command": {
+        "moveX": 0,
+        "moveY": 0,
+        "buttons": 0
+      },
+      "bytes": 124240,
+      "sha256": "b747bb27b5c94eaa533cfcd8332c9f02cc8b30384d62a375055936b39ec621b3"
+    },
+    "outputRoot": ".local/cssoccer/oracle/fixture",
+    "capture": {
+      "schema": "cssoccer-native-capture-contract@1",
+      "outputRoot": ".local/cssoccer/oracle/native",
+      "canonicalRuns": 2,
+      "canonicalProfile": "argentina-control",
+      "ownershipProfile": "spain-control",
+      "fullRunnerPatches": [
+        "deterministic-mouse-sample",
+        "hold-left-button",
+        "start-match-without-unstable-hit-projection",
+        "pin-supported-mcga-match-path",
+        "skip-unused-menu-buffer-fpu-loop",
+        "return-friendly-match-to-exit-frontend"
+      ],
+      "fullRunnerPatchSetSha256": "f6ae19d246c836076f5bd3ba7d753a589a8b009efd8c23bf1600ceb833b9c1a5",
+      "executablePatches": [
+        {
+          "name": "fixed-two-minute-clock-halftime-pause",
+          "sourceOwner": "RULES.CPP match_clock; TEST.MAP match_mode",
+          "sourceCodeOffset": 311817,
+          "offset": 630793,
+          "expected": "803dc0150400007509",
+          "replacement": "803dc0150400137409"
+        },
+        {
+          "name": "continuous-scored-stoppage-clock",
+          "sourceOwner": "RULES.CPP match_clock; TEST.MAP just_scored",
+          "sourceCodeOffset": 311855,
+          "offset": 630831,
+          "expected": "7402",
+          "replacement": "eb02"
+        },
+        {
+          "name": "continuous-thrown-stoppage-clock",
+          "sourceOwner": "RULES.CPP match_clock; TEST.MAP just_thrown",
+          "sourceCodeOffset": 311866,
+          "offset": 630842,
+          "expected": "7405",
+          "replacement": "eb05"
+        },
+        {
+          "name": "neutral-set-piece-strike",
+          "sourceOwner": "ACTIONS.CPP user_set_piece",
+          "sourceCodeOffset": 141509,
+          "offset": 460485,
+          "expected": "833d38130400000f8468000000",
+          "replacement": "c7055c27040001010100909090"
+        }
+      ],
+      "executablePatchSetSha256": "f391d0f1372edce30b7aa2034f096b7fa7b4fa3d7051b29e65e6017bdbf666c4",
+      "framesEveryTicks": 100,
+      "inputAdapter": {
+        "schema": "cssoccer-native-set-piece-input-adapter@1",
+        "sourceOwner": "ACTIONS.CPP user_conts; EXTERNS.H users_dir/set_piece_on",
+        "trigger": "set_piece_on != 0",
+        "behavior": "alternate one neutral tick and one m=1,f=1 pulse at user_conts entry",
+        "externalTestCommandScenario": "all commands explicitly zero-valued",
+        "rawFlag": 32,
+        "sha256": "f154db2eaf37ee51602a3a53fe418ef2e33405643581125e0d4e2369f9a8d372"
+      },
+      "transport": {
+        "repository": "https://github.com/joncampbell123/dosbox-x.git",
+        "revision": "6fb8c075d709032f666d1729f606dd3fcfa6c2d0",
+        "sourcePatch": ".local/cssoccer/tools/dosbox-x-source/src/cpu/core_normal.cpp",
+        "sourcePatchSha256": "4f1026bc431135f640de2076ce7d4562ec17a3f9262fcae9185c177652d00c6c",
+        "binary": ".local/cssoccer/tools/dosbox-x-source/src/dosbox-x",
+        "binarySha256": "7678e4c97ad8efdfbe0038e29a6595e0ed91581e92109071d511788bffaffabe",
+        "sourceMapSha256": "dee5c35320e3b538f880c698ecfc2ad88bd565cb298da216a5b8c654b644d88c",
+        "matchPlayerStructSha256": "13d13dca2910a7685be7603e25bc9fa936253f5aa72f73eef3f54e851fbbce34",
+        "userInfoStructSha256": "27a19d2c1c2cbe96eaa8c89fbf317091305991c30fb03bc7dc05b23042aa90c6"
+      },
+      "raw": {
+        "magic": "CSSORAW2",
+        "version": 2,
+        "recordMarker": "TIK1",
+        "flags": {
+          "active": 1,
+          "frameRequested": 2,
+          "phaseChanged": 4,
+          "kickoff": 8,
+          "terminal": 16,
+          "setPieceInputPulse": 32
+        },
+        "metadataBytes": 28,
+        "ranges": [
+          { "offset": 55552, "bytes": 768 },
+          { "offset": 114976, "bytes": 64 },
+          { "offset": 234752, "bytes": 1280 },
+          { "offset": 249624, "bytes": 11240 },
+          { "offset": 286032, "bytes": 64 },
+          { "offset": 298784, "bytes": 768 },
+          { "offset": 347264, "bytes": 64 }
+        ]
+      },
+      "launch": {
+        "arguments": ["-FRIENDLY", "-V1"],
+        "watchdogSeconds": 360,
+        "expectedMaxRuntimeSeconds": 330,
+        "parallelCanonicalRuns": true,
+        "visibleWindow": false
+      }
+    },
+    "quickRunnerPatchSetSha256": "30902ecc884f12c191f3ee492fddb7310ac2198d2ba477a6b19c55357ac41d6a",
+    "scriptReplacements": [
+      { "before": "\"BULGARIA\"", "after": "\"SPAIN\"" },
+      { "before": "\"CROATIA\"", "after": "\"ARGENTINA\"" }
+    ],
+    "scriptTeamData": {
+      "schema": "cssoccer-oracle-script-team-data@1",
+      "fitness": 99,
+      "nativeAttributeNormalization": "trunc(sourceValue * 128 / 100)",
+      "teams": [
+        {
+          "country": "spain",
+          "targetHeader": "Bulgaria",
+          "targetTeamIndex": 0,
+          "playerCount": 20,
+          "shortNamePrefix": "SPA"
+        },
+        {
+          "country": "argentina",
+          "targetHeader": "Croatia",
+          "targetTeamIndex": 1,
+          "playerCount": 20,
+          "shortNamePrefix": "ARG"
+        }
+      ],
+      "sha256": "85db91f41b7e72a199e7fb1506619775a72ed5ce2ec9189c17e76db844c064fa"
+    },
+    "expectedScriptSha256": "47bebe217ccf753ee60f04cff75e9b6094b6c095ad7529f788da5369564d513b",
+    "commonPatches": [
+      { "name": "simulation-mode", "offset": 320788, "expected": "00000000", "replacement": "01000000" },
+      { "name": "simulation-mode-toggle", "offset": 320798, "expected": "00000000", "replacement": "01000000" },
+      { "name": "two-minute-time-factor", "offset": 1288996, "expected": "0500", "replacement": "0200" },
+      { "name": "fixed-euro-seed", "offset": 386599, "expected": "e8bf2a0000", "replacement": "b8c30d0000" },
+      { "name": "fixed-match-seed", "offset": 386662, "expected": "e8802a0000", "replacement": "b8c30d0000" },
+      { "name": "frontend-audio-off", "offset": 321170, "expected": "01", "replacement": "00" },
+      { "name": "skip-frontend-audio-init", "offset": 321183, "expected": "e8a8060000", "replacement": "31c0909090" }
+    ],
+    "profiles": {
+      "spain-control": {
+        "country": "spain",
+        "teamSlot": "A",
+        "teamUsersMask": 1,
+        "patches": [],
+        "expectedExecutableSha256": "49fdee507727cf15dbcd0aa4aa1aaab27acdc75ee3fab75aac5f0d3b64daa85d",
+        "expectedFullMatchExecutableSha256": "de32ccc187ea10c4789a9257d563e3402948f46b1ed154bf77a010e6f4e75401"
+      },
+      "argentina-control": {
+        "country": "argentina",
+        "teamSlot": "B",
+        "teamUsersMask": 1,
+        "patches": [
+          {
+            "name": "translate-only-user-to-away-team",
+            "offset": 376471,
+            "expected": "75",
+            "replacement": "eb"
+          }
+        ],
+        "expectedExecutableSha256": "9f7f37062957bfcb9ab3f84adc84714c981c879314dd18ea110d79e54a26e775",
+        "expectedFullMatchExecutableSha256": "112d06d258857fc8506d2ad1653052890b07d27af45f159106fd7b99069d9d9d"
+      }
+    },
+    "launch": {
+      "arguments": ["-FRIENDLY", "-V1"],
+      "watchdogSeconds": 20,
+      "expectedMaxRuntimeSeconds": 15,
+      "parallelProfiles": true
+    }
+  },
+  "rejections": {
+    "homeTeamIds": [20, 3],
+    "awayTeamIds": [2, 19],
+    "durationMinutes": [1, 5, 90],
+    "halfDurationMinutes": [2, 45],
+    "competitionIds": [1, 2],
+    "simulationModeIds": [0],
+    "controlCountries": ["france", "Spain", "ARGENTINA"]
+  }
+}

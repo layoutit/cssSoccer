@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import { execPath } from "node:process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
+  classifyNativeProbeLog,
   decodeCssorawValues,
+  runMonitoredProbeProcess,
 } from "../tools/run-compiled-path-check.mjs";
 import { CompiledPathInspectorError } from "../tools/compiled-path-inspector-core.mjs";
 
@@ -64,6 +70,58 @@ test("fails closed when a requested value was not captured", () => {
     (error) => error instanceof CompiledPathInspectorError
       && error.code === "probe-raw-symbol-missing",
   );
+});
+
+test("classifies a DOS/4GW native crash from its redirected probe log", () => {
+  const crash = classifyNativeProbeLog([
+    "Intialising data objects...",
+    "DOS/4GW error (2001): exception 0Dh (general protection fault) at 80:00000709",
+  ].join("\n"));
+
+  assert.deepEqual(crash, {
+    kind: "dos4gw-error",
+    marker: "DOS/4GW error (2001): exception 0Dh (general protection fault) at 80:00000709",
+    excerpt: "Intialising data objects...\nDOS/4GW error (2001): exception 0Dh (general protection fault) at 80:00000709",
+  });
+});
+
+test("terminates a hanging probe as soon as its log reports a native crash", async (t) => {
+  const scratch = await mkdtemp(join(tmpdir(), "cssoccer-probe-crash-"));
+  t.after(async () => rm(scratch, { recursive: true, force: true }));
+  const logPath = join(scratch, "PROBE.LOG");
+  const startedAt = Date.now();
+
+  await assert.rejects(
+    runMonitoredProbeProcess(execPath, [
+      "-e",
+      "require('node:fs').writeFileSync(process.argv[1], 'DOS/4GW error (2001): exception 0Dh (general protection fault)\\n'); setInterval(() => {}, 1000);",
+      logPath,
+    ], {
+      logPath,
+      timeoutMilliseconds: 5_000,
+      pollMilliseconds: 10,
+      killGraceMilliseconds: 10,
+    }),
+    (error) => error instanceof CompiledPathInspectorError
+      && error.code === "query-native-crash",
+  );
+  assert.ok(Date.now() - startedAt < 1_000);
+});
+
+test("enforces a hard wall-clock timeout on a silent hanging probe", async () => {
+  const startedAt = Date.now();
+
+  await assert.rejects(
+    runMonitoredProbeProcess(execPath, ["-e", "setInterval(() => {}, 1000);"], {
+      logPath: join(tmpdir(), `cssoccer-probe-no-log-${process.pid}.log`),
+      timeoutMilliseconds: 50,
+      pollMilliseconds: 10,
+      killGraceMilliseconds: 10,
+    }),
+    (error) => error instanceof CompiledPathInspectorError
+      && error.code === "query-transport-timeout",
+  );
+  assert.ok(Date.now() - startedAt < 1_000);
 });
 
 function createCssoraw({ ranges, records }) {

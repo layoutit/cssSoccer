@@ -27,6 +27,7 @@ import {
   normalizeCaptureRanges,
   parseWatcomMap,
   parseWatcomRoutine,
+  readWatcomInitializedValue,
   selectWatcomMapSymbol,
   sha256,
   sha256Canonical,
@@ -124,21 +125,50 @@ export async function inspectCompiledPath(queryInput, cliOptions = {}) {
       );
     }
     const bytes = valueTypeBytes(valueType);
-    const coverage = capture
-      ? locateCaptureCoverage({ offset: mapped.offset, bytes, ranges: capture.ranges })
-      : { status: "not-checked" };
+    const elementIndex = request.elementIndex ?? null;
+    const offset = mapped.offset + ((elementIndex ?? 0) * bytes);
+    if (!Number.isSafeInteger(offset) || offset + bytes > 0x1_0000_0000) {
+      throw new CompiledPathInspectorError(
+        "compiled-symbol-element-overflow",
+        `Requested element of ${request.name} exceeds the 32-bit linked address space.`,
+        { symbol: request.name, elementIndex, baseOffset: mapped.offset, bytes },
+      );
+    }
+    const name = elementIndex === null
+      ? request.name
+      : `${request.name}[${elementIndex}]`;
+    const objectInitializer = elementIndex !== null && mapped.localOnly
+      ? readWatcomInitializedValue(listingText, {
+        name: request.name,
+        elementIndex,
+        valueType,
+      })
+      : null;
+    const initializedValue = objectInitializer?.writes.length === 0
+      ? objectInitializer
+      : null;
+    const coverage = initializedValue
+      ? { status: "compiled-initializer" }
+      : capture
+        ? locateCaptureCoverage({ offset, bytes, ranges: capture.ranges })
+        : { status: "not-checked" };
     return deepFreeze({
-      name: request.name,
+      name,
+      baseName: request.name,
+      elementIndex,
       valueType,
       bytes,
       referenced: true,
       references: request.references,
       nextF32Stores: request.nextF32Stores,
       constantWrites: request.constantWrites,
+      initializedValue,
       linkedAddress: {
         segment: mapped.segment,
-        offset: mapped.offset,
-        offsetHex: hex32(mapped.offset),
+        offset,
+        offsetHex: hex32(offset),
+        baseOffset: mapped.offset,
+        baseOffsetHex: hex32(mapped.offset),
         declaration: mapped.declaration,
         mapLine: mapped.line,
       },
@@ -185,6 +215,7 @@ export async function inspectCompiledPath(queryInput, cliOptions = {}) {
 
   let probe = null;
   const missingSymbols = symbols.filter((symbol) => symbol.capture.status === "probe-required");
+  const initializedSymbols = symbols.filter((symbol) => symbol.capture.status === "compiled-initializer");
   if (query.probe?.enabled) {
     if (!capture) {
       throw new CompiledPathInspectorError(
@@ -273,6 +304,8 @@ export async function inspectCompiledPath(queryInput, cliOptions = {}) {
     ? "probe-ready"
     : missingSymbols.length > 0
       ? "probe-required"
+      : initializedSymbols.length === symbols.length
+        ? "compiled-initializer-ready"
       : capture
         ? "retained-range-ready"
         : "compiled-path-ready";
@@ -280,6 +313,8 @@ export async function inspectCompiledPath(queryInput, cliOptions = {}) {
     ? "Run the emitted read-only manifest through the qualified headless oracle transport."
     : missingSymbols.length > 0
       ? "Provide retained frontier and exact object/map/executable bindings to emit the short read-only probe."
+      : initializedSymbols.length === symbols.length
+        ? "Use the exact initialized values bound to the Watcom object and linked build."
       : "The requested globals are already present in retained capture ranges.";
   const generatedAt = new Date().toISOString();
   const evidencePath = join(runRoot, "evidence.json");
@@ -303,6 +338,7 @@ export async function inspectCompiledPath(queryInput, cliOptions = {}) {
       references: symbol.references.length,
       nextF32Stores: symbol.nextF32Stores.length,
       constantWrites: symbol.constantWrites,
+      initializedValue: symbol.initializedValue,
       capture: summarizeCoverage(symbol.capture),
     })),
     artifactBindingStatus,
@@ -624,15 +660,25 @@ function normalizeSymbol(value) {
   if (typeof value === "string") return parseSymbolArgument(value);
   if (!isPlainObject(value)) throw new TypeError("Query symbol must be a string or object.");
   requireText(value.name, "query symbol name");
+  const elementIndex = value.elementIndex ?? null;
+  if (elementIndex !== null && (!Number.isSafeInteger(elementIndex) || elementIndex < 0)) {
+    throw new TypeError("Query symbol elementIndex must be a non-negative safe integer.");
+  }
   if (value.valueType !== undefined && value.valueType !== null) valueTypeBytes(value.valueType);
-  return { name: value.name, valueType: value.valueType ?? null };
+  return { name: value.name, elementIndex, valueType: value.valueType ?? null };
 }
 
 function parseSymbolArgument(value) {
-  const [name, valueType, ...rest] = value.split(":");
-  if (rest.length > 0 || !name) throw new TypeError(`Invalid --symbol value ${value}.`);
+  const [reference, valueType, ...rest] = value.split(":");
+  if (rest.length > 0 || !reference) throw new TypeError(`Invalid --symbol value ${value}.`);
+  const match = reference.match(/^([A-Za-z_?$@][A-Za-z0-9_?$@.]*)(?:\[(\d+)\])?$/u);
+  if (!match) throw new TypeError(`Invalid --symbol value ${value}.`);
   if (valueType) valueTypeBytes(valueType);
-  return { name, valueType: valueType || null };
+  return {
+    name: match[1],
+    elementIndex: match[2] === undefined ? null : Number(match[2]),
+    valueType: valueType || null,
+  };
 }
 
 function parseArguments(args) {

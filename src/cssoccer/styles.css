@@ -1,0 +1,473 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #000000;
+  color: #f7f8f4;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: #000000;
+}
+
+button {
+  font: inherit;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+#app {
+  position: relative;
+  background: #000000;
+}
+
+#scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  isolation: isolate;
+  overflow: hidden;
+  outline: none;
+  background: #000000;
+}
+
+#scene > .polycss-camera {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  outline: none;
+  touch-action: none;
+}
+
+#scene > .cssoccer-sky-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background-color: #000000;
+  background-repeat: repeat-x;
+  background-size: 640px 480px;
+  image-rendering: pixelated;
+}
+
+#scene > .cssoccer-exact-player-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cssoccer-exact-player-screen-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 640px;
+  height: 400px;
+  transform-origin: 0 0;
+  transform-style: preserve-3d;
+}
+
+.cssoccer-exact-player-model {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+}
+
+#scene [data-cssoccer-stable-root="true"] {
+  transform-style: preserve-3d;
+}
+
+#scene .polycss-mesh > :is(b, i, s, u) {
+  image-rendering: pixelated;
+}
+
+#scene [data-cssoccer-kind="player"] > :is(b, i, s, u),
+#scene [data-cssoccer-kind="official"] > :is(b, i, s, u) {
+  -webkit-backface-visibility: visible !important;
+  backface-visibility: visible !important;
+}
+
+#scene [data-cssoccer-kind="static"][data-cssoccer-root-id^="stadium-stand-"] > :is(b, i, s, u) {
+  -webkit-backface-visibility: visible !important;
+  backface-visibility: visible !important;
+}
+
+#country-choice {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: #030805;
+  place-items: center;
+}
+
+#country-choice-panel {
+  box-sizing: border-box;
+  width: min(34rem, 100%);
+  padding: clamp(1.25rem, 5vw, 2.5rem);
+  border: 1px solid rgba(238, 244, 232, 0.42);
+  border-radius: 0.45rem;
+  background: #09130d;
+  text-align: center;
+}
+
+#country-choice-release {
+  margin: 0 0 0.55rem;
+  color: #75aadb;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+#country-choice-title {
+  margin: 0;
+  font-size: clamp(1.7rem, 7vw, 2.7rem);
+  line-height: 1;
+}
+
+#country-choice-description {
+  margin: 0.7rem 0 1.35rem;
+  color: #bac5bc;
+  font-size: 0.85rem;
+}
+
+#country-choice-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+[data-country-choice] {
+  display: grid;
+  min-height: 6.5rem;
+  padding: 1rem;
+  border: 1px solid #829087;
+  border-top-width: 0.28rem;
+  border-radius: 0.3rem;
+  background: #17231a;
+  color: #ffffff;
+  cursor: pointer;
+  place-content: center;
+}
+
+[data-country-choice="spain"] { border-top-color: #f4c430; }
+[data-country-choice="argentina"] { border-top-color: #75aadb; }
+
+[data-country-choice] strong {
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+[data-country-choice] span {
+  margin-top: 0.25rem;
+  color: #bac5bc;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+[data-country-choice]:hover { background: #233126; }
+[data-country-choice]:disabled { cursor: wait; opacity: 0.65; }
+[data-country-choice]:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 3px;
+}
+
+#scene .cssoccer-two-sided-face {
+  -webkit-backface-visibility: visible !important;
+  backface-visibility: visible !important;
+}
+
+#match-hud {
+  --native-hud-pixel: min(0.3125vw, 0.5vh);
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
+}
+
+#hud-clock {
+  position: absolute;
+  top: 1em;
+  left: 50%;
+  display: flex;
+  height: 7em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: var(--native-hud-pixel);
+  line-height: 0;
+  transform: translateX(calc(-50% + (var(--native-hud-pixel) / 2)));
+}
+
+[data-native-hud-glyph-slot] {
+  display: block;
+  flex: 0 0 auto;
+  height: 7em;
+  background-image: url("/cssoccer/assets/textures/spain-argentina-hud-glyphs.png");
+  background-repeat: no-repeat;
+  background-size: 72em 105em;
+  image-rendering: pixelated;
+}
+
+[data-native-hud-glyph-slot][data-glyph="0"] { width: 8em; background-position: 0 0; }
+[data-native-hud-glyph-slot][data-glyph="1"] { width: 7em; background-position: -8em 0; }
+[data-native-hud-glyph-slot][data-glyph="2"] { width: 8em; background-position: -16em 0; }
+[data-native-hud-glyph-slot][data-glyph="3"] { width: 8em; background-position: -24em 0; }
+[data-native-hud-glyph-slot][data-glyph="4"] { width: 8em; background-position: -32em 0; }
+[data-native-hud-glyph-slot][data-glyph="5"] { width: 8em; background-position: -40em 0; }
+[data-native-hud-glyph-slot][data-glyph="6"] { width: 8em; background-position: -48em 0; }
+[data-native-hud-glyph-slot][data-glyph="7"] { width: 8em; background-position: -56em 0; }
+[data-native-hud-glyph-slot][data-glyph="8"] { width: 8em; background-position: -64em 0; }
+[data-native-hud-glyph-slot][data-glyph="9"] { width: 8em; background-position: 0 -7em; }
+[data-native-hud-glyph-slot][data-glyph=":"] { width: 4em; background-position: -8em -7em; }
+
+[data-cssoccer-control]:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+#touch-controls {
+  position: fixed;
+  z-index: 2147483646;
+  right: max(0.7rem, env(safe-area-inset-right));
+  bottom: max(0.7rem, env(safe-area-inset-bottom));
+  left: max(0.7rem, env(safe-area-inset-left));
+  display: none;
+  align-items: end;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+#touch-directions {
+  display: grid;
+  grid-template-areas: ". up ." "left down right";
+  grid-template-columns: repeat(3, 3.5rem);
+  gap: 0.3rem;
+}
+
+#touch-directions [data-cssoccer-control="move-up"] { grid-area: up; }
+#touch-directions [data-cssoccer-control="move-left"] { grid-area: left; }
+#touch-directions [data-cssoccer-control="move-down"] { grid-area: down; }
+#touch-directions [data-cssoccer-control="move-right"] { grid-area: right; }
+
+#touch-actions {
+  display: flex;
+  align-items: end;
+  gap: 0.6rem;
+}
+
+[data-cssoccer-control] {
+  width: 3.5rem;
+  height: 3.5rem;
+  padding: 0;
+  border: 1px solid rgba(247, 248, 244, 0.7);
+  border-radius: 50%;
+  background: rgba(5, 13, 8, 0.78);
+  color: #ffffff;
+  font-size: 1.1rem;
+  font-weight: 750;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: auto;
+}
+
+[data-cssoccer-control][aria-pressed="true"] {
+  border-color: #f4c430;
+  background: rgba(244, 196, 48, 0.3);
+}
+
+#touch-actions [data-cssoccer-control] {
+  width: 4rem;
+  height: 4rem;
+}
+
+#touch-actions [data-cssoccer-control="fire-2"] {
+  margin-bottom: 2.2rem;
+}
+
+#status {
+  position: absolute;
+  z-index: 5;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  max-width: min(42rem, calc(100% - 1.5rem));
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #52645a;
+  background: #0b1710;
+  color: #e8ece9;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+body[data-port-status="ready"] #status { display: none; }
+body[data-port-status="error"] #status { color: #ffd0cb; }
+
+#cssoccer-debug-root {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 20;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  contain: layout style;
+  pointer-events: none;
+}
+
+#cssoccer-debug-panel {
+  position: fixed;
+  top: max(0.85rem, env(safe-area-inset-top));
+  right: max(0.85rem, env(safe-area-inset-right));
+  box-sizing: border-box;
+  width: min(25rem, calc(100vw - 1.7rem));
+  max-height: calc(100dvh - 1.7rem);
+  overflow: auto;
+  padding: 0.8rem;
+  border: 1px solid rgba(244, 196, 48, 0.56);
+  border-radius: 0.3rem;
+  background: rgba(4, 10, 6, 0.96);
+  color: #edf3ee;
+  font: 0.72rem/1.35 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+}
+
+#cssoccer-debug-panel[hidden] {
+  display: none;
+}
+
+.cssoccer-debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.65rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid rgba(238, 244, 232, 0.22);
+}
+
+.cssoccer-debug-header h2 {
+  margin: 0;
+  color: #f4c430;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.cssoccer-debug-state {
+  color: #75aadb;
+  font-weight: 800;
+}
+
+.cssoccer-debug-stats {
+  display: grid;
+  gap: 0.28rem;
+  margin: 0;
+}
+
+.cssoccer-debug-stats div {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr);
+  gap: 0.65rem;
+}
+
+.cssoccer-debug-stats dt {
+  color: #9eaca1;
+  text-transform: uppercase;
+}
+
+.cssoccer-debug-stats dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #f7f8f4;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cssoccer-debug-recording {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(238, 244, 232, 0.22);
+}
+
+.cssoccer-debug-recording button {
+  min-width: 4.8rem;
+  padding: 0.3rem 0.48rem;
+  border: 1px solid rgba(244, 196, 48, 0.62);
+  border-radius: 0.2rem;
+  background: rgba(37, 45, 20, 0.88);
+  color: #ffe675;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.cssoccer-debug-recording button:hover,
+.cssoccer-debug-recording button:focus-visible {
+  border-color: #fff0a3;
+  color: #ffffff;
+  outline: none;
+}
+
+.cssoccer-debug-recording button[aria-pressed="true"] {
+  border-color: #ff8f7d;
+  background: rgba(92, 18, 14, 0.9);
+  color: #ffb0a2;
+}
+
+.cssoccer-debug-recording [data-cssoccer-debug-recording-status] {
+  flex: 1 1 10rem;
+  min-width: 0;
+  color: #c9d3cb;
+  overflow-wrap: anywhere;
+}
+
+.cssoccer-debug-hint {
+  margin: 0.6rem 0 0;
+  color: #849087;
+  font-size: 0.62rem;
+  text-align: right;
+}
+
+@media (max-width: 32rem) {
+  #country-choice-actions { grid-template-columns: 1fr; }
+  [data-country-choice] { min-height: 5rem; }
+  #cssoccer-debug-panel { top: 0.45rem; right: 0.45rem; width: calc(100vw - 0.9rem); }
+}
+
+@media (any-pointer: coarse) {
+  #touch-controls { display: flex; }
+}

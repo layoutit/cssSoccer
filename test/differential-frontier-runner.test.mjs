@@ -28,8 +28,10 @@ import {
   nextAction,
   rankNegativePathTrace,
   rankDynamicProducerTrace,
+  rankRelevantNegativePathTrace,
   rankRuntimeExceptionTrace,
   resolveNativeBranchIdentity,
+  resolveNumericCompiledPath,
   runtimeExceptionNextAction,
   selectFrontierTraceSubject,
   topLevelFunctionDeclarations,
@@ -150,7 +152,7 @@ test("symbolic routing resolves a native transition through its caller branch an
       "}",
     ]),
   ];
-  const runtimeFiles = [sourceFile("browserMatchEngine.mjs", [
+  const runtimeFiles = [sourceFile("freePlayEngine.mjs", [
     "const LIVE_KICK_ACTION = 15;",
     "/** Apply make_pass -> init_kick_act for an ordinary AI pass decision. */",
     "function openingLivePassIsQualified(player, decision) {",
@@ -294,7 +296,7 @@ test("binds the executed native branch and routes a browser pass trace to the mi
     line: 64,
     supportingCalls: [{ function: "sourcePassType" }],
     ancestorCalls: [{
-      file: "src/cssoccer/browserMatchEngine.mjs",
+      file: "src/cssoccer/freePlayEngine.mjs",
       function: "resolveOpeningLiveAiNormalPass",
       line: 3267,
     }],
@@ -348,7 +350,7 @@ test("binds the executed native branch and routes a browser pass trace to the mi
   assert.equal(branchFocus.browserOwner.function, "resolveOpeningLiveAiNormalPass");
   assert.equal(branchFocus.nativeGuard.function, "got_ball");
   assert.equal(action.kind, "implement-missing-native-decision-branch");
-  assert.equal(action.file, "src/cssoccer/browserMatchEngine.mjs");
+  assert.equal(action.file, "src/cssoccer/freePlayEngine.mjs");
   assert.match(action.question, /resolveCssoccerAiPassDecision; implement shoot_decide before/u);
 });
 
@@ -382,6 +384,76 @@ test("temporary call tracing identifies the direct active producer", () => {
   assert.equal(ranked[0].function, "settlePlayer");
   assert.equal(ranked[0].outputDepth, 0);
   assert.equal(ranked[0].writesSelectedField, true);
+});
+
+test("numeric ball routing selects the executed qualified ball writer", () => {
+  const trace = {
+    status: "captured",
+    records: [
+      {
+        file: "src/cssoccer/freePlayEngine.mjs",
+        function: "continueOpeningLivePass",
+        line: 500,
+        callDepth: 2,
+        input: { depth: 1, snapshot: { goDisplacement: { x: -0.6 } } },
+        output: { depth: 0, snapshot: { goDisplacement: { x: -0.6 } } },
+      },
+      {
+        file: "src/cssoccer/freePlayEngine.mjs",
+        function: "releaseOpeningLiveAiShot",
+        line: 600,
+        callDepth: 2,
+        input: { depth: 2, snapshot: { action: 15 } },
+        output: { depth: 3, snapshot: { nativePlayer: 19 } },
+      },
+      {
+        file: "src/cssoccer/freePlayEngine.mjs",
+        function: "commitOpeningLivePlayers",
+        line: 700,
+        callDepth: 1,
+        input: { depth: 3, snapshot: { displacement: { x: -1 } } },
+        output: { depth: 1, snapshot: { displacement: { x: -1 } } },
+      },
+    ],
+  };
+  const declarations = [
+    {
+      file: "src/cssoccer/freePlayEngine.mjs",
+      name: "continueOpeningLivePass",
+      line: 500,
+      source: "function continueOpeningLivePass(player) { return { ...player, goDisplacement: { x: player.goDisplacement.x } }; }",
+    },
+    {
+      file: "src/cssoccer/freePlayEngine.mjs",
+      name: "releaseOpeningLiveAiShot",
+      line: 600,
+      source: [
+        "function releaseOpeningLiveAiShot(shotSpeed, xOffset, launchDistance) {",
+        "  const displacement = {",
+        "    x: F32(shotSpeed * xOffset / launchDistance),",
+        "  };",
+        "  return { ball: { displacement } };",
+        "}",
+      ].join("\n"),
+    },
+    {
+      file: "src/cssoccer/freePlayEngine.mjs",
+      name: "commitOpeningLivePlayers",
+      line: 700,
+      source: "function commitOpeningLivePlayers(player) { return { ...player, displacement: { x: player.facing.x } }; }",
+    },
+  ];
+  const exact = {
+    candidate: { value: -14.8 },
+    selector: { domain: "ball", leaf: "x_displacement" },
+    route: { id: "numeric-producer" },
+  };
+  const ranked = rankDynamicProducerTrace({ trace, declarations, exact });
+
+  assert.equal(ranked[0].function, "releaseOpeningLiveAiShot");
+  assert.equal(ranked[0].qualifiedFieldWrite, true);
+  assert.equal(ranked.find(({ function: name }) => name === "continueOpeningLivePass")?.writesSelectedField, false);
+  assert.deepEqual(rankRelevantNegativePathTrace({ trace, declarations, exact }), []);
 });
 
 test("negative-path tracing retains non-entity decisions and their executed helper calls", () => {
@@ -474,7 +546,7 @@ test("failure-only tracing records the throwing producer without an entity selec
     throw new Error(`Keeper ${String(player.nativePlayerNumber)} entered an outfield route.`);
   });
   const stepPlayers = controller.wrap({
-    file: "src/cssoccer/browserMatchEngine.mjs",
+    file: "src/cssoccer/freePlayEngine.mjs",
     name: "stepPlayers",
     line: 10,
   }, (player) => failKeeperRoute(player));
@@ -519,7 +591,7 @@ test("runtime exception routing names the executed throw line and its call chain
         callId: 1,
         parentCallId: null,
         callDepth: 0,
-        file: "src/cssoccer/browserMatchEngine.mjs",
+        file: "src/cssoccer/freePlayEngine.mjs",
         function: "stepPlayers",
         line: 10,
         arguments: [{ id: "demo-player-01", nativePlayerNumber: 12, action: 0 }],
@@ -542,7 +614,7 @@ test("runtime exception routing names the executed throw line and its call chain
         ].join("\n"),
       },
       {
-        file: "src/cssoccer/browserMatchEngine.mjs",
+        file: "src/cssoccer/freePlayEngine.mjs",
         name: "stepPlayers",
         line: 10,
         source: "function stepPlayers(player) { return failKeeperRoute(player); }",
@@ -603,11 +675,11 @@ test("maps diagnostic runtime stack lines back to product source", () => {
   });
 });
 
-test("maps engine stack lines across both diagnostic transforms", () => {
+test("maps free-play engine stack lines across the diagnostic wrapper", () => {
   const source = [
     "export function createEngine() {",
-    "    inspect() {",
-    "      return engineInspection(current, nextTick);",
+    "    snapshot() {",
+    "      return current;",
     "    },",
     "}",
     "function stepEngine() {",
@@ -617,15 +689,15 @@ test("maps engine stack lines across both diagnostic transforms", () => {
   const error = new Error("engine failed");
   error.stack = [
     "Error: engine failed",
-    "    at stepEngine (file:///tmp/frontier/src/cssoccer/browserMatchEngine.mjs:12:3)",
+    "    at stepEngine (file:///tmp/frontier/src/cssoccer/freePlayEngine.mjs:9:3)",
   ].join("\n");
   const failure = describeRuntimeException(error, {
     tick: 8,
     phase: "post_tick",
     diagnosticSourceRoot: "/tmp/frontier/src/cssoccer",
     sourceFiles: [{
-      name: "browserMatchEngine.mjs",
-      path: "src/cssoccer/browserMatchEngine.mjs",
+      name: "freePlayEngine.mjs",
+      path: "src/cssoccer/freePlayEngine.mjs",
       text: source,
     }],
   });
@@ -676,7 +748,7 @@ test("groups a missing ball release under one native producer and executed runti
       "}",
     ])],
     declarations: [{
-      file: "src/cssoccer/browserMatchEngine.mjs",
+      file: "src/cssoccer/freePlayEngine.mjs",
       name: "continueKickAction",
       line: 70,
       source: "function continueKickAction(player, ball) { return { player, ball }; }",
@@ -684,7 +756,7 @@ test("groups a missing ball release under one native producer and executed runti
     callTrace: {
       status: "captured",
       records: [{
-        file: "src/cssoccer/browserMatchEngine.mjs",
+        file: "src/cssoccer/freePlayEngine.mjs",
         function: "continueKickAction",
         line: 70,
         callDepth: 2,
@@ -709,7 +781,7 @@ test("groups a missing ball release under one native producer and executed runti
   assert.equal(compound.nativeProducer.coverage, 3);
   assert.equal(compound.runtimeOwner.function, "continueKickAction");
   assert.equal(action.kind, "implement-compound-native-transition");
-  assert.equal(action.file, "src/cssoccer/browserMatchEngine.mjs");
+  assert.equal(action.file, "src/cssoccer/freePlayEngine.mjs");
   assert.match(action.question, /as one transition/u);
 });
 
@@ -733,12 +805,112 @@ test("uses the preceding possession owner to trace a non-player frontier", () =>
   });
 });
 
-test("diagnostic transform wraps only top-level functions and exposes a frozen inspect seam", () => {
+test("uses the live-player collection for a preceding possession owner", () => {
+  const subject = selectFrontierTraceSubject({
+    exact: { selector: { domain: "ball", entityId: null } },
+    sameTickMismatches: [],
+    previousDiagnosticState: {
+      possession: { owner: 19 },
+      players: [],
+      openingLivePlayers: {
+        players: [{ id: "argentina-player-08", nativePlayerNumber: 19 }],
+      },
+    },
+  });
+
+  assert.deepEqual(subject, {
+    entityId: "argentina-player-08",
+    nativePlayerNumber: 19,
+    reason: "preceding-possession-owner",
+  });
+});
+
+test("binds a numeric native producer to the current diagnostic Exact coordinate", async () => {
+  const exact = {
+    tick: 2145,
+    phase: "post_tick",
+    phaseOrder: 0,
+    fieldId: "ball.x_displacement",
+    reference: { valueType: "f32", value: -14, numericBits: "c1600000" },
+    candidate: { valueType: "f32", value: -13, numericBits: "c1500000" },
+    route: { id: "numeric-producer" },
+  };
+  let received = null;
+  const compiled = await resolveNumericCompiledPath({
+    exact,
+    nativeWriter: {
+      file: ".local/oracle/BALL.CPP",
+      function: "get_xydis_from_ang",
+      matchedSymbols: ["ballxdis"],
+    },
+    bindings: { scenarioId: "scenario" },
+    evidenceRoot: "/fixture",
+    outputRoot: "/fixture/output",
+    runCompiledPathCheck: async (options) => {
+      received = options;
+      return {
+        status: "complete",
+        exact: {
+          activeTick: exact.tick,
+          phase: exact.phase,
+          phaseOrder: exact.phaseOrder,
+          field: exact.fieldId,
+          reference: exact.reference,
+          candidate: exact.candidate,
+        },
+        symbols: [{
+          name: "ballxdis",
+          valueType: "f32",
+          runtime: { value: -14, numericBits: "c1600000" },
+          references: 1,
+          nextF32Stores: 1,
+        }],
+        runtime: { authority: "retained-native-capture", parityAuthority: true },
+        evidencePath: "/fixture/action.json",
+      };
+    },
+  });
+
+  assert.equal(received.functionName, "get_xydis_from_ang");
+  assert.deepEqual(received.symbols, ["ballxdis:f32"]);
+  assert.equal(received.exactOverride, exact);
+  assert.equal(compiled.status, "bound");
+  assert.equal(compiled.symbols[0].runtime.numericBits, "c1600000");
+});
+
+test("traces the runtime identity occupying an exact native slot after team blocks swap", () => {
+  const subject = selectFrontierTraceSubject({
+    exact: {
+      selector: { domain: "players", entityId: "spain-player-06" },
+    },
+    diagnosticState: {
+      openingLivePlayers: {
+        players: [
+          { id: "argentina-player-06", nativePlayerNumber: 6 },
+          { id: "spain-player-06", nativePlayerNumber: 17 },
+        ],
+      },
+    },
+  }, {
+    fixture: {
+      home: { country: "spain" },
+      away: { country: "argentina" },
+    },
+  });
+
+  assert.deepEqual(subject, {
+    entityId: "argentina-player-06",
+    nativePlayerNumber: 6,
+    reason: "exact-native-slot-entity",
+  });
+});
+
+test("free-play diagnostic transform wraps producers without adding an engine seam", () => {
   const source = [
     "export function createEngine() {",
     "  return {",
-    "    inspect() {",
-    "      return engineInspection(current, nextTick);",
+    "    snapshot() {",
+    "      return current;",
     "    },",
     "  };",
     "}",
@@ -755,7 +927,7 @@ test("diagnostic transform wraps only top-level functions and exposes a frozen i
     { name: "producer", line: 8 },
     { name: "clone", line: 11 },
   ]);
-  assert.match(transformed, /diagnosticState: current/u);
+  assert.doesNotMatch(transformed, /diagnosticState|configureCssoccerDifferentialFrontierTrace/u);
   assert.match(transformed, /producer = __differentialFrontierTraceController\.wrap/u);
   assert.doesNotMatch(transformed, /clone = __differentialFrontierTraceController\.wrap/u);
 });
