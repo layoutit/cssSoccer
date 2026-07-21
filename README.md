@@ -4,7 +4,7 @@ A source-backed port of [Actua Soccer](https://github.com/Xrampino/Actua-Soccer)
 
 The current Full Match Alpha lets you control either team through two one-minute halves representing a complete 90-minute friendly. It includes live movement, passing, shooting, tackling, goals, restarts, fouls, offside, halftime, full time, pause, and rematch. It is a focused playable match, not the complete Actua Soccer game.
 
-<img width="1248" height="300" alt="cssSoccer kickoff, stadium grandstand, and goalmouth action" src="assets/cssoccer-full-match-alpha.png" />
+<img width="1248" height="300" alt="cssSoccer stadium grandstand, kickoff, and goalmouth action" src="assets/cssoccer-full-match-alpha.png" />
 
 ## How to Play
 
