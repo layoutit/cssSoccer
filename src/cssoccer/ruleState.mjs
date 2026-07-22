@@ -43,9 +43,10 @@ export const CSSOCCER_RULE_SOURCE = deepFreeze({
     sha256: "4054e55bbd5471ad0fa76c192562ee269f4ea0978e38f61d2eb0782439128b10",
   },
   fixtureReferee: {
-    accuracy: 120,
+    accuracy: 100,
     strictness: 80,
-    source: "FOOT.CPP lines 523-524; FOOTBALL.CPP lines 1243-1244",
+    source:
+      "TEST.CPP line 534 selects the Euro referee; EURO_VAR.CPP line 1150 initializes vision 100; FOOTBALL.CPP line 1243 stores ref_accuracy",
   },
   processOrder: [
     "source-owned foul or offside candidate",

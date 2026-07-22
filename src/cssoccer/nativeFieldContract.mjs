@@ -1,10 +1,10 @@
 export const CSSOCCER_NATIVE_FIELD_CONTRACT_SCHEMA =
   "cssoccer-native-field-contract@1";
 export const CSSOCCER_NATIVE_FIELD_CONTRACT_SHA256 =
-  "6d21511c288f9553628079ffeaa4a6538d4eb1a8e4b36acb4f1d0c44de42a76e";
+  "5f9b01bee40e319b611c4f948fadbfd5f7f9a08868bd658c1392dc54abeeab98";
 export const CSSOCCER_NATIVE_FIELD_FIXTURE_ID =
   "spain-argentina-full-match";
-export const CSSOCCER_NATIVE_FIELD_COUNT = 412;
+export const CSSOCCER_NATIVE_FIELD_COUNT = 454;
 
 const FIELD_KEYS = Object.freeze([
   "id",
@@ -34,6 +34,7 @@ const EXPECTED_DOMAIN_COUNTS = deepFreeze({
   camera: 10,
   clock: 10,
   lifecycle: 9,
+  officials: 42,
   players: 352,
   rng: 2,
   rules: 8,
@@ -95,6 +96,48 @@ const FIELD_ROWS = [
   ["lifecycle.team_b","Team B","FOOTBALL.CPP team_b","Native team-B fixture index.",null,"u8"],
   ["lifecycle.team_b_on","Team B on","EXTERNS.H team_b_on; ACTIONS.CPP","Native team-B active flag.",null,"u8"],
   ["lifecycle.watch","Watch state","EXTERNS.H watch; FOOTBALL.CPP","Native watch/timing state.",null,"u8"],
+  ["officials.assistant-referee-01.action","assistant-referee-01 Action","EXTERNS.H officials; refs[1].act","Native official action state.",null,"i32"],
+  ["officials.assistant-referee-01.animation","assistant-referee-01 Animation","EXTERNS.H officials; refs[1].anim","Native official animation identifier.",null,"f32"],
+  ["officials.assistant-referee-01.animation_frame","assistant-referee-01 Animation frame","EXTERNS.H officials; refs[1].frm","Native official animation frame.",null,"f32"],
+  ["officials.assistant-referee-01.animation_frame_step","assistant-referee-01 Animation frame step","EXTERNS.H officials; refs[1].fstep","Native official animation-frame increment per tick.",null,"f32"],
+  ["officials.assistant-referee-01.direction_x","assistant-referee-01 Direction X","EXTERNS.H officials; refs[1].dir_x","Native official X facing vector.",null,"f32"],
+  ["officials.assistant-referee-01.direction_y","assistant-referee-01 Direction Y","EXTERNS.H officials; refs[1].dir_y","Native official Y facing vector.",null,"f32"],
+  ["officials.assistant-referee-01.go","assistant-referee-01 Go","EXTERNS.H officials; refs[1].go","Native official movement gate.",null,"i32"],
+  ["officials.assistant-referee-01.goto_x","assistant-referee-01 Goto X","EXTERNS.H officials; refs[1].goto_x","Native official target X position.","native-position","f32"],
+  ["officials.assistant-referee-01.goto_y","assistant-referee-01 Goto Y","EXTERNS.H officials; refs[1].goto_y","Native official target Y position.","native-position","f32"],
+  ["officials.assistant-referee-01.new_animation","assistant-referee-01 New animation","EXTERNS.H officials; refs[1].newanim","Native official animation-change flag.",null,"u8"],
+  ["officials.assistant-referee-01.target","assistant-referee-01 Target","EXTERNS.H officials; refs[1].target","Native official player target.",null,"i16"],
+  ["officials.assistant-referee-01.x","assistant-referee-01 X","EXTERNS.H officials; refs[1].x","Native official X position.","native-position","f32"],
+  ["officials.assistant-referee-01.y","assistant-referee-01 Y","EXTERNS.H officials; refs[1].y","Native official Y position.","native-position","f32"],
+  ["officials.assistant-referee-01.z","assistant-referee-01 Z","EXTERNS.H officials; refs[1].z","Native official Z position.","native-position","f32"],
+  ["officials.assistant-referee-02.action","assistant-referee-02 Action","EXTERNS.H officials; refs[2].act","Native official action state.",null,"i32"],
+  ["officials.assistant-referee-02.animation","assistant-referee-02 Animation","EXTERNS.H officials; refs[2].anim","Native official animation identifier.",null,"f32"],
+  ["officials.assistant-referee-02.animation_frame","assistant-referee-02 Animation frame","EXTERNS.H officials; refs[2].frm","Native official animation frame.",null,"f32"],
+  ["officials.assistant-referee-02.animation_frame_step","assistant-referee-02 Animation frame step","EXTERNS.H officials; refs[2].fstep","Native official animation-frame increment per tick.",null,"f32"],
+  ["officials.assistant-referee-02.direction_x","assistant-referee-02 Direction X","EXTERNS.H officials; refs[2].dir_x","Native official X facing vector.",null,"f32"],
+  ["officials.assistant-referee-02.direction_y","assistant-referee-02 Direction Y","EXTERNS.H officials; refs[2].dir_y","Native official Y facing vector.",null,"f32"],
+  ["officials.assistant-referee-02.go","assistant-referee-02 Go","EXTERNS.H officials; refs[2].go","Native official movement gate.",null,"i32"],
+  ["officials.assistant-referee-02.goto_x","assistant-referee-02 Goto X","EXTERNS.H officials; refs[2].goto_x","Native official target X position.","native-position","f32"],
+  ["officials.assistant-referee-02.goto_y","assistant-referee-02 Goto Y","EXTERNS.H officials; refs[2].goto_y","Native official target Y position.","native-position","f32"],
+  ["officials.assistant-referee-02.new_animation","assistant-referee-02 New animation","EXTERNS.H officials; refs[2].newanim","Native official animation-change flag.",null,"u8"],
+  ["officials.assistant-referee-02.target","assistant-referee-02 Target","EXTERNS.H officials; refs[2].target","Native official player target.",null,"i16"],
+  ["officials.assistant-referee-02.x","assistant-referee-02 X","EXTERNS.H officials; refs[2].x","Native official X position.","native-position","f32"],
+  ["officials.assistant-referee-02.y","assistant-referee-02 Y","EXTERNS.H officials; refs[2].y","Native official Y position.","native-position","f32"],
+  ["officials.assistant-referee-02.z","assistant-referee-02 Z","EXTERNS.H officials; refs[2].z","Native official Z position.","native-position","f32"],
+  ["officials.referee-00.action","referee-00 Action","EXTERNS.H officials; refs[0].act","Native official action state.",null,"i32"],
+  ["officials.referee-00.animation","referee-00 Animation","EXTERNS.H officials; refs[0].anim","Native official animation identifier.",null,"f32"],
+  ["officials.referee-00.animation_frame","referee-00 Animation frame","EXTERNS.H officials; refs[0].frm","Native official animation frame.",null,"f32"],
+  ["officials.referee-00.animation_frame_step","referee-00 Animation frame step","EXTERNS.H officials; refs[0].fstep","Native official animation-frame increment per tick.",null,"f32"],
+  ["officials.referee-00.direction_x","referee-00 Direction X","EXTERNS.H officials; refs[0].dir_x","Native official X facing vector.",null,"f32"],
+  ["officials.referee-00.direction_y","referee-00 Direction Y","EXTERNS.H officials; refs[0].dir_y","Native official Y facing vector.",null,"f32"],
+  ["officials.referee-00.go","referee-00 Go","EXTERNS.H officials; refs[0].go","Native official movement gate.",null,"i32"],
+  ["officials.referee-00.goto_x","referee-00 Goto X","EXTERNS.H officials; refs[0].goto_x","Native official target X position.","native-position","f32"],
+  ["officials.referee-00.goto_y","referee-00 Goto Y","EXTERNS.H officials; refs[0].goto_y","Native official target Y position.","native-position","f32"],
+  ["officials.referee-00.new_animation","referee-00 New animation","EXTERNS.H officials; refs[0].newanim","Native official animation-change flag.",null,"u8"],
+  ["officials.referee-00.target","referee-00 Target","EXTERNS.H officials; refs[0].target","Native official player target.",null,"i16"],
+  ["officials.referee-00.x","referee-00 X","EXTERNS.H officials; refs[0].x","Native official X position.","native-position","f32"],
+  ["officials.referee-00.y","referee-00 Y","EXTERNS.H officials; refs[0].y","Native official Y position.","native-position","f32"],
+  ["officials.referee-00.z","referee-00 Z","EXTERNS.H officials; refs[0].z","Native official Z position.","native-position","f32"],
   ["players.argentina-player-01.action","argentina-player-01 Action","ANDYDEFS.H match_player.tm_act; teams[11]","Native player action.",null,"i16"],
   ["players.argentina-player-01.animation","argentina-player-01 Animation","ANDYDEFS.H match_player.tm_anim; teams[11]","Native animation identifier.",null,"u16"],
   ["players.argentina-player-01.animation_frame","argentina-player-01 Animation frame","ANDYDEFS.H match_player.tm_frm; teams[11]","Native animation frame.",null,"f32"],

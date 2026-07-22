@@ -24,10 +24,11 @@ import {
 } from "./nativeGameplayProfile.mjs";
 import {
   assertCssoccerOfficialState,
-  createCssoccerOpeningOfficialState,
-  projectCssoccerOpeningRefereeAction,
-  stepCssoccerOpeningOfficialState,
+  createCssoccerOfficialState,
+  projectCssoccerRefereeAction,
+  stepCssoccerOfficialState,
 } from "./officialState.mjs";
+import { CSSOCCER_RULE_SOURCE } from "./ruleState.mjs";
 import { createPossessionState } from "./possessionState.mjs";
 
 const FIXTURE_ID = "spain-argentina-full-match";
@@ -40,7 +41,7 @@ export const CSSOCCER_OPENING_KICKOFF_SOURCE_ORDER = deepFreeze([
   "match_rules: observe prior player/official state and resolve await_set_kick",
   "process_flags: consume the current source player_stamina tm_rate projection",
   "process_teams: advance the 22 kickoff players only while positioning continues",
-  "process_offs: advance the opening referee only while positioning continues",
+  "process_offs: advance the referee and both assistants exactly once",
 ]);
 
 export const CSSOCCER_OPENING_KICKOFF_COORDINATOR_SOURCE = deepFreeze({
@@ -58,10 +59,10 @@ export const CSSOCCER_OPENING_KICKOFF_COORDINATOR_SOURCE = deepFreeze({
   ],
   sourceOrder: CSSOCCER_OPENING_KICKOFF_SOURCE_ORDER,
   qualification: {
-    officialState: "source-derived-native-refs-uncaptured",
+    officialState: "source-derived-complete-native-refs-captured",
     endToEndNativeExact: false,
     reason:
-      "The coordinator composes accepted reducers, but official refs are uncaptured and player motion has a bounded native-exact frontier.",
+      "The coordinator composes the complete official reducer; composite player motion retains a bounded native-exact frontier.",
   },
   supportedSubset: [
     "opening and post-swap native-team-A centre positioning",
@@ -144,7 +145,7 @@ export function createCssoccerOpeningKickoffCoordinator(input = {}) {
   requireHeldCentreBall(ball, kickoff, ball.ball.tick);
   requireFreePossession(possession, kickoff.teamBySlot);
 
-  const official = createCssoccerOpeningOfficialState({
+  const official = createCssoccerOfficialState({
     centreOwner: kickoff.owner.nativeTeamSlot,
     nativeGameplayProfile: profile,
   });
@@ -264,9 +265,15 @@ export function stepCssoccerOpeningKickoffCoordinator(state, options = {}) {
     current.kickoffMotion,
     options.teamRates === undefined ? {} : { teamRates: options.teamRates },
   );
-  const official = current.official.status === "ready"
-    ? current.official
-    : stepCssoccerOpeningOfficialState(current.official);
+  const official = stepCssoccerOfficialState(
+    current.official,
+    openingOfficialFrame({
+      ball: ballStep.state,
+      kickoff,
+      kickoffMotion,
+      tick: current.official.tick + 1,
+    }),
+  );
   const milestones = clone(current.milestones);
   if (milestones.playersSettledTick === null && kickoffMotion.status === "settled") {
     milestones.playersSettledTick = tick;
@@ -391,8 +398,33 @@ function kickoffObservations(motion) {
   }));
 }
 
+function openingOfficialFrame({ ball, kickoff, kickoffMotion, tick }) {
+  return {
+    tick,
+    ball: {
+      x: ball.ball.position.x,
+      y: ball.ball.position.y,
+    },
+    matchMode: kickoff.rules.matchMode,
+    lastTouch: 0,
+    deadBallCount: kickoff.rules.deadBallCount,
+    refereeAccuracy: CSSOCCER_RULE_SOURCE.fixtureReferee.accuracy,
+    kickTaker: kickoff.owner.takerNativePlayerNumber,
+    players: kickoffMotion.players.map((player) => ({
+      id: player.id,
+      nativePlayerNumber: player.nativePlayerNumber,
+      active: Number(player.active),
+      action: player.action,
+      position: {
+        x: player.position.x,
+        y: player.position.y,
+      },
+    })),
+  };
+}
+
 function kickoffReadinessAction(state) {
-  const actual = projectCssoccerOpeningRefereeAction(state.official);
+  const actual = projectCssoccerRefereeAction(state.official);
   return actual === state.kickoff.sourceProfile.officialActionIds.ready
     ? state.kickoff.sourceProfile.officialActionIds.ready
     : state.kickoff.sourceProfile.officialActionIds.positioning;

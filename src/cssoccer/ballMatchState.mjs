@@ -176,6 +176,18 @@ export function stepBallMatchState(
       type: "ball-post-goal-countdown",
       outOfPlay: ball.outOfPlay,
     });
+  } else if (
+    outcome?.kind === "goal"
+    && goalCountdownComplete
+    && ball.outOfPlay === 1
+  ) {
+    // BALL.CPP respots only when this tick's pre-decrement changes 1 to 0.
+    // Keep the typed goal ball intact until the later rules owner performs
+    // reset_ball/init_match_mode in the same logical tick.
+    events.push({
+      type: "ball-post-goal-respot-required",
+      outOfPlay: 0,
+    });
   }
 
   return matchResult(ball, limbo, outcome, events);

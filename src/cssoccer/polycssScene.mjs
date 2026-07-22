@@ -965,8 +965,8 @@ function assertExactOfficialAssets(value) {
   if (
     !isPlainObject(value)
     || value.schema !== "cssoccer-exact-actua-official-asset-runtime@1"
-    || value.index?.counts?.sequences !== 2
-    || value.index?.counts?.faceStates !== 19_584
+    || value.index?.counts?.sequences !== 11
+    || value.index?.counts?.faceStates !== 89_856
     || value.materials?.counts?.fixtureOfficials !== 3
     || value.materials?.geometryId !== value.index?.geometryId
     || value.materials?.topologySha256 !== value.index?.topologySha256

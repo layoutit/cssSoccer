@@ -25,7 +25,7 @@ import {
 } from "./nativeGameplayProfile.mjs";
 import {
   assertCssoccerOfficialState,
-  createCssoccerOpeningOfficialState,
+  createCssoccerOfficialState,
 } from "./officialState.mjs";
 import {
   assertCssoccerPlayerMotionState,
@@ -355,6 +355,7 @@ function createOpeningKickoffRuntime({ lifecycle, tactics, selectedCountry }) {
       action: source.action.value,
       directionMode: 0,
       faceDirection: 0,
+      goStep: false,
       position: { x: source.x.value, y: source.y.value },
       facing: {
         x: source.xDisplacement.value,
@@ -372,7 +373,7 @@ function createOpeningKickoffRuntime({ lifecycle, tactics, selectedCountry }) {
     players,
     selectedCountry,
   });
-  const officials = createCssoccerOpeningOfficialState({
+  const officials = createCssoccerOfficialState({
     centreOwner: kickoff.owner.nativeTeamSlot,
     nativeGameplayProfile: CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
   });

@@ -243,7 +243,7 @@ function assertAssetRuntime(value) {
     && value.materials?.counts?.fixturePlayers === 22;
   const official = value?.schema === "cssoccer-exact-actua-official-asset-runtime@1"
     && value.index?.counts?.facesPerSample === 12
-    && value.index?.counts?.faceStates === 19_584
+    && value.index?.counts?.faceStates === 89_856
     && value.materials?.counts?.fixtureOfficials === 3;
   if (!player && !official) {
     throw new TypeError("Exact Actua actor mount requires a checked one-basis asset runtime.");

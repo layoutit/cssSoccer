@@ -406,6 +406,7 @@ function requireInitialPlayers(value, targets, context) {
       "directionMode",
       "faceDirection",
       "facing",
+      "goStep",
       "id",
       "nativePlayerNumber",
       "position",
@@ -426,6 +427,7 @@ function requireInitialPlayers(value, targets, context) {
     requireSupportedAction(input.action, context.actionIds, input.id);
     requireIntegerRange(input.faceDirection, 0, 7, `${input.id} faceDirection`);
     requireSupportedDirectionMode(input.directionMode, input.id);
+    requireBoolean(input.goStep, `${input.id} goStep`);
     const position = requireF32Point(input.position, `${input.id} position`);
     const facing = requireF32Point(input.facing, `${input.id} facing`);
     requireFacing(facing, input.id);
@@ -455,7 +457,7 @@ function requireInitialPlayers(value, targets, context) {
       targetOffset,
       targetDistance,
       goCount: 0,
-      goStep: false,
+      goStep: input.goStep,
       goStop: false,
       goDisplacement: zeroPoint(),
       lastPlan: null,

@@ -352,8 +352,8 @@ export function assertPreparedExactOfficials(value) {
   if (
     value?.schema !== "cssoccer-exact-actua-official-asset-runtime@1"
     || value.index?.schema !== "cssoccer-exact-actua-official-animation-index@1"
-    || value.index?.counts?.samples !== 1_632
-    || value.index?.counts?.faceStates !== 19_584
+    || value.index?.counts?.samples !== 7_488
+    || value.index?.counts?.faceStates !== 89_856
     || value.materials?.schema !== "cssoccer-exact-actua-official-materials@1"
     || value.materials?.counts?.fixtureOfficials !== 3
     || value.materials?.geometryId !== value.index?.geometryId

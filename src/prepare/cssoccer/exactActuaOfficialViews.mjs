@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { CSSOCCER_ANIMATION_TABLE_SCHEMA } from "./animationTable.mjs";
 import {
   CSSOCCER_EXACT_ACTUA_OFFICIAL_SOURCE_SCHEMA,
+  resolveCssoccerExactActuaOfficialFrames,
 } from "./exactActuaOfficialSource.mjs";
 import {
   CSSOCCER_EXACT_ACTUA_PLAYER_HIDDEN_MATRIX,
@@ -15,7 +16,8 @@ export const CSSOCCER_EXACT_ACTUA_OFFICIAL_VIEWS_SCHEMA =
   "cssoccer-exact-actua-official-views@1";
 
 const FACE_COUNT = 12;
-const POSE_COUNT = 68;
+const SEQUENCE_COUNT = 11;
+const POSE_COUNT = 312;
 const YAW_COUNT = 24;
 const SAMPLE_COUNT = POSE_COUNT * YAW_COUNT;
 const FACE_STATE_COUNT = SAMPLE_COUNT * FACE_COUNT;
@@ -56,7 +58,7 @@ export function prepareCssoccerExactActuaOfficialViews({
     topologySha256: officialSource.geometry.topologySha256,
     officialSourceContractSha256: officialSource.contractSha256,
     counts: {
-      sequences: 2,
+      sequences: SEQUENCE_COUNT,
       poseOccurrences: POSE_COUNT,
       yawBins: YAW_COUNT,
       samples,
@@ -93,10 +95,13 @@ function* iterateSamples(context) {
   let preparedPoseIndex = 0;
   let sampleIndex = 0;
   for (const [sequenceIndex, animation] of context.officialSource.animations.entries()) {
-    const slot = context.animationTable.slots[animation.slotId];
+    const frames = resolveCssoccerExactActuaOfficialFrames(
+      context.animationTable,
+      animation.slotId,
+    );
     for (let localFrameIndex = 0; localFrameIndex < animation.frameCount; localFrameIndex += 1) {
-      const frame = slot.posePayload.frames[localFrameIndex];
-      if (frame?.sha256 !== animation.frameSha256[localFrameIndex]) {
+      const frame = frames[localFrameIndex];
+      if (frame?.exactFloat32PoseSha256 !== animation.frameSha256[localFrameIndex]) {
         throw new Error(`Exact official slot ${animation.slotId} frame ${localFrameIndex} changed.`);
       }
       for (let yawIndex = 0; yawIndex < YAW_COUNT; yawIndex += 1) {
@@ -109,7 +114,7 @@ function* iterateSamples(context) {
           slotId: animation.slotId,
           localFrameIndex,
           yawIndex,
-          expectedPoseSha256: frame.sha256,
+          expectedPoseSha256: frame.exactFloat32PoseSha256,
         });
         sampleIndex += 1;
       }
@@ -131,7 +136,7 @@ function prepareContext({ animationTable, officialSource }) {
     || officialSource.status !== "ready-exact-referee-and-two-assistants"
     || officialSource.geometry?.pointCount !== 28
     || officialSource.geometry?.faceCount !== FACE_COUNT
-    || officialSource.animations?.length !== 2
+    || officialSource.animations?.length !== SEQUENCE_COUNT
     || officialSource.counts?.poseOccurrences !== POSE_COUNT
   ) throw new Error("Exact official views require the complete source contract.");
   const topology = {

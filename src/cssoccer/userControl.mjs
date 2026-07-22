@@ -51,7 +51,7 @@ export const CSSOCCER_USER_CONTROL_SOURCE = deepFreeze({
   fixture: {
     id: FIXTURE_ID,
     choices: ["spain", "argentina"],
-    retainedStateSha256: "eb858bed9ad9d36670e97a98ea49235d8009246ded16e00dcb54c5dc1aef2fdd",
+    retainedStateSha256: "c04ec365e835712807f0a6b5fe069e3e3a61e613f035e7624f5dfa2db2f18495",
   },
   burst: {
     initial: 0,

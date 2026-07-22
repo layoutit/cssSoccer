@@ -25,6 +25,7 @@ import {
   createCssoccerOpeningKickoffCoordinator,
   stepCssoccerOpeningKickoffCoordinator,
 } from "./openingKickoffCoordinator.mjs";
+import { projectCssoccerOfficialNativeFields } from "./officialState.mjs";
 import {
   CSSOCCER_PLAYER_ANIMATION_PROFILE_SCHEMA,
   assertCssoccerPlayerAnimationState,
@@ -78,6 +79,7 @@ export const CSSOCCER_OPENING_MATCH_QUALIFICATION = deepFreeze({
     "held centre ball",
     "kickoff phase",
     "free possession",
+    "three dynamic match officials",
     "22-player kickoff motion",
     "22-player action/animation from tick 11",
   ],
@@ -87,8 +89,8 @@ export const CSSOCCER_OPENING_MATCH_QUALIFICATION = deepFreeze({
   sourceDerivedDomains: [
     {
       domain: "officials",
-      classification: "source-derived-native-refs-uncaptured",
-      capturedRefs: false,
+      classification: "source-derived-complete-native-refs-captured",
+      capturedRefs: true,
       nativeExact: false,
     },
   ],
@@ -238,7 +240,7 @@ export function stepCssoccerOpeningMatchState(state) {
 
 /**
  * Project the accepted canonical-capture fields owned by this composition.
- * refs[] and raw-only stamina bytes are deliberately absent.
+ * Raw-only stamina bytes are deliberately absent.
  */
 export function projectCssoccerOpeningMatchCapturedFields(state) {
   const current = assertCssoccerOpeningMatchState(state);
@@ -246,6 +248,7 @@ export function projectCssoccerOpeningMatchCapturedFields(state) {
   fields.push(...projectBallNativeFields(current.coordinator.ball.ball));
   fields.push(...projectPossessionNativeFields(current.coordinator.possession));
   fields.push(...projectCssoccerKickoffNativePhaseFields(current.coordinator.kickoff));
+  fields.push(...projectCssoccerOfficialNativeFields(current.coordinator.official));
   fields.push(...projectMotionFields(current.coordinator.kickoffMotion));
   if (current.animation !== null) {
     fields.push(...projectCssoccerPlayerAnimationNativeFields(current.animation));
@@ -262,7 +265,7 @@ export function projectCssoccerOpeningMatchCapturedFields(state) {
   return deepFreeze(mergeCapturedFields(fields, current.tick));
 }
 
-/** Return the raw-native stamina domain which is not in the 412-field JSONL contract. */
+/** Return the raw-native stamina domain which is not in the 454-field JSONL contract. */
 export function projectCssoccerOpeningMatchStaminaFields(state) {
   return projectCssoccerPlayerStaminaNativeFields(
     assertCssoccerOpeningMatchState(state).stamina,

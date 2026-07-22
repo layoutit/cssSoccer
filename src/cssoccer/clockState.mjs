@@ -79,7 +79,9 @@ export function stepCssoccerClockState(state, options = {}) {
   const tick = current.tick + 1;
   if (current.phase === "halftime-whistle" || current.phase === "halftime-transition") {
     const halftimeTransitionTicks = current.halftimeTransitionTicks + 1;
-    if (halftimeTransitionTicks >= CSSOCCER_HALFTIME_HOLD_TICKS) {
+    // RULES.CPP await_swap tests `!(timeout--)`: timeout=300 survives the
+    // visit that changes 1 to 0 and swaps on the following visit.
+    if (halftimeTransitionTicks > CSSOCCER_HALFTIME_HOLD_TICKS) {
       const next = assemble({
         ...current,
         tick,

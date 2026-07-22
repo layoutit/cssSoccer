@@ -3,6 +3,7 @@ import {
   CSSOCCER_NATIVE_FIELDS,
 } from "./nativeFieldContract.mjs";
 import { sourceFacingDirection } from "./motionState.mjs";
+import { projectCssoccerOfficialNativeFields } from "./officialState.mjs";
 import { CSSOCCER_PRESENTATION_CAMERA_PRESET } from "./polycssScene.mjs";
 
 export const CSSOCCER_FREE_PLAY_PROJECTION_SCHEMA =
@@ -32,6 +33,7 @@ export function projectCssoccerFreePlaySnapshot({
   projectCameraFields(values, camera);
   projectClock(values, match);
   projectLifecycle(values, match);
+  projectOfficials(values, match);
   projectPlayers(values, match);
   projectRng(values, match);
   projectRules(values, match);
@@ -53,6 +55,12 @@ export function projectCssoccerFreePlaySnapshot({
     fieldContractSha256: CSSOCCER_NATIVE_FIELD_CONTRACT_SHA256,
     values: projected,
   });
+}
+
+function projectOfficials(output, state) {
+  for (const field of projectCssoccerOfficialNativeFields(state.officials)) {
+    set(output, field.fieldId, field.value);
+  }
 }
 
 function projectBall(output, state) {
@@ -128,15 +136,27 @@ function projectClock(output, state) {
 }
 
 function projectLifecycle(output, state) {
+  const teamA = state.teams.find((team) => team.nativeTeamSlot === "A");
+  const teamB = state.teams.find((team) => team.nativeTeamSlot === "B");
+  if (!teamA || !teamB) {
+    throw new Error("Free-play projection requires one team in each native slot.");
+  }
   set(output, "lifecycle.end_game", state.clock.terminal ? 1 : 0);
-  set(output, "lifecycle.kick_off", state.kickoff.owner.nativeTeamSlot === "A" ? 1 : 0);
-  // FOOTBALL.CPP's `kickoff` lifecycle global is not centre readiness; the
-  // opening restart keeps it clear before, during, and after the centre pass.
-  set(output, "lifecycle.kickoff", 0);
+  // FOOTBALL.CPP initialise_vars sets kick_off once; centre ownership is held
+  // by match_mode/centre takers and never rewrites this lifecycle byte.
+  set(output, "lifecycle.kick_off", 1);
+  // FOOTBALL.CPP's `kickoff` lifecycle global is not centre readiness. It is
+  // raised by watch_match_time for the halftime SWAP_ENDS hold. await_set_kick
+  // clears it in the same branch that starts the second-half clock, so it must
+  // remain raised through the swapped centre-positioning state.
+  set(output, "lifecycle.kickoff", (
+    state.kickoff.restartKind === "halftime"
+    && !state.clock.running
+  ) ? 1 : 0);
   set(output, "lifecycle.match_factor_fixed", 0);
-  set(output, "lifecycle.team_a", COUNTRY_INDEX[state.config.teams.home]);
+  set(output, "lifecycle.team_a", COUNTRY_INDEX[teamA.country]);
   set(output, "lifecycle.team_a_on", 1);
-  set(output, "lifecycle.team_b", COUNTRY_INDEX[state.config.teams.away]);
+  set(output, "lifecycle.team_b", COUNTRY_INDEX[teamB.country]);
   set(output, "lifecycle.team_b_on", 1);
   set(output, "lifecycle.watch", 1);
 }
@@ -150,7 +170,8 @@ function projectPlayers(output, state) {
     if (playerPossession === undefined) {
       throw new Error(`Free-play projection lost possession state for ${player.id}.`);
     }
-    const prefix = `players.${player.id}.`;
+    const nativeStableId = nativePlayerSlotStableId(player, state.config.teams);
+    const prefix = `players.${nativeStableId}.`;
     const action = player.action.action.value;
     const selected = state.control.activePlayerId === player.id;
     set(output, `${prefix}action`, action);
@@ -158,11 +179,18 @@ function projectPlayers(output, state) {
     set(output, `${prefix}animation_frame`, player.animation.frame);
     set(output, `${prefix}ball_state`, player.ballState);
     set(output, `${prefix}control`, selected ? 1 : 0);
-    set(output, `${prefix}face_direction`, sourceFacingDirection(player.facing));
+    // A newly installed fall changes tm_xdis/tm_ydis after this visit's
+    // process_dir slot. Native therefore retains the previous discrete
+    // face_dir for the publication tick and catches up on the next tick.
+    const faceDirection = player.liveContact?.phase === "fall"
+      && player.liveContact.startTick === state.tick
+      ? sourceFacingDirection(player.previousFacing)
+      : sourceFacingDirection(player.facing);
+    set(output, `${prefix}face_direction`, faceDirection);
     set(output, `${prefix}native_player`, player.nativePlayerNumber);
     set(output, `${prefix}on`, player.active ? 1 : 0);
     set(output, `${prefix}possession`, playerPossession);
-    set(output, `${prefix}stable_id`, player.id);
+    set(output, `${prefix}stable_id`, nativeStableId);
     set(output, `${prefix}x`, player.position.x);
     set(output, `${prefix}x_displacement`, player.facing.x);
     set(output, `${prefix}y`, player.position.y);
@@ -170,6 +198,16 @@ function projectPlayers(output, state) {
     set(output, `${prefix}z`, player.position.z);
     set(output, `${prefix}z_displacement`, player.velocity.z);
   }
+}
+
+function nativePlayerSlotStableId(player, teams) {
+  const runtimeIndex = player.nativeRuntimeIndex;
+  if (!Number.isInteger(runtimeIndex) || runtimeIndex < 0 || runtimeIndex >= 22) {
+    throw new Error(`Free-play projection received invalid native player slot ${runtimeIndex}.`);
+  }
+  const country = runtimeIndex < 11 ? teams.home : teams.away;
+  const ordinal = runtimeIndex % 11 + 1;
+  return `${country}-player-${String(ordinal).padStart(2, "0")}`;
 }
 
 function projectRng(output, state) {
@@ -189,8 +227,8 @@ function projectRules(output, state) {
 }
 
 function projectScore(output, state) {
-  set(output, "score.goal_scorer", 0);
-  set(output, "score.just_scored", 0);
+  set(output, "score.goal_scorer", state.goal.lastGoalScorerNative);
+  set(output, "score.just_scored", state.goal.justScored);
   set(output, "score.team_a", state.score.goals[state.config.teams.home]);
   set(output, "score.team_b", state.score.goals[state.config.teams.away]);
 }

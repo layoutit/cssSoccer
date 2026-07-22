@@ -232,7 +232,7 @@ async function loadRetainedContext({ evidenceRoot, preparedRoot }) {
 async function loadRetainedDifferential({ differentialRoot, native, referenceSha256 }) {
   const manifestPath = join(differentialRoot, "current.json");
   const manifest = await readJson(manifestPath);
-  if (manifest?.schema !== "cssoccer-differential-testing-bundle@1") {
+  if (manifest?.schema !== "burnlist-differential-testing-bundle@1") {
     throw new DifferentialFrontierError(
       "retained-differential-missing",
       "Current Differential Testing bundle is unavailable.",

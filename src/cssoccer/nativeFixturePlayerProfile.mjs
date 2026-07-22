@@ -2,7 +2,7 @@ export const CSSOCCER_NATIVE_FIXTURE_PLAYER_PROFILE_SCHEMA =
   "cssoccer-native-fixture-player-profile@1";
 
 export const CSSOCCER_NATIVE_FIXTURE_PLAYER_PROFILE_HASH =
-  "412e210fa430ea0c78474e26e71629cdfaf8bb9ac8360ee91e1edac8f67e3eec";
+  "877750ddca55bda60543c48e6a8bbf10596f75853070bb881b3e0f2471318c11";
 
 const ATTRIBUTE_KEYS = Object.freeze([
   "pace",
@@ -63,13 +63,13 @@ export const CSSOCCER_NATIVE_FIXTURE_PLAYER_PROFILE = deepFreeze({
   attributeValueType: "u8",
   bindings: {
     sourceRevision: "b40bd6d1e50e052030c5f0884fbe3deda7e9fa4b",
-    sourceDataSha256: "a8728b797e5164e1529c4150453735d7045ae1e90e7cba96338b3d1fac029492",
-    nativeBuildSha256: "5db9d52f4dec6e71d2a1df1009c803967455a3683b1c87e271669165ef43a3e3",
-    nativeScenarioSha256: "5fc29151faf3ff344c37562b42148322ae0b976385cd8615fcccfcf8b529eb81",
-    nativeFieldContractSha256: "6d21511c288f9553628079ffeaa4a6538d4eb1a8e4b36acb4f1d0c44de42a76e",
-    nativeRawSha256: "1b46cb63a708d6af237d3af91d6c5846bc456e93ef6b5d731a1d36cbcaffabdb",
-    nativeStateSha256: "eb858bed9ad9d36670e97a98ea49235d8009246ded16e00dcb54c5dc1aef2fdd",
-    nativeGameplayProfileHash: "9961b831e5dc4d8efc602cb00b8c2fd506010d9072f4903eeb5c55e498dd8a82",
+    sourceDataSha256: "22660792cd80703074aeefec4866653bca8cbe02220be6c36afe62968af260be",
+    nativeBuildSha256: "cd06f847e2376951791a68a57fed3c38a13496e801c3dc66e98aa1d9abf9c544",
+    nativeScenarioSha256: "990b15c0109edf8d700cc135fbec29f89c171ce263f04a7aeb257000b7a9dbca",
+    nativeFieldContractSha256: "5f9b01bee40e319b611c4f948fadbfd5f7f9a08868bd658c1392dc54abeeab98",
+    nativeRawSha256: "db0cf40c5f3c455d184a29a1bc25c3d90c5fe3eac69d28e82327ab5bf73029f0",
+    nativeStateSha256: "c04ec365e835712807f0a6b5fe069e3e3a61e613f035e7624f5dfa2db2f18495",
+    nativeGameplayProfileHash: "ed59a457fc913050f4fe5ce75c4609951dc848773ae79dcf1c81b18b8f132ba7",
   },
   players: PLAYERS,
   profileHash: CSSOCCER_NATIVE_FIXTURE_PLAYER_PROFILE_HASH,

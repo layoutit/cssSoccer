@@ -133,7 +133,7 @@
     "rules": {
       "competition": { "id": 0, "symbol": "FRIENDLY" },
       "simulation": { "id": 1, "symbol": "SIMULATION" },
-      "offside": false,
+      "offside": true,
       "wind": false,
       "substitutes": false,
       "bookings": true,
@@ -143,7 +143,7 @@
       "extraTime": false,
       "penalties": false
     },
-    "rulesSha256": "666827a162f23d43dd8d9fc43b2b838a63fc05b31bce2c5aaa2f35c6012f8613",
+    "rulesSha256": "123e6a724d927836057eca5e3d30af89522975e9b8c7e19c48d547f455c3f3f5",
     "timing": {
       "tickRateHz": 20,
       "timestepSeconds": 0.05,
@@ -227,9 +227,25 @@
           "offset": 460485,
           "expected": "833d38130400000f8468000000",
           "replacement": "c7055c27040001010100909090"
+        },
+        {
+          "name": "full-game-offside-non-practice-branch",
+          "sourceOwner": "FOOT.CPP EUROmatch_info.offside=TRUE; FOOTBALL.CPP match non-PRACTICE rule gate",
+          "sourceCodeOffset": 31466,
+          "offset": 431622,
+          "expected": "75",
+          "replacement": "74"
+        },
+        {
+          "name": "full-game-offside-non-practice-value",
+          "sourceOwner": "FOOT.CPP EUROmatch_info.offside=TRUE; FOOTBALL.CPP match non-PRACTICE rule gate",
+          "sourceCodeOffset": 31474,
+          "offset": 431630,
+          "expected": "00",
+          "replacement": "01"
         }
       ],
-      "executablePatchSetSha256": "f391d0f1372edce30b7aa2034f096b7fa7b4fa3d7051b29e65e6017bdbf666c4",
+      "executablePatchSetSha256": "4844acd4604f44b6baacf5ca759d193062a5398d9556cb6ab55580a36bb4f13d",
       "framesEveryTicks": 100,
       "inputAdapter": {
         "schema": "cssoccer-native-set-piece-input-adapter@1",
@@ -246,7 +262,7 @@
         "sourcePatch": ".local/cssoccer/tools/dosbox-x-source/src/cpu/core_normal.cpp",
         "sourcePatchSha256": "4f1026bc431135f640de2076ce7d4562ec17a3f9262fcae9185c177652d00c6c",
         "binary": ".local/cssoccer/tools/dosbox-x-source/src/dosbox-x",
-        "binarySha256": "7678e4c97ad8efdfbe0038e29a6595e0ed91581e92109071d511788bffaffabe",
+        "binarySha256": "5fb03fa176738915d556ca6e57954b173dccbefbef6eaf8b03240ce14f23749d",
         "sourceMapSha256": "dee5c35320e3b538f880c698ecfc2ad88bd565cb298da216a5b8c654b644d88c",
         "matchPlayerStructSha256": "13d13dca2910a7685be7603e25bc9fa936253f5aa72f73eef3f54e851fbbce34",
         "userInfoStructSha256": "27a19d2c1c2cbe96eaa8c89fbf317091305991c30fb03bc7dc05b23042aa90c6"
@@ -326,7 +342,7 @@
         "teamUsersMask": 1,
         "patches": [],
         "expectedExecutableSha256": "49fdee507727cf15dbcd0aa4aa1aaab27acdc75ee3fab75aac5f0d3b64daa85d",
-        "expectedFullMatchExecutableSha256": "de32ccc187ea10c4789a9257d563e3402948f46b1ed154bf77a010e6f4e75401"
+        "expectedFullMatchExecutableSha256": "0c49a30e3996e8428e1b49a8825f1daae3d746f55aac049843ae5355eb74eb56"
       },
       "argentina-control": {
         "country": "argentina",
@@ -341,7 +357,7 @@
           }
         ],
         "expectedExecutableSha256": "9f7f37062957bfcb9ab3f84adc84714c981c879314dd18ea110d79e54a26e775",
-        "expectedFullMatchExecutableSha256": "112d06d258857fc8506d2ad1653052890b07d27af45f159106fd7b99069d9d9d"
+        "expectedFullMatchExecutableSha256": "0c997aca2564fe0cafbbefbc58d69a690ae2acb35aad6e169b9a1b226b6ff14b"
       }
     },
     "launch": {

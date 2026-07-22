@@ -50,14 +50,14 @@ const RETAINED_NATIVE_ANIMATION_IDS = Object.freeze([
 ]);
 
 const RETAINED_NATIVE_EVIDENCE = Object.freeze({
-  stateArtifactSha256: "eb858bed9ad9d36670e97a98ea49235d8009246ded16e00dcb54c5dc1aef2fdd",
-  streamId: "native-5fc29151faf3ff34-argentina-control",
-  scenarioId: "5fc29151faf3ff34",
-  scenarioSha256: "5fc29151faf3ff344c37562b42148322ae0b976385cd8615fcccfcf8b529eb81",
-  profileSha256: "ea2df6e20494efbaa95e3d292db2a25969d8dc0c255d0d7c2c6393f8a5713acc",
+  stateArtifactSha256: "c04ec365e835712807f0a6b5fe069e3e3a61e613f035e7624f5dfa2db2f18495",
+  streamId: "native-990b15c0109edf8d-argentina-control",
+  scenarioId: "990b15c0109edf8d",
+  scenarioSha256: "990b15c0109edf8d700cc135fbec29f89c171ce263f04a7aeb257000b7a9dbca",
+  profileSha256: "8c1235c635de6d5601aaa3f8436815a765d198cf2195be879efccaee9dcf188f",
   sourceSha256: "136874496399a7acb712b28b6effb53f689c84ca373fb42af67ebf20f3b8cc45",
-  buildSha256: "5db9d52f4dec6e71d2a1df1009c803967455a3683b1c87e271669165ef43a3e3",
-  contractSha256: "6d21511c288f9553628079ffeaa4a6538d4eb1a8e4b36acb4f1d0c44de42a76e",
+  buildSha256: "cd06f847e2376951791a68a57fed3c38a13496e801c3dc66e98aa1d9abf9c544",
+  contractSha256: "5f9b01bee40e319b611c4f948fadbfd5f7f9a08868bd658c1392dc54abeeab98",
   tickRange: Object.freeze({ start: 0, count: 2725 }),
 });
 

@@ -85,11 +85,11 @@ export function parseArguments(argv, env = process.env) {
 export function readDifferentialTestingData(path) {
   const resolved = resolve(path);
   const value = JSON.parse(readFileSync(resolved, "utf8"));
-  if (value?.schema === "cssoccer-differential-testing-data@1") return value;
-  if (value?.schema === "cssoccer-differential-testing-scenario@1" && value.data?.schema === "cssoccer-differential-testing-data@1") {
+  if (value?.schema === "burnlist-differential-testing-data@1") return value;
+  if (value?.schema === "burnlist-differential-testing-scenario@1" && value.data?.schema === "burnlist-differential-testing-data@1") {
     return Array.isArray(value.data.fields) ? value.data : materializeDifferentialFields(value, dirname(resolved));
   }
-  if (value?.schema === "cssoccer-differential-testing-bundle@1") {
+  if (value?.schema === "burnlist-differential-testing-bundle@1") {
     const scenarioId = value.scenarioCatalog?.selectedScenarioId;
     const binding = value.scenarioBindings?.find((entry) => entry.scenarioId === scenarioId);
     if (!binding?.path) throw new Error("Differential Testing bundle does not bind its selected scenario.");
@@ -99,7 +99,7 @@ export function readDifferentialTestingData(path) {
     const scenarioBytes = readFileSync(scenarioPath);
     if (binding.size !== scenarioBytes.length || binding.sha256 !== sha256Hex(scenarioBytes)) throw new Error("Differential Testing scenario binding does not match its bytes.");
     const scenario = JSON.parse(scenarioBytes.toString("utf8"));
-    if (scenario?.schema !== "cssoccer-differential-testing-scenario@1" || scenario.data?.schema !== "cssoccer-differential-testing-data@1") throw new Error("Differential Testing scenario bundle is invalid.");
+    if (scenario?.schema !== "burnlist-differential-testing-scenario@1" || scenario.data?.schema !== "burnlist-differential-testing-data@1") throw new Error("Differential Testing scenario bundle is invalid.");
     return materializeDifferentialFields(scenario, dirname(scenarioPath));
   }
   throw new Error("Expected normalized Differential Testing data, scenario data, or bundle manifest.");
@@ -118,7 +118,7 @@ function materializeDifferentialFields(scenario, scenarioRoot) {
     const recordBytes = bytes.subarray(start, end);
     if (index.record.sha256 !== sha256Hex(recordBytes)) throw new Error(`Differential Testing field ${index.id} does not match its record hash.`);
     const record = JSON.parse(recordBytes.toString("utf8"));
-    if (record?.schema !== "cssoccer-differential-testing-field-record@1" || record.scenarioId !== scenario.scenarioId || record.id !== index.id || record.ordinal !== index.ordinal || !record.field) throw new Error(`Differential Testing field ${index.id} record is invalid.`);
+    if (record?.schema !== "burnlist-differential-testing-field-record@1" || record.scenarioId !== scenario.scenarioId || record.id !== index.id || record.ordinal !== index.ordinal || !record.field) throw new Error(`Differential Testing field ${index.id} record is invalid.`);
     return record.field;
   });
   return { ...scenario.data, fields };

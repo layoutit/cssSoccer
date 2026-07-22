@@ -44,7 +44,7 @@ export const CSSOCCER_ACTION_SOURCE = deepFreeze({
     },
   ],
   retained: {
-    stateSha256: "eb858bed9ad9d36670e97a98ea49235d8009246ded16e00dcb54c5dc1aef2fdd",
+    stateSha256: "c04ec365e835712807f0a6b5fe069e3e3a61e613f035e7624f5dfa2db2f18495",
     fieldValueType: "i16",
     actionIds: { ...CSSOCCER_NATIVE_ACTIONS },
     selectedArgentinaObserved: [0, 1, 15, 20],

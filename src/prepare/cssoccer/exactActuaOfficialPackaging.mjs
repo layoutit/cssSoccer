@@ -20,7 +20,8 @@ export const CSSOCCER_EXACT_ACTUA_OFFICIAL_CACHE_LIMIT = 6;
 
 const FACE_COUNT = 12;
 const YAW_COUNT = 24;
-const POSE_COUNT = 68;
+const SEQUENCE_COUNT = 11;
+const POSE_COUNT = 312;
 const SAMPLE_COUNT = POSE_COUNT * YAW_COUNT;
 const FACE_STATE_COUNT = SAMPLE_COUNT * FACE_COUNT;
 
@@ -135,7 +136,7 @@ export function prepareCssoccerExactActuaOfficialPackaging({
     };
   });
   if (
-    chunkMetadata.length !== 5
+    chunkMetadata.length !== 23
     || roundTripSamples !== SAMPLE_COUNT
     || roundTripFaceStates !== FACE_STATE_COUNT
   ) throw new Error("Exact official package coverage changed.");
@@ -147,7 +148,7 @@ export function prepareCssoccerExactActuaOfficialPackaging({
     sourceContractSha256: officialSource.contractSha256,
     viewContractSha256: viewContract.contractSha256,
     counts: {
-      sequences: 2,
+      sequences: SEQUENCE_COUNT,
       poseOccurrences: POSE_COUNT,
       yawBins: YAW_COUNT,
       samples: SAMPLE_COUNT,

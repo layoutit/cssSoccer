@@ -20,10 +20,8 @@ game.
 
 `penalties: false` in the pinned native fixture means no post-draw penalty
 shootout. In-match penalty kicks remain part of the live foul/restart rules.
-Full Match Alpha intentionally enables the source-backed offside reducer even
-though the pinned native demo fixture starts with its offside option disabled;
-that release rule has its own browser-state binding and is not presented as a
-native full-match exactness claim.
+The native golden binds the full-game source configuration with offside enabled,
+so the browser and native full-match fixture share the same live-offside rule.
 
 ## Explicitly excluded
 

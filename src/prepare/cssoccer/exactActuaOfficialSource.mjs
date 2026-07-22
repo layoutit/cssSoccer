@@ -23,7 +23,22 @@ const POINT_COUNT = 28;
 const TEXTURE_RECORD_BYTES = 32;
 const PAGE_SIZE = 256;
 const MODEL_IDS = Object.freeze(["player_fr", "player_fl"]);
-const SLOT_IDS = Object.freeze([73, 78]);
+export const CSSOCCER_EXACT_ACTUA_OFFICIAL_ANIMATIONS = deepFreeze([
+  { slotId: 64, symbol: "MC_TROTB", frameCount: 27 },
+  { slotId: 65, symbol: "MC_TROTH", frameCount: 27 },
+  { slotId: 66, symbol: "MC_TROTG", frameCount: 28 },
+  { slotId: 67, symbol: "MC_TROTC", frameCount: 28 },
+  { slotId: 68, symbol: "MC_TROTD", frameCount: 25 },
+  { slotId: 69, symbol: "MC_TROTF", frameCount: 25 },
+  { slotId: 70, symbol: "MC_TROTA", frameCount: 32 },
+  { slotId: 71, symbol: "MC_TROTE", frameCount: 26 },
+  { slotId: 72, symbol: "MC_RUN", frameCount: 26 },
+  { slotId: 73, symbol: "MC_JOG", frameCount: 29 },
+  { slotId: 78, symbol: "MC_STAND", frameCount: 39 },
+]);
+const SLOT_IDS = Object.freeze(
+  CSSOCCER_EXACT_ACTUA_OFFICIAL_ANIMATIONS.map(({ slotId }) => slotId),
+);
 const FACE_ROLES = Object.freeze([
   "head",
   "shirt-body",
@@ -214,25 +229,27 @@ export function prepareCssoccerExactActuaOfficialSource({
       opaquePixels,
     };
   });
-  const animations = SLOT_IDS.map((slotId) => {
+  const animations = CSSOCCER_EXACT_ACTUA_OFFICIAL_ANIMATIONS.map((expected) => {
+    const { slotId } = expected;
     const slot = animationTable.slots[slotId];
+    const declaration = slot?.declarations?.find(({ symbol }) => symbol === expected.symbol);
+    const frames = resolveCssoccerExactActuaOfficialFrames(animationTable, slotId);
     if (
       slot?.id !== slotId
+      || declaration?.id !== slotId
       || !Number.isSafeInteger(slot.resolvedFrameCount)
-      || slot.resolvedFrameCount <= 0
-      || slot.posePayload?.frames?.length !== slot.resolvedFrameCount
+      || slot.resolvedFrameCount !== expected.frameCount
+      || frames.length !== slot.resolvedFrameCount
     ) throw new Error(`Exact official animation slot ${slotId} is unavailable.`);
     return {
       slotId,
-      symbol: slot.symbol,
-      sourceSlotId: slot.posePayload.sourceSlotId,
+      symbol: expected.symbol,
+      sourceSlotId: frames[0].sourceSlotId,
       frameCount: slot.resolvedFrameCount,
-      frameSha256: slot.posePayload.frames.map(({ sha256: frameSha256 }) => frameSha256),
+      frameSha256: frames.map(({ exactFloat32PoseSha256 }) => exactFloat32PoseSha256),
+      sourceFrameSha256: frames.map(({ sourceFrameSha256 }) => sourceFrameSha256),
     };
   });
-  if (animations[0].frameCount !== 29 || animations[1].frameCount !== 39) {
-    throw new Error("Exact official MC_JOG/MC_STAND frame counts changed.");
-  }
   const core = {
     schema: CSSOCCER_EXACT_ACTUA_OFFICIAL_SOURCE_SCHEMA,
     status: "ready-exact-referee-and-two-assistants",
@@ -295,15 +312,14 @@ function collectSelectorOffsets({ animationTable, topology }) {
   const sets = Array.from({ length: FACE_COUNT }, () => new Set());
   let preparedPoseIndex = 0;
   for (const slotId of SLOT_IDS) {
-    const slot = animationTable.slots[slotId];
-    for (const frame of slot.posePayload.frames) {
+    for (const frame of resolveCssoccerExactActuaOfficialFrames(animationTable, slotId)) {
       for (let yawIndex = 0; yawIndex < 24; yawIndex += 1) {
         const sample = projectExactActuaPlayerCoordinates({
           topology,
           coordinates: frame.coordinates,
           preparedPoseIndex,
           yawDegrees: yawIndex * 15,
-          sourcePoseBitsSha256: frame.sha256,
+          sourcePoseBitsSha256: frame.exactFloat32PoseSha256,
         });
         for (const face of sample.faces) {
           if (face.visible) sets[face.faceIndex].add(face.materialSelectorOffset);
@@ -312,8 +328,55 @@ function collectSelectorOffsets({ animationTable, topology }) {
       preparedPoseIndex += 1;
     }
   }
-  if (preparedPoseIndex !== 68) throw new Error("Exact official pose occurrence count changed.");
+  if (preparedPoseIndex !== 312) throw new Error("Exact official pose occurrence count changed.");
   return sets.map((set) => [...set].sort((left, right) => left - right));
+}
+
+export function resolveCssoccerExactActuaOfficialFrames(animationTable, slotId) {
+  if (!SLOT_IDS.includes(slotId)) {
+    throw new Error(`Exact official slot ${String(slotId)} is outside the prepared producer domain.`);
+  }
+  const slot = animationTable?.slots?.[slotId];
+  const mirrored = slot?.status === "resolved-source-mirror";
+  const sourceSlot = mirrored
+    ? animationTable.slots[slot.posePayload.sourceSlotId]
+    : slot;
+  const sourceFrames = sourceSlot?.posePayload?.frames;
+  if (
+    sourceSlot?.id !== (mirrored ? slot.posePayload.sourceSlotId : slotId)
+    || !Array.isArray(sourceFrames)
+    || sourceFrames.length !== slot?.resolvedFrameCount
+  ) {
+    throw new Error(`Exact official slot ${String(slotId)} lost its complete source frames.`);
+  }
+  return sourceFrames.map((sourceFrame, localFrameIndex) => {
+    if (
+      sourceFrame.index !== localFrameIndex
+      || !Array.isArray(sourceFrame.coordinates)
+      || sourceFrame.coordinates.length !== POINT_COUNT * 3
+    ) {
+      throw new Error(`Exact official slot ${slotId} frame ${localFrameIndex} is invalid.`);
+    }
+    const coordinates = mirrored
+      ? sourceFrame.coordinates.map((value, index) => index % 3 === 2 ? -value : value)
+      : [...sourceFrame.coordinates];
+    return deepFreeze({
+      localFrameIndex,
+      sourceSlotId: sourceSlot.id,
+      sourceFrameSha256: sourceFrame.sha256,
+      exactFloat32PoseSha256: mirrored
+        ? sha256(encodePoseBytes(coordinates))
+        : sourceFrame.sha256,
+      coordinates,
+    });
+  });
+}
+
+function encodePoseBytes(coordinates) {
+  const bytes = Buffer.alloc((1 + coordinates.length) * 4);
+  bytes.writeFloatLE(POINT_COUNT, 0);
+  coordinates.forEach((value, index) => bytes.writeFloatLE(value, 4 + index * 4));
+  return bytes;
 }
 
 function nativeTextureSlot(colorCode) {

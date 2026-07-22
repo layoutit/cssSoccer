@@ -521,7 +521,7 @@ export function assertVisualParityData(payload, label = "Visual Parity data") {
   plainObject(payload, label);
   exactKeys(payload, ["schema", "differentialTesting", "domains", "comparisons"], label);
   if (payload.schema !== VISUAL_PARITY_DATA_SCHEMA) fail(`${label}.schema`, `must equal ${VISUAL_PARITY_DATA_SCHEMA}`);
-  if (payload.differentialTesting?.schema !== "cssoccer-differential-testing-data@1") fail(`${label}.differentialTesting`, "must be normalized Differential Testing data");
+  if (payload.differentialTesting?.schema !== "burnlist-differential-testing-data@1") fail(`${label}.differentialTesting`, "must be normalized Differential Testing data");
   const scenarioId = payload.differentialTesting.scenarioCatalog?.selectedScenarioId;
   const scenario = payload.differentialTesting.scenarioCatalog?.scenarios?.find((entry) => entry.id === scenarioId);
   if (!scenario) fail(`${label}.differentialTesting`, "must retain one selected scenario");
@@ -683,7 +683,7 @@ function assertVisualBundleFiles(bundle) {
 }
 
 function assertPassingDifferentialLink(data, report) {
-  if (data?.schema !== "cssoccer-differential-testing-data@1") fail("Differential Testing data", "uses an unsupported schema");
+  if (data?.schema !== "burnlist-differential-testing-data@1") fail("Differential Testing data", "uses an unsupported schema");
   if (data.trust?.status !== "pass" || (data.trust.blockers?.length ?? 0) !== 0 || data.trust.reportStatus !== "pass") fail("Differential Testing data", "must carry a current passing trusted report");
   if (data.refresh?.status !== "complete" || data.refresh?.report?.result !== "pass" || data.refresh?.report?.check?.status !== "pass") fail("Differential Testing data", "must carry a checked complete refresh");
   if (data.adapter?.engineIndependence?.status !== "pass") fail("Differential Testing data", "must retain passing engine independence");

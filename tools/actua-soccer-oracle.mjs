@@ -93,6 +93,7 @@ const nativeOffsets = Object.freeze({
   cameraX: 0x48f2c,
   cameraY: 0x48f30,
   cameraZ: 0x48f34,
+  refs: 0x3e0e8,
   subPending: 0x54c80
 });
 
@@ -106,10 +107,12 @@ if (command === "setup") {
   console.log(JSON.stringify(await verifyFixture(parseFixtureRequest(process.argv.slice(3))), null, 2));
 } else if (command === "capture-full-match") {
   console.log(JSON.stringify(await captureFullMatch(), null, 2));
+} else if (command === "prepare-full-match-stage") {
+  console.log(JSON.stringify(await prepareFullMatchStage(process.argv[3]), null, 2));
 } else if (command === "verify-native-raw") {
   console.log(JSON.stringify(await verifyNativeRaw(process.argv[3]), null, 2));
 } else {
-  console.log("Usage: node tools/actua-soccer-oracle.mjs <setup|verify|verify-runner|verify-fixture|capture-full-match|verify-native-raw [path]>");
+  console.log("Usage: node tools/actua-soccer-oracle.mjs <setup|verify|verify-runner|verify-fixture|capture-full-match|prepare-full-match-stage [profile]|verify-native-raw [path]>");
 }
 
 async function setup() {
@@ -1288,6 +1291,76 @@ async function captureFullMatch() {
   }
 }
 
+async function prepareFullMatchStage(requestedProfileKey) {
+  await verify();
+  const oracle = fixtureContract.oracle;
+  const capture = oracle.capture;
+  if (capture?.schema !== "cssoccer-native-capture-contract@1") {
+    throw new Error("Native full-match capture contract is missing or unsupported.");
+  }
+  const profileKey = requestedProfileKey ?? capture.canonicalProfile;
+  const profile = oracle.profiles[profileKey];
+  if (!profile || !profile.expectedFullMatchExecutableSha256) {
+    throw new Error(`Full-match profile ${profileKey} is not bound by the fixture contract.`);
+  }
+  const fullRunnerPatches = capture.fullRunnerPatches.map((name) => {
+    const matches = contract.runner.patches.filter((patch) => patch.name === name);
+    if (matches.length !== 1) {
+      throw new Error(`Full-match runner patch ${name} must resolve exactly once.`);
+    }
+    return matches[0];
+  });
+  requireHash(
+    "full-match runner patch set",
+    hashCanonical(fullRunnerPatches),
+    capture.fullRunnerPatchSetSha256,
+  );
+  requireHash(
+    "full-match executable patch set",
+    hashCanonical(capture.executablePatches),
+    capture.executablePatchSetSha256,
+  );
+
+  const [sourceExecutable, sourceTeamRecords, sourceScript] = await Promise.all([
+    readFile(join(sourceRoot, fixtureContract.source.executable)),
+    readFile(join(sourceRoot, fixtureContract.source.teamRecordSource)),
+    readFile(join(sourceRoot, fixtureContract.source.script), "latin1"),
+  ]);
+  const outputRoot = join(repoRoot, ".local/cssoccer/oracle/native/full-match-stage");
+  const candidateRoot = `${outputRoot}.tmp-${process.pid}`;
+  await rm(candidateRoot, { recursive: true, force: true });
+  await mkdir(dirname(candidateRoot), { recursive: true });
+  try {
+    const stage = await prepareFixtureProfile({
+      profileKey,
+      profile,
+      sourceExecutable,
+      sourceTeamRecords,
+      sourceScript,
+      workRoot: candidateRoot,
+      runnerPatches: fullRunnerPatches,
+      executablePatches: capture.executablePatches,
+      expectedExecutableSha256: profile.expectedFullMatchExecutableSha256,
+    });
+    await rm(outputRoot, { recursive: true, force: true });
+    await rename(stage.profileRoot, outputRoot);
+    await rm(candidateRoot, { recursive: true, force: true });
+    return {
+      schema: "cssoccer-native-full-match-stage@1",
+      status: "ready",
+      profileKey,
+      stageRoot: relative(repoRoot, outputRoot),
+      executableSha256: stage.executableSha256,
+      scriptSha256: stage.scriptSha256,
+      runnerPatchSetSha256: capture.fullRunnerPatchSetSha256,
+      executablePatchSetSha256: capture.executablePatchSetSha256,
+    };
+  } catch (error) {
+    await rm(candidateRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 async function verifyNativeRaw(pathArgument) {
   const rawPath = resolve(
     repoRoot,
@@ -1465,6 +1538,41 @@ function buildNativeFieldContract() {
   global("lifecycle.team_b", "Team B", "FOOTBALL.CPP team_b", "Native team-B fixture index.", "u8", nativeOffsets.teamB);
   global("lifecycle.team_b_on", "Team B on", "EXTERNS.H team_b_on; ACTIONS.CPP", "Native team-B active flag.", "u8", nativeOffsets.teamBOn);
   global("lifecycle.watch", "Watch state", "EXTERNS.H watch; FOOTBALL.CPP", "Native watch/timing state.", "u8", nativeOffsets.watch);
+
+  const officialMembers = [
+    { suffix: "x", label: "X", valueType: "f32", member: "x", offset: 0, meaning: "Native official X position.", unit: "native-position" },
+    { suffix: "y", label: "Y", valueType: "f32", member: "y", offset: 4, meaning: "Native official Y position.", unit: "native-position" },
+    { suffix: "z", label: "Z", valueType: "f32", member: "z", offset: 8, meaning: "Native official Z position.", unit: "native-position" },
+    { suffix: "direction_x", label: "Direction X", valueType: "f32", member: "dir_x", offset: 12, meaning: "Native official X facing vector." },
+    { suffix: "direction_y", label: "Direction Y", valueType: "f32", member: "dir_y", offset: 16, meaning: "Native official Y facing vector." },
+    { suffix: "animation", label: "Animation", valueType: "f32", member: "anim", offset: 20, meaning: "Native official animation identifier." },
+    { suffix: "animation_frame", label: "Animation frame", valueType: "f32", member: "frm", offset: 24, meaning: "Native official animation frame." },
+    { suffix: "animation_frame_step", label: "Animation frame step", valueType: "f32", member: "fstep", offset: 28, meaning: "Native official animation-frame increment per tick." },
+    { suffix: "goto_x", label: "Goto X", valueType: "f32", member: "goto_x", offset: 32, meaning: "Native official target X position.", unit: "native-position" },
+    { suffix: "goto_y", label: "Goto Y", valueType: "f32", member: "goto_y", offset: 36, meaning: "Native official target Y position.", unit: "native-position" },
+    { suffix: "action", label: "Action", valueType: "i32", member: "act", offset: 40, meaning: "Native official action state." },
+    { suffix: "go", label: "Go", valueType: "i32", member: "go", offset: 44, meaning: "Native official movement gate." },
+    { suffix: "target", label: "Target", valueType: "i16", member: "target", offset: 48, meaning: "Native official player target." },
+    { suffix: "new_animation", label: "New animation", valueType: "u8", member: "newanim", offset: 50, meaning: "Native official animation-change flag." }
+  ];
+  const officialEntries = [
+    { stableId: "referee-00", index: 0 },
+    { stableId: "assistant-referee-01", index: 1 },
+    { stableId: "assistant-referee-02", index: 2 }
+  ];
+  for (const { stableId, index } of officialEntries) {
+    for (const member of officialMembers) {
+      add({
+        id: `officials.${stableId}.${member.suffix}`,
+        label: `${stableId} ${member.label}`,
+        sourceOwner: `EXTERNS.H officials; refs[${index}].${member.member}`,
+        meaning: member.meaning,
+        unit: member.unit ?? null,
+        valueType: member.valueType,
+        offset: nativeOffsets.refs + index * 52 + member.offset
+      });
+    }
+  }
 
   global("rng.rand_seed", "Random seed state", "EXTERNS.H rand_seed; MATHS.CPP", "Native mutable RNG state.", "i16", nativeOffsets.randSeed);
   global("rng.seed", "Seed", "EXTERNS.H seed; MATHS.CPP", "Native secondary RNG seed.", "i16", nativeOffsets.seed);

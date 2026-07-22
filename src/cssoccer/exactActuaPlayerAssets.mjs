@@ -15,6 +15,11 @@ const PRELOAD_CONCURRENCY = 6;
 const CACHE_LIMIT = 24;
 const OFFICIAL_FACE_COUNT = 12;
 const OFFICIAL_CACHE_LIMIT = 6;
+const OFFICIAL_SEQUENCE_COUNT = 11;
+const OFFICIAL_POSE_COUNT = 312;
+const OFFICIAL_SAMPLE_COUNT = 7_488;
+const OFFICIAL_FACE_STATE_COUNT = 89_856;
+const OFFICIAL_CHUNK_COUNT = 23;
 
 export class CssoccerExactPlayerAssetNotReadyError extends Error {
   constructor(slotId, localFrameIndex) {
@@ -236,13 +241,13 @@ function assertIndexAndMaterials(index, materials) {
   if (index?.schema === OFFICIAL_INDEX_SCHEMA) {
     if (
       index.status !== "ready-bounded-direct-index"
-      || index.counts?.sequences !== 2
-      || index.counts?.poseOccurrences !== 68
+      || index.counts?.sequences !== OFFICIAL_SEQUENCE_COUNT
+      || index.counts?.poseOccurrences !== OFFICIAL_POSE_COUNT
       || index.counts?.yawBins !== YAW_COUNT
-      || index.counts?.samples !== 1_632
+      || index.counts?.samples !== OFFICIAL_SAMPLE_COUNT
       || index.counts?.facesPerSample !== OFFICIAL_FACE_COUNT
-      || index.counts?.faceStates !== 19_584
-      || index.counts?.chunks !== 5
+      || index.counts?.faceStates !== OFFICIAL_FACE_STATE_COUNT
+      || index.counts?.chunks !== OFFICIAL_CHUNK_COUNT
       || index.lookup?.scanning !== false
       || index.cache?.policy !== "bounded-lru-transactional-frame-residency"
       || index.cache?.maxDecodedChunks !== OFFICIAL_CACHE_LIMIT
@@ -251,7 +256,7 @@ function assertIndexAndMaterials(index, materials) {
       || index.cache?.publication
         !== "requested frame commits only after every referenced chunk is resident"
       || !Array.isArray(index.sequences)
-      || index.sequences.length !== 2
+      || index.sequences.length !== OFFICIAL_SEQUENCE_COUNT
     ) throw new Error("Exact Actua official animation index is incomplete.");
     if (
       materials?.schema !== OFFICIAL_MATERIALS_SCHEMA
@@ -269,9 +274,9 @@ function assertIndexAndMaterials(index, materials) {
       || materials.runtime?.missingNumberPolicy !== "not-applicable"
     ) throw new Error("Exact Actua official material profiles are incomplete.");
     assertSequencePaths(index.sequences, {
-      expectedPaths: 5,
+      expectedPaths: OFFICIAL_CHUNK_COUNT,
       pathPattern:
-        /^assets\/animation\/exact-official\/slot-(073|078)\/frames-[0-9]{3}-[0-9]{3}\.json$/u,
+        /^assets\/animation\/exact-official\/slot-(?:0(?:6[4-9]|7[0-3])|078)\/frames-[0-9]{3}-[0-9]{3}\.json$/u,
       label: "official",
     });
     return Object.freeze({

@@ -901,9 +901,9 @@ function validateActorDomain({
     || exactOfficialPreparation.materials?.publication?.status
       !== "ready-complete-two-official-profile-normalized-atlas"
     || exactOfficialPreparation.materials.publication.counts?.fixtureOfficials !== 3
-    || exactOfficialPreparation.packaging?.index?.counts?.samples !== 1_632
-    || exactOfficialPreparation.packaging.index.counts.faceStates !== 19_584
-    || exactOfficialPreparation.chunks?.length !== 5
+    || exactOfficialPreparation.packaging?.index?.counts?.samples !== 7_488
+    || exactOfficialPreparation.packaging.index.counts.faceStates !== 89_856
+    || exactOfficialPreparation.chunks?.length !== 23
     || teamPreparation?.counts?.retainedStarters !== 22
     || counts?.actors !== 26
     || counts?.players !== 22

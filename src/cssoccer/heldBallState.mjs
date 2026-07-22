@@ -36,7 +36,7 @@ const PROFILE_BODY = deepFreeze({
     ballInteractionSha256:
       "a57298a8dc783e778957a763c2675dd04fc2552fc59f221a183dd6f15b24f327",
     nativeBuildSha256:
-      "5db9d52f4dec6e71d2a1df1009c803967455a3683b1c87e271669165ef43a3e3",
+      "cd06f847e2376951791a68a57fed3c38a13496e801c3dc66e98aa1d9abf9c544",
     nativeGameplayProfileHash: CSSOCCER_NATIVE_GAMEPLAY_PROFILE_HASH,
   },
   constants: {

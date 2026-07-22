@@ -1146,10 +1146,10 @@ function requirePreparedPlayerPublication(
   }
   if (
     exactOfficialAssets?.schema !== "cssoccer-exact-actua-official-asset-runtime@1"
-    || exactOfficialAssets.index?.counts?.sequences !== 2
-    || exactOfficialAssets.index?.counts?.poseOccurrences !== 68
+    || exactOfficialAssets.index?.counts?.sequences !== 11
+    || exactOfficialAssets.index?.counts?.poseOccurrences !== 312
     || exactOfficialAssets.index?.counts?.yawBins !== 24
-    || exactOfficialAssets.index?.counts?.faceStates !== 19_584
+    || exactOfficialAssets.index?.counts?.faceStates !== 89_856
     || !SHA256.test(exactOfficialAssets.index?.contractSha256 ?? "")
     || exactOfficialAssets.materials?.counts?.fixtureOfficials !== OFFICIAL_COUNT
     || exactOfficialAssets.materials?.geometryId !== exactOfficialAssets.index?.geometryId

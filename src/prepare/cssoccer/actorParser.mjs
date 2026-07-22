@@ -37,7 +37,7 @@ const PINNED_FOOTY_PALETTE = Object.freeze({
 });
 const PLAYER_POINT_COUNT = 28;
 const RETAINED_STATE_ARTIFACT_SHA256 =
-  "eb858bed9ad9d36670e97a98ea49235d8009246ded16e00dcb54c5dc1aef2fdd";
+  "c04ec365e835712807f0a6b5fe069e3e3a61e613f035e7624f5dfa2db2f18495";
 const PLAYER_MODEL_SYMBOLS = Object.freeze([
   "player_f1",
   "player_f2",

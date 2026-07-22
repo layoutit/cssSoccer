@@ -147,7 +147,6 @@ export async function initializeCurrentCompiledPathProfile(options, dependencies
       "Copied query transport does not match its source binding.",
     );
   }
-
   const profile = {
     schema: CURRENT_COMPILED_PATH_PROFILE_SCHEMA,
     createdAt: new Date().toISOString(),
@@ -297,24 +296,65 @@ export async function runCurrentCompiledPathCheck(options, dependencies = {}) {
       actionRoot,
     });
     const initializedValues = compiledInitializerValues(compiledEvidence.compiledPath.symbols);
-    const requested = compiledEvidence.compiledPath.symbols
+    const probeRequested = compiledEvidence.compiledPath.symbols
+      .filter((symbol) => symbol.capture?.status === "probe-required")
       .filter((symbol) => symbol.initializedValue === null)
       .map((symbol) => ({
-      name: symbol.name,
-      valueType: symbol.valueType,
-      bytes: symbol.bytes,
-      offset: symbol.linkedAddress.offset,
-    }));
-    const decoded = decodeCssorawValues(await readFile(outcome.rawPath), exact.activeTick, requested);
+        name: symbol.name,
+        valueType: symbol.valueType,
+        bytes: symbol.bytes,
+        offset: symbol.linkedAddress.offset,
+      }));
+    const retainedRequested = compiledEvidence.compiledPath.symbols
+      .filter((symbol) => symbol.capture?.status === "retained")
+      .filter((symbol) => symbol.initializedValue === null)
+      .map((symbol) => ({
+        name: symbol.name,
+        valueType: symbol.valueType,
+        bytes: symbol.bytes,
+        offset: symbol.linkedAddress.offset,
+      }));
+    const unowned = compiledEvidence.compiledPath.symbols.filter((symbol) => (
+      symbol.initializedValue === null
+      && symbol.capture?.status !== "probe-required"
+      && symbol.capture?.status !== "retained"
+    ));
+    if (unowned.length > 0) {
+      throw new CompiledPathInspectorError(
+        "compiled-runtime-read-unowned",
+        "Compiled symbols must be owned by retained or probe evidence.",
+        { symbols: unowned.map(({ name, capture }) => ({ name, capture })) },
+      );
+    }
+    const decodedProbe = decodeCssorawValues(
+      await readFile(outcome.rawPath),
+      exact.activeTick,
+      probeRequested,
+    );
+    const retainedRawPath = resolveInputPath(workspaceRoot, profile.retained.nativeRawPath);
+    const decodedRetained = retainedRequested.length === 0
+      ? null
+      : decodeCssorawValues(
+        await readFile(retainedRawPath),
+        exact.activeTick,
+        retainedRequested,
+      );
     runtime = {
       authority: "diagnostic-native-read",
       parityAuthority: false,
       mode: "read-only",
       activeTick: exact.activeTick,
-      values: [...initializedValues, ...decoded.values],
+      values: [
+        ...initializedValues,
+        ...(decodedRetained?.values ?? []),
+        ...decodedProbe.values,
+      ],
       rawPath: outcome.rawPath,
-      rawSha256: decoded.rawSha256,
-      recordCount: decoded.recordCount,
+      rawSha256: decodedProbe.rawSha256,
+      recordCount: decodedProbe.recordCount,
+      retainedRawPath: decodedRetained ? retainedRawPath : null,
+      retainedRawSha256: decodedRetained?.rawSha256 ?? null,
+      retainedRecordCount: decodedRetained?.recordCount ?? null,
       process: outcome.process,
       qualification: {
         status: "diagnostic-only",

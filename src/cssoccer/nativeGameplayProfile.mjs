@@ -10,7 +10,7 @@ const PROFILE_BODY = deepFreeze({
   bindings: {
     sourceRevision: "b40bd6d1e50e052030c5f0884fbe3deda7e9fa4b",
     nativeBuildSha256:
-      "5db9d52f4dec6e71d2a1df1009c803967455a3683b1c87e271669165ef43a3e3",
+      "cd06f847e2376951791a68a57fed3c38a13496e801c3dc66e98aa1d9abf9c544",
     compiledEvidence: {
       testExeSha256:
         "760d752bd5cf967d30295578a8c4e1b9118f93d83ceaacedc70a79f8166bd63e",
@@ -106,7 +106,7 @@ const PROFILE_BODY = deepFreeze({
 });
 
 export const CSSOCCER_NATIVE_GAMEPLAY_PROFILE_HASH =
-  "9961b831e5dc4d8efc602cb00b8c2fd506010d9072f4903eeb5c55e498dd8a82";
+  "ed59a457fc913050f4fe5ce75c4609951dc848773ae79dcf1c81b18b8f132ba7";
 
 export const CSSOCCER_NATIVE_GAMEPLAY_PROFILE = deepFreeze({
   ...PROFILE_BODY,

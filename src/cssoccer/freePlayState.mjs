@@ -26,7 +26,7 @@ import {
 import {
   CSSOCCER_OFFICIAL_CONSTANTS,
   assertCssoccerOfficialState,
-  createCssoccerOpeningOfficialState,
+  createCssoccerOfficialState,
 } from "./officialState.mjs";
 import { createPossessionState } from "./possessionState.mjs";
 import {
@@ -48,6 +48,10 @@ import {
   assertCssoccerScoreState,
   createCssoccerScoreState,
 } from "./scoreState.mjs";
+import {
+  assertCssoccerZoneState,
+  createCssoccerZoneState,
+} from "./zoneState.mjs";
 
 const F32 = Math.fround;
 const FIXTURE_ID = "spain-argentina-full-match";
@@ -72,7 +76,7 @@ const FIXED_TIMING = deepFreeze({
 const PREPARED_FIXTURE_RULES = deepFreeze({
   competitionId: 0,
   simulationId: 1,
-  offside: false,
+  offside: true,
   wind: false,
   substitutes: false,
   bookings: true,
@@ -82,12 +86,7 @@ const PREPARED_FIXTURE_RULES = deepFreeze({
   extraTime: false,
   penalties: false,
 });
-const FULL_MATCH_ALPHA_RULES = deepFreeze({
-  ...PREPARED_FIXTURE_RULES,
-  // The native demo fixture ships with this switch off. Full Match Alpha
-  // deliberately enables the already source-backed live offside reducer.
-  offside: true,
-});
+const FULL_MATCH_ALPHA_RULES = PREPARED_FIXTURE_RULES;
 const FULL_MATCH_ALPHA_RULES_SHA256 =
   "a36e7cfa33f1ec4c14fdcc94c373afc8dbb61b19a8ff8183adb20f42a95ddf2d";
 const ROOT_KEYS = Object.freeze([
@@ -181,7 +180,7 @@ export function createCssoccerFreePlayState({
     })),
   });
   const ball = createBallMatchState({ ball: { rng: rngState } });
-  const officials = createCssoccerOpeningOfficialState({
+  const officials = createCssoccerOfficialState({
     centreOwner: "A",
     nativeGameplayProfile: CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
   });
@@ -803,6 +802,7 @@ function createKickoffMotion(players, selectedCountry) {
       action: player.action.action.value,
       directionMode: 0,
       faceDirection: 0,
+      goStep: false,
       position: { x: player.position.x, y: player.position.y },
       facing: clone(player.facing),
     })),
@@ -927,6 +927,10 @@ function createKickoff({ players, ball, officials, motion }) {
     pendingAction: null,
     action: null,
     launch: null,
+    zoning: createCssoccerZoneState({
+      A: { ballZone: 68, zoneCenter: { x: 0, y: 0 } },
+      B: { ballZone: 69, zoneCenter: { x: 0, y: 0 } },
+    }),
     motion,
     readiness: deriveKickoffReadiness({ players, ball, officials }),
   });
@@ -1267,6 +1271,7 @@ function requireKickoff(kickoff, players, ball) {
     throw new Error("Free-play kickoff state changed from the source centre setup.");
   }
   const motion = assertCssoccerKickoffPlayerMotion(kickoff.motion);
+  const zoning = assertCssoccerZoneState(kickoff.zoning);
   if (
     motion.tick !== 0
     || motion.status !== "positioning"
@@ -1279,6 +1284,12 @@ function requireKickoff(kickoff, players, ball) {
         action: action.action.value,
       })),
     )
+    || zoning.A.ballZone !== 68
+    || zoning.B.ballZone !== 69
+    || zoning.A.zoneCenter.x !== 0
+    || zoning.A.zoneCenter.y !== 0
+    || zoning.B.zoneCenter.x !== 0
+    || zoning.B.zoneCenter.y !== 0
   ) {
     throw new Error("Free-play kickoff motion changed from the fresh source initializer.");
   }

@@ -254,17 +254,17 @@ const BINDINGS = deepFreeze({
   nativeSourceSha256:
     "136874496399a7acb712b28b6effb53f689c84ca373fb42af67ebf20f3b8cc45",
   nativeBuildSha256:
-    "5db9d52f4dec6e71d2a1df1009c803967455a3683b1c87e271669165ef43a3e3",
+    "cd06f847e2376951791a68a57fed3c38a13496e801c3dc66e98aa1d9abf9c544",
   nativeScenarioSha256:
-    "5fc29151faf3ff344c37562b42148322ae0b976385cd8615fcccfcf8b529eb81",
+    "990b15c0109edf8d700cc135fbec29f89c171ce263f04a7aeb257000b7a9dbca",
   nativeProfileSha256:
-    "ea2df6e20494efbaa95e3d292db2a25969d8dc0c255d0d7c2c6393f8a5713acc",
+    "8c1235c635de6d5601aaa3f8436815a765d198cf2195be879efccaee9dcf188f",
   nativeFieldContractSha256:
-    "6d21511c288f9553628079ffeaa4a6538d4eb1a8e4b36acb4f1d0c44de42a76e",
+    "5f9b01bee40e319b611c4f948fadbfd5f7f9a08868bd658c1392dc54abeeab98",
   nativeRawSha256:
-    "1b46cb63a708d6af237d3af91d6c5846bc456e93ef6b5d731a1d36cbcaffabdb",
+    "db0cf40c5f3c455d184a29a1bc25c3d90c5fe3eac69d28e82327ab5bf73029f0",
   nativeStateSha256:
-    "eb858bed9ad9d36670e97a98ea49235d8009246ded16e00dcb54c5dc1aef2fdd",
+    "c04ec365e835712807f0a6b5fe069e3e3a61e613f035e7624f5dfa2db2f18495",
   nativeGameplayProfileHash: CSSOCCER_NATIVE_GAMEPLAY_PROFILE_HASH,
   nativeFixturePlayerProfileHash: CSSOCCER_NATIVE_FIXTURE_PLAYER_PROFILE_HASH,
 });
