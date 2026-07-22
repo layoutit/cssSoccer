@@ -19,7 +19,9 @@ const GREED_FACTOR = 100;
 const PITCH_LENGTH = 1280;
 const PITCH_CENTER_Y = 400;
 const MIN_SHOOT_DISTANCE_MULTIPLIER = 12;
-const FACING_ANGLE = Math.cos(5 * Math.PI / 180);
+// INTELL.OBJ plr_facing compares against the emitted qword constant 0.95.
+// The source comment says five degrees, but the compiled game is authoritative.
+const FACING_ANGLE = 0.95;
 
 export const CSSOCCER_PASS_DECISION_SOURCE = deepFreeze({
   file: "INTELL.CPP",

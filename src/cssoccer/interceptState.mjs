@@ -30,6 +30,8 @@ export const CSSOCCER_FREE_BALL_CONTROL_PROFILE = deepFreeze({
     animationId: 54,
     frameCount: 20,
     contact: F32(40 / 60),
+    timingContact: 40 / 60,
+    timingFrameStep: 2 / 20,
     localOffsets: [
       { x: F32(6.640233039855957), y: F32(2.5310699939727783), z: F32(1.3440619707107544) },
       { x: F32(6.640233039855957), y: F32(-2.5310699939727783), z: F32(1.3440619707107544) },
@@ -45,6 +47,8 @@ export const CSSOCCER_FREE_BALL_CONTROL_PROFILE = deepFreeze({
     animationId: 84,
     frameCount: 49,
     contact: F32(50 / 149),
+    timingContact: 50 / 149,
+    timingFrameStep: 2 / 49,
     localOffsets: [
       { x: F32(2.5105690956115723), y: F32(-0.9216960072517395), z: F32(17.889450073242188) },
     ],
@@ -59,6 +63,8 @@ export const CSSOCCER_FREE_BALL_CONTROL_PROFILE = deepFreeze({
     animationId: 81,
     frameCount: 38,
     contact: F32(34 / 115),
+    timingContact: 34 / 115,
+    timingFrameStep: 2 / 38,
     localOffsets: [
       { x: F32(6.369528770446777), y: F32(-0.06462900340557098), z: F32(21.6130428314209) },
     ],
@@ -576,9 +582,13 @@ function controlActionForHeight(z, playerHeight) {
 
 function sourceControlAnimationTime(action, controlAttribute, userControlled) {
   const speedUp = userControlled ? 1.3 : 1;
-  const frameStep = F32(2 / action.frameCount);
   const factor = F32(0.6 + (controlAttribute / 128));
-  return F32(action.contact / (frameStep * speedUp * factor));
+  // go_to_path computes the MCC_* and MC_*_FS macro expressions as doubles,
+  // multiplies by fstep_factor's stored float, then writes ft_*tm as f32.
+  // The separately stored player contact remains the rounded f32 value.
+  return F32(
+    action.timingContact / (action.timingFrameStep * speedUp * factor),
+  );
 }
 
 function rotateAndAverageSourceOffsets(offsets, facing) {

@@ -75,6 +75,60 @@ export const CSSOCCER_FREE_PLAY_PLAYER_REDUCER_SOURCE = deepFreeze({
   currentStateOnly: true,
 });
 
+/** Project one ordinary find_zonal_target/go_forward source visit. */
+export function projectCssoccerFreePlayZonalPlayerVisit(input = {}) {
+  requirePlainObject(input, "free-play zonal player visit");
+  requireExactKeys(input, [
+    "allowSideStep",
+    "ballPosition",
+    "nextTick",
+    "player",
+    "possession",
+    "tactics",
+    "teamRate",
+    "zoning",
+  ], "free-play zonal player visit");
+  if (typeof input.allowSideStep !== "boolean") {
+    throw new TypeError("Zonal player visit allowSideStep must be boolean.");
+  }
+  if (!Number.isSafeInteger(input.nextTick) || input.nextTick < 1) {
+    throw new TypeError("Zonal player visit nextTick must be positive.");
+  }
+  if (!Number.isSafeInteger(input.teamRate) || input.teamRate < 0 || input.teamRate > 255) {
+    throw new TypeError("Zonal player visit teamRate must be a byte.");
+  }
+  requirePlainObject(input.player, "zonal player visit player");
+  if (input.player.liveMotion === undefined) {
+    throw new Error("Zonal player visit requires current player motion.");
+  }
+  requirePlainObject(input.possession, "zonal player visit possession");
+  requireExactKeys(
+    input.possession,
+    ["inHands", "lastTouch", "owner"],
+    "zonal player visit possession",
+  );
+  requirePlainObject(input.zoning, "zonal player visit zoning");
+  requireExactKeys(input.zoning, [
+    "analogue",
+    "ballZone",
+    "teamInPossession",
+    "zoneCenter",
+  ], "zonal player visit zoning");
+  return planZonalPlayer({
+    player: input.player,
+    motion: input.player.liveMotion,
+    teamRate: input.teamRate,
+  }, {
+    allowSideStep: input.allowSideStep,
+    ballPosition: requireF32Point(input.ballPosition, "zonal player visit ball"),
+    nextTick: input.nextTick,
+    possession: input.possession,
+    tactics: currentTacticsState(input.tactics),
+    targetOverride: null,
+    zoning: input.zoning,
+  });
+}
+
 /**
  * Materialize the first ordinary process_teams visit from current kickoff,
  * ball, possession, tactics, rate, and control state. No retained player
@@ -184,6 +238,7 @@ export function stepCssoccerFreePlayOpeningTeamTransition(input = {}) {
       });
     }
     const planned = planZonalPlayer(current, {
+      allowSideStep: supportRun?.playerId !== player.id,
       ballPosition: sourceBallPosition,
       nextTick: input.nextTick,
       possession: input.possession,
@@ -208,6 +263,7 @@ export function stepCssoccerFreePlayOpeningTeamTransition(input = {}) {
       liveMotion: {
         ...planned.liveMotion,
         kind: "support-run",
+        wantPassStat: supportRun.wantPassStat,
       },
     };
   });
@@ -251,6 +307,32 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
   const rates = currentRateMap(input.teamRates, input.players);
   const taker = requireCentreTaker(input.players, input.takerId);
   const receiverTarget = currentCentreReceiverTarget(taker.nativeTeamSlot);
+  const visits = new Map(input.players.map((player) => {
+    const ballPosition = sourceBallForPlayer({
+      nativePlayerNumber: player.nativePlayerNumber,
+      takerNativePlayerNumber: taker.nativePlayerNumber,
+      sourceTick: input.sourceTick,
+      preTaker,
+      postTaker,
+    });
+    return [player.id, {
+      ballPosition,
+      distance: sourceDistance2d({
+        x: F32(ballPosition.x - player.position.x),
+        y: F32(ballPosition.y - player.position.y),
+      }),
+      possession: input.possession,
+    }];
+  }));
+  const supportRun = selectSourceSupportRun({
+    controlledPlayerId: input.controlledPlayerId,
+    logicCount: input.logicCount,
+    players: input.players,
+    possession: input.possession,
+    rngSeed: input.rngSeed,
+    takerId: input.takerId,
+    visits,
+  });
   return input.players.map((player) => {
     if (player.id === input.takerId) return clone(player);
     if (player.liveMotion === undefined) {
@@ -286,12 +368,15 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
       && player.intelligence.count > 1
       && player.liveMotion.kind === "support-run";
     const planned = planZonalPlayer(current, {
+      allowSideStep: supportRun?.playerId !== player.id,
       ballPosition,
       nextTick: input.nextTick,
       possession: input.possession,
       tactics,
       targetOverride: player.role === "keeper"
         ? player.liveMotion.target
+        : supportRun?.playerId === player.id
+        ? supportRun.target
         : continuingSupportRun
         ? player.liveMotion.target
         : player.id === input.receiverId
@@ -299,6 +384,21 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
           : null,
       zoning: openingZoning(player, zoning),
     });
+    if (supportRun?.playerId === player.id) {
+      return {
+        ...planned,
+        intelligence: {
+          special: 0,
+          move: RUN_ON_INTELLIGENCE_MOVE,
+          count: planned.liveMotion.goCount + 1,
+        },
+        liveMotion: {
+          ...planned.liveMotion,
+          kind: "support-run",
+          wantPassStat: supportRun.wantPassStat,
+        },
+      };
+    }
     if (!continuingSupportRun) return planned;
     return {
       ...planned,
@@ -310,6 +410,7 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
       liveMotion: {
         ...planned.liveMotion,
         kind: "support-run",
+        wantPassStat: player.liveMotion.wantPassStat,
       },
     };
   });
@@ -506,10 +607,16 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
     const continuingSupportRun = player.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
       && player.intelligence.count > 1
       && player.liveMotion.kind === "support-run";
+    const resetSupportRunOpposesPossession = finalPossession.owner !== 0
+      && (player.nativePlayerNumber < 12) !== (finalPossession.owner < 12);
     const continuingResetSupportRun = player.intelligence.move === 0
       && player.intelligence.count === 0
       && player.liveMotion.kind === "support-run"
-      && !sourceThinkingTick(input.logicCount, player.gameplay.flair);
+      && (
+        finalPossession.owner === 0
+        || resetSupportRunOpposesPossession
+        || !sourceThinkingTick(input.logicCount, player.gameplay.flair)
+      );
     if (continuingResetSupportRun) {
       const continued = continueSourceSupportJourney(current, {
         ballPosition: visit.ballPosition,
@@ -548,11 +655,34 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
         },
       };
     }
+    const continuingResetDribble = player.intelligence.move === 0
+      && player.intelligence.count === 0
+      && player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+      && player.liveMotion.kind === "run-with-ball"
+      && player.liveContact === undefined
+      && visit.possession.owner !== player.nativePlayerNumber;
+    if (continuingResetDribble) {
+      const continued = continueSourceSupportJourney(current, {
+        ballPosition: visit.ballPosition,
+        nextTick: input.nextTick,
+        possession: visit.possession,
+        processDirection: player.liveMotion.goCount > 1,
+      });
+      return {
+        ...continued,
+        intelligence: clone(player.intelligence),
+        liveMotion: {
+          ...continued.liveMotion,
+          kind: "run-with-ball",
+        },
+      };
+    }
     if (
       supportRun?.playerId === player.id
       || continuingSupportRun
     ) {
       const planned = planZonalPlayer(current, {
+        allowSideStep: false,
         ballPosition: visit.ballPosition,
         nextTick: input.nextTick,
         possession: visit.possession,
@@ -572,10 +702,14 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
         liveMotion: {
           ...planned.liveMotion,
           kind: "support-run",
+          wantPassStat: supportRun?.wantPassStat ?? player.liveMotion.wantPassStat,
         },
       };
     }
-    if (finalPossession.owner === player.nativePlayerNumber) {
+    // process_teams is source-ordered: ball_interact may transfer possession
+    // more than once before the completed team snapshot is published. The
+    // player executes got_ball against the owner recorded at his own visit.
+    if (visit.possession.owner === player.nativePlayerNumber) {
       if (!possessionRuns.has(player.id)) {
         throw new Error(`Team journey has no current possession intent for ${player.id}.`);
       }
@@ -586,6 +720,7 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
             target: clone(player.liveMotion.target),
             intelligenceCount: player.intelligence.count - 1,
             goCount: Math.max(0, player.liveMotion.goCount - 1),
+            mustPass: player.liveMotion.mustPass === true,
           }
         : selectCssoccerDribbleRun({
             ball: {
@@ -625,6 +760,7 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
         liveMotion: {
           ...planned.liveMotion,
           kind: "run-with-ball",
+          mustPass: dribble.mustPass,
           goCount: continuing
             ? dribble.goCount
             : Math.max(0, dribble.goCount - 1),
@@ -825,15 +961,23 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
   if (currentRequests.length > 1) {
     throw new Error("Source want_pass has more than one current support owner.");
   }
-  // FOOTBALL.CPP process_comments runs before process_teams. If possession
-  // changed to the opposing team since this I_RUN_ON request was installed,
-  // want_pass_stat cannot equal last_touch; reset_ideas clears both globals
-  // and the requester's intelligence before the new holder is visited.
-  const resetRequester = sourceLastTouch === 0
-    ? undefined
-    : currentRequests.find((player) => (
-        (player.nativePlayerNumber < 12) !== (sourceLastTouch < 12)
-      ));
+  for (const player of currentRequests) {
+    if (
+      player.liveMotion?.kind !== "support-run"
+      || !Number.isSafeInteger(player.liveMotion.wantPassStat)
+      || player.liveMotion.wantPassStat < 1
+      || player.liveMotion.wantPassStat > 22
+    ) {
+      throw new Error("Source want_pass lost its exact want_pass_stat owner.");
+    }
+  }
+  // INTELL.CPP process_comments compares the player who owned the ball when
+  // this request began (want_pass_stat) with the current last_touch. Any
+  // change, including a same-team collection, clears the requester before
+  // process_teams can install another I_RUN_ON request.
+  const resetRequester = currentRequests.find(
+    (player) => player.liveMotion.wantPassStat !== sourceLastTouch,
+  );
   const players = resetRequester === undefined
     ? input.players
     : input.players.map((player) => player.id === resetRequester.id
@@ -897,14 +1041,26 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
 function currentSupportRun(value, players) {
   if (value === null) return null;
   requirePlainObject(value, "team journey support run");
-  requireExactKeys(value, ["playerId", "target"], "team journey support run");
+  requireExactKeys(
+    value,
+    ["playerId", "target", "wantPassStat"],
+    "team journey support run",
+  );
   if (!players.some(({ id }) => id === value.playerId)) {
     throw new Error("Team journey support run changed player identity.");
+  }
+  if (
+    !Number.isSafeInteger(value.wantPassStat)
+    || value.wantPassStat < 1
+    || value.wantPassStat > 22
+  ) {
+    throw new TypeError("Team journey support run wantPassStat must be in 1..22.");
   }
   const target = requireF32Point(value.target, "team journey support target");
   return {
     playerId: value.playerId,
     target: { x: target.x, y: target.y },
+    wantPassStat: value.wantPassStat,
   };
 }
 
@@ -972,6 +1128,7 @@ function selectSourceSupportRun({
         holder,
         holderFacing: sourceHolderFacingAtRequesterVisit({ holder, requester: player }),
       }),
+      wantPassStat: holder.nativePlayerNumber,
     };
   }
   return null;
@@ -1245,7 +1402,15 @@ function settlePlayer(
 
 function planZonalPlayer(
   { player, motion, teamRate },
-  { ballPosition, nextTick, possession, tactics, targetOverride, zoning },
+  {
+    allowSideStep = true,
+    ballPosition,
+    nextTick,
+    possession,
+    tactics,
+    targetOverride,
+    zoning,
+  },
 ) {
   const zonal = targetOverride === null
     ? resolveCssoccerZonalTarget(tactics, {
@@ -1302,7 +1467,7 @@ function planZonalPlayer(
     && player.action.action.value === CSSOCCER_NATIVE_ACTIONS.STAND
     && distance <= CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 0.8;
   const arrived = !holdsPosition && distance < travelProfile.imThereDistance;
-  const sideStep = !holdsPosition && !arrived && (
+  const sideStep = allowSideStep && !holdsPosition && !arrived && (
     (goStep && distance < travelProfile.stepRange * 2)
     || (!goStep && distance < travelProfile.stepRange)
   );
