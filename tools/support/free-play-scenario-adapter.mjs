@@ -12,6 +12,14 @@ export const CSSOCCER_FREE_PLAY_SCENARIO_ADAPTER_SCHEMA =
   "cssoccer-free-play-scenario-adapter@1";
 export const CSSOCCER_FREE_PLAY_COMPARISON_BOUNDARY_SCHEMA =
   "cssoccer-free-play-comparison-boundary@1";
+export const CSSOCCER_FREE_PLAY_GAMEPLAY_COORDINATE_WINDOW = deepFreeze({
+  schema: "cssoccer-parity-coordinate-window@1",
+  id: "cssoccer-free-play-after-pre-loop-presentation@1",
+  startTick: 1,
+  sourceBoundary: "ACTIONS.CPP init_team before FOOTBALL.CPP first gameplay loop",
+  reason:
+    "Native tick 0 is the retained pre-loop lineup presentation handoff; tick 1 is the first aligned gameplay state.",
+});
 
 const PRE_LOOP_PRESENTATION_FIELDS = Object.freeze([
   "animation",

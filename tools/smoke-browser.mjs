@@ -309,8 +309,8 @@ try {
   assert(dom.rootCount === 37 && dom.uniqueRootIds === 37, `unstable root DOM: ${JSON.stringify(dom)}`);
   assert(
     JSON.stringify(dom.hiddenRootIds)
-      === JSON.stringify(["player-highlight-local-user-1", "assistant-referee-02"]),
-    `only the tick-zero highlight and source-positioned official behind the camera may be hidden: ${JSON.stringify(dom.hiddenRootIds)}`,
+      === JSON.stringify(["player-highlight-local-user-1"]),
+    `only the tick-zero highlight may be hidden with the exact opening camera: ${JSON.stringify(dom.hiddenRootIds)}`,
   );
   assert(dom.emptyRootIds.length === 0, `empty prepared roots: ${JSON.stringify(dom.emptyRootIds)}`);
   assert(

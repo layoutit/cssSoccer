@@ -711,7 +711,7 @@ function prepareActorRenderAssets({
       paletteFile: "FOOTY.PAL",
       paletteSha256: footyPalette.sha256,
       paletteBytes: footyPalette.bytes,
-      componentConversion: "round(sourceRgb6*255/63)",
+      componentConversion: "(sourceRgb6 << 2) | (sourceRgb6 >> 4)",
     },
     polygons: models.ball.solidPolygons.map((polygon) => ({
       id: polygon.id,
@@ -819,7 +819,9 @@ function decodeFootyPalette(bytes) {
 
 function rgb6ToHex(rgb6) {
   return "#" + rgb6
-    .map((component) => Math.round(component * 255 / 63).toString(16).padStart(2, "0"))
+    .map((component) => (
+      ((component << 2) | (component >> 4)).toString(16).padStart(2, "0")
+    ))
     .join("");
 }
 

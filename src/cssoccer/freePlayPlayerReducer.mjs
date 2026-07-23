@@ -31,6 +31,11 @@ import {
   createCssoccerZoneState,
   stepCssoccerZoneState,
 } from "./zoneState.mjs";
+import {
+  CSSOCCER_RUN_ON_INTELLIGENCE_MOVE as RUN_ON_INTELLIGENCE_MOVE,
+  projectCssoccerWantPassMotion,
+  readCssoccerActiveWantPassStat,
+} from "./wantPassState.mjs";
 
 const F32 = Math.fround;
 const PITCH_LENGTH = 1280;
@@ -40,7 +45,6 @@ const SOCKS_RIGHT_ANIMATION = 62;
 const SOCKS_LEFT_ANIMATION = 63;
 const SOCKS_FRAME_STEP = F32(1 / (20 * 68 / 40));
 const DRIBBLE_INTELLIGENCE_MOVE = 2;
-const RUN_ON_INTELLIGENCE_MOVE = 8;
 const MIN_HELP_CHANCE = 2;
 const CALL_DISTANCE = F32(CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 60);
 const DANGER_DISTANCE = F32(CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 8);
@@ -972,21 +976,7 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
   if (currentRequests.length > 1) {
     throw new Error("Source want_pass has more than one current support owner.");
   }
-  for (const player of currentRequests) {
-    if (
-      player.liveMotion?.kind !== "support-run"
-      || !Number.isSafeInteger(player.liveMotion.wantPassStat)
-      || player.liveMotion.wantPassStat < 1
-      || player.liveMotion.wantPassStat > 22
-    ) {
-      throw new Error(
-        `Source want_pass owner ${player.id} has motion ${player.liveMotion?.kind ?? "missing"}, `
-        + `action ${player.action?.action?.value ?? "missing"}, intelligence `
-        + `${player.intelligence.move}/${player.intelligence.count}, and want_pass_stat `
-        + `${player.liveMotion?.wantPassStat ?? "missing"}.`,
-      );
-    }
-  }
+  for (const player of currentRequests) readCssoccerActiveWantPassStat(player);
   // INTELL.CPP process_comments compares the player who owned the ball when
   // this request began (want_pass_stat) with the current last_touch. Any
   // change, including a same-team collection, clears the requester before
@@ -1650,6 +1640,11 @@ function planZonalPlayer(
 function updatePlayer(player, { nextTick, position, facing, actionId, liveMotion }) {
   const previousPosition = clone(player.position);
   const previousFacing = clone(player.facing);
+  const nextMotion = projectCssoccerWantPassMotion({
+    sourcePlayer: player,
+    intelligence: player.intelligence,
+    liveMotion: clone(liveMotion),
+  });
   return {
     ...clone(player),
     previousPosition,
@@ -1669,7 +1664,7 @@ function updatePlayer(player, { nextTick, position, facing, actionId, liveMotion
       facingX: facing.x,
       facingY: facing.y,
     }),
-    liveMotion: clone(liveMotion),
+    liveMotion: nextMotion,
   };
 }
 

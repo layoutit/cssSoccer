@@ -99,7 +99,6 @@ const SKY_BACKDROP_PATH = "assets/textures/spain-argentina-sky.png";
 const SKY_BACKDROP_URL = cssoccerPublicUrl(SKY_BACKDROP_PATH);
 const MARKING_PIXEL_PATH = "assets/textures/spain-argentina-marking-pixel.png";
 const MARKING_PIXEL_URL = cssoccerPublicUrl(MARKING_PIXEL_PATH);
-const RGB_COMPONENT_SCALE = 4;
 const STADIUM_PAGE_COUNT = 2;
 const STADIUM_ATLAS_WIDTH = PAGE_SIZE * 4;
 const STADIUM_ATLAS_HEIGHT = PAGE_SIZE * 3;
@@ -305,26 +304,28 @@ const STADIUM_PALETTE_OVERRIDES = deepFreeze([
 ]);
 
 const SELECTORS = deepFreeze({
-  palette: 0,
-  textureTable: 8,
   player: {
-    spainHead: 64,
     argentinaHead: 64,
-    spainTorso: 408,
-    argentinaTorso: 96,
-    spainLimbs: 520,
     argentinaLimbs: 512,
-    sharedFeet: 568,
-    spainNumbers: 1888,
-    argentinaNumbers: 1896,
   },
   pitch: 1920,
   paletteOverrides: {
-    spainKit: 1456,
-    argentinaKit: 1144,
-    caucasianSkin: 1536,
-    spainPitch: 1584,
+    argentinaSkin: 1536,
   },
+});
+const NATIVE_PLAYER_SELECTORS = deepFreeze({
+  palette: 0,
+  matchTextureTable: 8,
+  playerTextureTable: 16,
+  spainHead: 48,
+  spainTorso: 160,
+  spainLimbs: 232,
+  sharedFeet: 272,
+  keeperTorso: 280,
+  spainKitPalette: 440,
+  spainSkinPalette: 480,
+  spainPitchPalette: 544,
+  keeperLimbs: 864,
 });
 const RETAIL_PLAYER_SELECTORS = deepFreeze({
   textureTable: 8,
@@ -338,21 +339,56 @@ const RETAIL_PLAYER_SELECTORS = deepFreeze({
   argentinaKitPalette: 1144,
 });
 const EXPECTED_RECORD_BYTES = new Map([
-  [SELECTORS.palette, 768],
-  [SELECTORS.textureTable, 18_336],
-  [SELECTORS.player.spainHead, 32_768],
-  [SELECTORS.player.spainTorso, 65_536],
-  [SELECTORS.player.argentinaTorso, 32_768],
-  [SELECTORS.player.spainLimbs, 19_968],
+  [SELECTORS.player.argentinaHead, 32_768],
   [SELECTORS.player.argentinaLimbs, 19_968],
-  [SELECTORS.player.sharedFeet, 19_968],
-  [SELECTORS.player.spainNumbers, 13_824],
-  [SELECTORS.player.argentinaNumbers, 13_824],
   [SELECTORS.pitch, 16_384],
-  [SELECTORS.paletteOverrides.spainKit, 72],
-  [SELECTORS.paletteOverrides.argentinaKit, 72],
-  [SELECTORS.paletteOverrides.caucasianSkin, 24],
-  [SELECTORS.paletteOverrides.spainPitch, 48],
+  [SELECTORS.paletteOverrides.argentinaSkin, 24],
+]);
+
+const EXPECTED_NATIVE_PLAYER_RECORD_BYTES = new Map([
+  [NATIVE_PLAYER_SELECTORS.palette, 768],
+  [NATIVE_PLAYER_SELECTORS.matchTextureTable, 32_192],
+  [NATIVE_PLAYER_SELECTORS.playerTextureTable, 18_336],
+  [NATIVE_PLAYER_SELECTORS.spainHead, 32_768],
+  [NATIVE_PLAYER_SELECTORS.spainTorso, 65_536],
+  [NATIVE_PLAYER_SELECTORS.spainLimbs, 19_968],
+  [NATIVE_PLAYER_SELECTORS.sharedFeet, 17_152],
+  [NATIVE_PLAYER_SELECTORS.keeperTorso, 65_536],
+  [NATIVE_PLAYER_SELECTORS.spainKitPalette, 72],
+  [NATIVE_PLAYER_SELECTORS.spainSkinPalette, 24],
+  [NATIVE_PLAYER_SELECTORS.spainPitchPalette, 48],
+  [NATIVE_PLAYER_SELECTORS.keeperLimbs, 65_536],
+]);
+const EXACT_PLAYER_PAGE_THREE_SHA256 =
+  "be65b4dc2f665dbf1f572ddab0cc03730612725bdebabc42e08c925b585a2ece";
+const EXACT_PLAYER_SOURCE_AUDIT = deepFreeze([
+  {
+    role: "spain-lower-leg",
+    nativeTextureSlot: 244,
+    sourceRect: { x: 0, y: 0, width: 15, height: 61 },
+    textureRecordSha256:
+      "1a1178ba120873b9e875af69bc352102f338de6cebcafaf26bd1271f006c17f5",
+    indexedTexelSha256:
+      "086fffef5c3f07e9ce3f96d47ee3206fa358736e06b8b423a6466aaa6d0814e3",
+  },
+  {
+    role: "spain-shorts",
+    nativeTextureSlot: 258,
+    sourceRect: { x: 126, y: 0, width: 19, height: 62 },
+    textureRecordSha256:
+      "2b7b66e826ec5b5d88ebb26fefcd5ae2849500fec6bacbc9b09e50c9fafa9846",
+    indexedTexelSha256:
+      "7f1d375e1d2684cb358281b8c109627011291c1b2b8f95baca0af20949d573ba",
+  },
+  {
+    role: "shared-boots",
+    nativeTextureSlot: 331,
+    sourceRect: { x: 36, y: 190, width: 19, height: 22 },
+    textureRecordSha256:
+      "15f05840fe935f3f5d73a5d7608f7a0107116eb196c94e821a372ee9ac51d653",
+    indexedTexelSha256:
+      "ddbe0116eacc7a615ee928d1ca75a97206971c942503f36e387c17b17ba4be8f",
+  },
 ]);
 
 const EXPECTED_RETAIL_PLAYER_RECORD_BYTES = new Map([
@@ -502,6 +538,14 @@ export function prepareCssoccerSourceTextureAtlas({
       );
     }
   }
+  for (const [selector, expectedBytes] of EXPECTED_NATIVE_PLAYER_RECORD_BYTES) {
+    const actual = nativeArchive.recordInfo(selector);
+    if (actual.size !== expectedBytes) {
+      throw new Error(
+        `EUROREND selector ${selector} has ${actual.size} bytes, expected ${expectedBytes}.`,
+      );
+    }
+  }
 
   const palette = preparePalette(archive, retailArchive, nativeArchive);
   const pitchSurface = preparePitchSurfaceFromArchive(nativeArchive);
@@ -510,12 +554,21 @@ export function prepareCssoccerSourceTextureAtlas({
     requirePinnedBytes(footyPalBytes, "FOOTY.PAL", PINNED_FOOTY_PALETTE),
   );
   const paletteIndexZero = browserPaletteEntry(palette, 0);
-  const textureTableBytes = preparePlayerTextureTableBytes(archive, retailArchive);
+  const textureTableBytes = preparePlayerTextureTableBytes(
+    nativeArchive,
+    retailArchive,
+  );
   if (textureTableBytes.length % 32 !== 0) {
     throw new Error("TMD_TEXDATA is not a complete array of 32-byte four-point texture records.");
   }
   const textureRecords = decodeTextureRecords(textureTableBytes);
-  const playerPages = preparePlayerPages(archive, retailArchive, textureRecords);
+  const playerPages = preparePlayerPages(
+    archive,
+    retailArchive,
+    nativeArchive,
+    textureRecords,
+  );
+  const playerSourceAudit = preparePlayerSourceAudit(playerPages, textureRecords);
   const officialSourceAtlas = prepareOfficialSourceAtlas(retailArchive, palette);
   const playerHighlightSourceRecord = retailArchive.recordBytes(
     RETAIL_PLAYER_SELECTORS.playerHighlightPage,
@@ -613,6 +666,14 @@ export function prepareCssoccerSourceTextureAtlas({
         distribution: PINNED_RETAIL_ARCHIVE.distribution,
         selectors: RETAIL_PLAYER_SELECTORS,
       },
+      nativePlayerFoundation: {
+        data: { file: "EUROREND.DAT", ...PINNED_NATIVE_ARCHIVE.data },
+        index: { file: "EUROREND.OFF", ...PINNED_NATIVE_ARCHIVE.index },
+        selectors: NATIVE_PLAYER_SELECTORS,
+        usage:
+          "Spain pages and palette, shared boot texels, goalkeeper pages, and slots 1 through 548",
+        publication: "prepare-derived browser assets only; source records remain ignored local input",
+      },
       nativeCornerFlagSupplement: {
         data: { file: "EUROREND.DAT", ...PINNED_NATIVE_ARCHIVE.data },
         index: { file: "EUROREND.OFF", ...PINNED_NATIVE_ARCHIVE.index },
@@ -624,7 +685,11 @@ export function prepareCssoccerSourceTextureAtlas({
       },
       selectorAuthority: PINNED_ARCHIVE.selectorAuthority,
     },
-    selectors: SELECTORS,
+    selectors: {
+      demo: SELECTORS,
+      nativePlayerFoundation: NATIVE_PLAYER_SELECTORS,
+      retailPlayerSupplement: RETAIL_PLAYER_SELECTORS,
+    },
     counts: {
       archiveRecords: archive.recordCount,
       retailArchiveRecords: retailArchive.recordCount,
@@ -650,17 +715,24 @@ export function prepareCssoccerSourceTextureAtlas({
     },
     palette: {
       entries: 256,
-      componentConversion: "min(255, sourceRgb6 * 4)",
+      componentConversion: "(sourceRgb6 << 2) | (sourceRgb6 >> 4)",
       sha256: sha256(palette),
       indexZero: paletteIndexZero,
       skinPalette: {
-        status: "user-validated-source-palette-selection",
-        bodySymbol: "BM_XLATINO",
-        selectedSymbol: "COL_XCAUCASA",
-        selectedSelector: SELECTORS.paletteOverrides.caucasianSkin,
+        status: "exact-fixture-source-palette-selection",
+        spainSymbol: "COL_XCAUCASA",
+        spainSelector: NATIVE_PLAYER_SELECTORS.spainSkinPalette,
+        argentinaSymbol: "COL_XLATINO",
+        argentinaSelector: SELECTORS.paletteOverrides.argentinaSkin,
       },
       overrides: [
-        { id: "spain-kit", selector: SELECTORS.paletteOverrides.spainKit, firstEntry: 32, entries: 24 },
+        {
+          id: "spain-kit",
+          selector: NATIVE_PLAYER_SELECTORS.spainKitPalette,
+          firstEntry: 32,
+          entries: 24,
+          sourceArchive: "retained-native-renderer",
+        },
         {
           id: "argentina-kit",
           selector: RETAIL_PLAYER_SELECTORS.argentinaKitPalette,
@@ -668,9 +740,27 @@ export function prepareCssoccerSourceTextureAtlas({
           entries: 24,
           sourceArchive: "retail-player-supplement",
         },
-        { id: "spain-skin", selector: SELECTORS.paletteOverrides.caucasianSkin, firstEntry: 80, entries: 8 },
-        { id: "argentina-skin", selector: SELECTORS.paletteOverrides.caucasianSkin, firstEntry: 88, entries: 8 },
-        { id: "spain-pitch", selector: SELECTORS.paletteOverrides.spainPitch, firstEntry: 128, entries: 16 },
+        {
+          id: "spain-skin",
+          selector: NATIVE_PLAYER_SELECTORS.spainSkinPalette,
+          firstEntry: 80,
+          entries: 8,
+          sourceArchive: "retained-native-renderer",
+        },
+        {
+          id: "argentina-skin",
+          selector: SELECTORS.paletteOverrides.argentinaSkin,
+          firstEntry: 88,
+          entries: 8,
+          sourceArchive: "playable-demo",
+        },
+        {
+          id: "spain-pitch",
+          selector: NATIVE_PLAYER_SELECTORS.spainPitchPalette,
+          firstEntry: 128,
+          entries: 16,
+          sourceArchive: "retained-native-renderer",
+        },
         {
           id: "spain-home-highlight",
           selector: 608,
@@ -688,17 +778,23 @@ export function prepareCssoccerSourceTextureAtlas({
       ],
     },
     textureTable: {
-      selector: SELECTORS.textureTable,
+      selectors: {
+        nativeMatch: NATIVE_PLAYER_SELECTORS.matchTextureTable,
+        nativePlayers: NATIVE_PLAYER_SELECTORS.playerTextureTable,
+        retailExtension: RETAIL_PLAYER_SELECTORS.textureTable,
+      },
       bytes: textureTableBytes.length,
       records: textureRecords.length,
       recordBytes: 32,
       coordinateEncoding: "page byte plus unsigned 16.16 texel coordinate",
       sha256: sha256(textureTableBytes),
       composition: {
-        base: "playable-demo slots 1 through 548",
-        retailPlayerSupplement: "retail slots 549 through 578",
+        base: "retained native match table",
+        nativePlayerFoundation: "EUROREND TMD_MANDATA slots 1 through 548",
+        retailPlayerSupplement: "retail TMD_TEXDATA slots 549 through 1006",
       },
     },
+    playerSourceAudit,
     officialSourcePages: officialSourceAtlas.metadata,
     playerHighlightPrebake: {
       schema: "cssoccer-prepared-player-highlight-textures@1",
@@ -1875,17 +1971,39 @@ export function bindCssoccerGoalNetTexture(preparation, sourceColorCode) {
 
 
 function preparePalette(archive, retailArchive, nativeArchive) {
-  const palette = Buffer.from(archive.recordBytes(SELECTORS.palette));
-  copyPalette(archive, palette, SELECTORS.paletteOverrides.spainKit, 32);
+  const palette = Buffer.from(
+    nativeArchive.recordBytes(NATIVE_PLAYER_SELECTORS.palette),
+  );
+  copyPalette(
+    nativeArchive,
+    palette,
+    NATIVE_PLAYER_SELECTORS.spainKitPalette,
+    32,
+  );
   copyPalette(
     retailArchive,
     palette,
     RETAIL_PLAYER_SELECTORS.argentinaKitPalette,
     56,
   );
-  copyPalette(archive, palette, SELECTORS.paletteOverrides.caucasianSkin, 80);
-  copyPalette(archive, palette, SELECTORS.paletteOverrides.caucasianSkin, 88);
-  copyPalette(archive, palette, SELECTORS.paletteOverrides.spainPitch, 128);
+  copyPalette(
+    nativeArchive,
+    palette,
+    NATIVE_PLAYER_SELECTORS.spainSkinPalette,
+    80,
+  );
+  copyPalette(
+    archive,
+    palette,
+    SELECTORS.paletteOverrides.argentinaSkin,
+    88,
+  );
+  copyPalette(
+    nativeArchive,
+    palette,
+    NATIVE_PLAYER_SELECTORS.spainPitchPalette,
+    128,
+  );
   for (const override of STADIUM_PALETTE_OVERRIDES.filter(({ firstEntry }) => (
     firstEntry === 224 || firstEntry === 232
   ))) {
@@ -1900,9 +2018,7 @@ function browserPaletteEntry(palette, paletteIndex) {
     throw new Error(`Palette index ${paletteIndex} is unavailable.`);
   }
   const sourceRgb6 = [...palette.subarray(offset, offset + 3)];
-  const browserRgb = sourceRgb6.map((component) => (
-    Math.min(255, component * RGB_COMPONENT_SCALE)
-  ));
+  const browserRgb = sourceRgb6.map(expandVgaComponent);
   return deepFreeze({
     paletteIndex,
     sourceRgb6,
@@ -1910,7 +2026,7 @@ function browserPaletteEntry(palette, paletteIndex) {
     browserCssColor: `#${browserRgb
       .map((component) => component.toString(16).padStart(2, "0"))
       .join("")}`,
-    authority: "ACTREND palette selector 0",
+    authority: "EUROREND palette selector 0",
   });
 }
 
@@ -1923,28 +2039,41 @@ function copyPalette(archive, palette, selector, firstEntry) {
   payload.copy(palette, offset);
 }
 
-function preparePlayerTextureTableBytes(archive, retailArchive) {
-  const demoBytes = archive.recordBytes(SELECTORS.textureTable);
+function preparePlayerTextureTableBytes(nativeArchive, retailArchive) {
+  const matchBytes = nativeArchive.recordBytes(
+    NATIVE_PLAYER_SELECTORS.matchTextureTable,
+  );
+  const playerBytes = nativeArchive.recordBytes(
+    NATIVE_PLAYER_SELECTORS.playerTextureTable,
+  );
   const retailBytes = retailArchive.recordBytes(RETAIL_PLAYER_SELECTORS.textureTable);
   const firstNumberByte = (PLAYER_NUMBER_FIRST_NATIVE_TEXTURE_SLOT - 1) * 32;
-  const finalNumberByte = PLAYER_NUMBER_FINAL_NATIVE_TEXTURE_SLOT * 32;
-  const output = Buffer.alloc(finalNumberByte);
-  demoBytes.copy(output, 0, 0, Math.min(demoBytes.length, output.length));
-  retailBytes.copy(output, firstNumberByte, firstNumberByte, finalNumberByte);
+  if (
+    matchBytes.length !== retailBytes.length
+    || playerBytes.length < firstNumberByte
+  ) throw new Error("Exact fixture player texture-table composition changed.");
+  const output = Buffer.from(matchBytes);
+  playerBytes.copy(output, 0, 0, firstNumberByte);
+  retailBytes.copy(output, firstNumberByte, firstNumberByte, output.length);
   return output;
 }
 
-function preparePlayerPages(archive, retailArchive, textureRecords) {
+function preparePlayerPages(
+  archive,
+  retailArchive,
+  nativeArchive,
+  textureRecords,
+) {
   const pages = Array.from({ length: PLAYER_PAGE_COUNT }, () => Buffer.alloc(PAGE_SIZE * PAGE_SIZE));
-  copyIntoPage(archive, SELECTORS.player.spainHead, pages[0], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.spainHead, pages[0], 0);
   copyIntoPage(archive, SELECTORS.player.argentinaHead, pages[0], 128 * PAGE_SIZE);
-  copyIntoPage(archive, SELECTORS.player.spainTorso, pages[1], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.spainTorso, pages[1], 0);
   copyIntoPage(retailArchive, RETAIL_PLAYER_SELECTORS.argentinaTorso, pages[2], 0);
-  copyIntoPage(archive, SELECTORS.player.spainLimbs, pages[3], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.spainLimbs, pages[3], 0);
   copyIntoPage(archive, SELECTORS.player.argentinaLimbs, pages[3], 80 * PAGE_SIZE);
-  copyIntoPage(archive, SELECTORS.player.sharedFeet, pages[3], 158 * PAGE_SIZE);
-  copyIntoPage(retailArchive, RETAIL_PLAYER_SELECTORS.refereeTorso, pages[4], 0);
-  copyIntoPage(retailArchive, RETAIL_PLAYER_SELECTORS.refereeLimbs, pages[5], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.sharedFeet, pages[3], 158 * PAGE_SIZE);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.keeperTorso, pages[4], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.keeperLimbs, pages[5], 0);
   copyIntoPage(
     retailArchive,
     RETAIL_PLAYER_SELECTORS.playerHighlightPage,
@@ -1965,6 +2094,84 @@ function preparePlayerPages(archive, retailArchive, textureRecords) {
   remapRuntimeNumberRange(pages[6], 89 * PAGE_SIZE, 27 * PAGE_SIZE);
   rotatePlayerNumberTexels180(pages[6], textureRecords);
   return pages;
+}
+
+function preparePlayerSourceAudit(pages, textureRecords) {
+  if (sha256(pages[3]) !== EXACT_PLAYER_PAGE_THREE_SHA256) {
+    throw new Error("Exact fixture player page three changed from its verified source composition.");
+  }
+  const slots = EXACT_PLAYER_SOURCE_AUDIT.map((expected) => {
+    const record = textureRecords[expected.nativeTextureSlot - 1];
+    const rect = record?.sourceRect;
+    if (
+      !record?.quadLayout
+      || record.page !== 3
+      || !rect
+      || rect.x !== expected.sourceRect.x
+      || rect.y !== expected.sourceRect.y
+      || rect.width !== expected.sourceRect.width
+      || rect.height !== expected.sourceRect.height
+      || record.sha256 !== expected.textureRecordSha256
+    ) {
+      throw new Error(
+        `Exact fixture player slot ${expected.nativeTextureSlot} changed source record.`,
+      );
+    }
+    const indexedTexels = cropIndexedPlayerTexels(pages[3], rect);
+    const indexedTexelSha256 = sha256(indexedTexels);
+    if (indexedTexelSha256 !== expected.indexedTexelSha256) {
+      throw new Error(
+        `Exact fixture player slot ${expected.nativeTextureSlot} changed indexed texels.`,
+      );
+    }
+    return {
+      ...expected,
+      page: record.page,
+      indexedTexelSha256,
+    };
+  });
+  return deepFreeze({
+    authority: "retained exact player_f1 fixture capture",
+    page: 3,
+    pageSha256: EXACT_PLAYER_PAGE_THREE_SHA256,
+    sourceRecords: [
+      {
+        id: "exact-spain-limbs",
+        archive: "EUROREND.DAT",
+        selector: NATIVE_PLAYER_SELECTORS.spainLimbs,
+        y: 0,
+        bytes: 19_968,
+      },
+      {
+        id: "argentina-limbs",
+        archive: "demo ACTREND.DAT",
+        selector: SELECTORS.player.argentinaLimbs,
+        y: 80,
+        bytes: 19_968,
+      },
+      {
+        id: "exact-source-feet",
+        archive: "EUROREND.DAT",
+        selector: NATIVE_PLAYER_SELECTORS.sharedFeet,
+        y: 158,
+        bytes: 17_152,
+      },
+    ],
+    slots,
+  });
+}
+
+function cropIndexedPlayerTexels(page, rect) {
+  const output = Buffer.alloc(rect.width * rect.height);
+  for (let row = 0; row < rect.height; row += 1) {
+    page.copy(
+      output,
+      row * rect.width,
+      (rect.y + row) * PAGE_SIZE + rect.x,
+      (rect.y + row) * PAGE_SIZE + rect.x + rect.width,
+    );
+  }
+  return output;
 }
 
 function prepareOfficialSourceAtlas(archive, palette) {
@@ -1998,9 +2205,9 @@ function prepareOfficialSourceAtlas(archive, palette) {
       for (let x = 0; x < PAGE_SIZE; x += 1) {
         const paletteIndex = indexed[y * PAGE_SIZE + x];
         const target = (y * width + pageIndex * PAGE_SIZE + x) * 4;
-        rgba[target] = Math.min(255, palette[paletteIndex * 3] * RGB_COMPONENT_SCALE);
-        rgba[target + 1] = Math.min(255, palette[paletteIndex * 3 + 1] * RGB_COMPONENT_SCALE);
-        rgba[target + 2] = Math.min(255, palette[paletteIndex * 3 + 2] * RGB_COMPONENT_SCALE);
+        rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
+        rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
+        rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
         rgba[target + 3] = paletteIndex === 0 ? 0 : 255;
       }
     }
@@ -2102,9 +2309,9 @@ function renderAtlasRgba(indexedPages, palette) {
       for (let x = 0; x < PAGE_SIZE; x += 1) {
         const paletteIndex = indexed[y * PAGE_SIZE + x];
         const target = (y * ATLAS_WIDTH + pageIndex * PAGE_SIZE + x) * 4;
-        rgba[target] = Math.min(255, palette[paletteIndex * 3] * RGB_COMPONENT_SCALE);
-        rgba[target + 1] = Math.min(255, palette[paletteIndex * 3 + 1] * RGB_COMPONENT_SCALE);
-        rgba[target + 2] = Math.min(255, palette[paletteIndex * 3 + 2] * RGB_COMPONENT_SCALE);
+        rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
+        rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
+        rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
         rgba[target + 3] = pageIndex < PLAYER_PAGE_COUNT
           && (paletteIndex === 0
             || playerTextureTexelUsesNativeChromaKey(pageIndex, y, paletteIndex))

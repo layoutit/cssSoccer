@@ -329,13 +329,22 @@ export function resumeCssoccerCurrentGoalState(state, { score } = {}) {
 
 /** Clear a completed goal when the period transition owns the next centre. */
 export function resumeCssoccerCurrentGoalAfterPeriodTransition(state, { score } = {}) {
+  return resumeCompletedPostGoalCountdown(state, score, "Period transition");
+}
+
+/** Clear a completed goal when an accepted source restart owns the ball. */
+export function resumeCssoccerCurrentGoalAfterSourceRestart(state, { score } = {}) {
+  return resumeCompletedPostGoalCountdown(state, score, "Source restart");
+}
+
+function resumeCompletedPostGoalCountdown(state, score, owner) {
   const current = assertCssoccerGoalState(state);
   if (current.phase !== "awaiting-post-goal-handoff" || current.justScored !== 0) {
-    throw new Error("Period transition can resume only a completed post-goal countdown.");
+    throw new Error(`${owner} can resume only a completed post-goal countdown.`);
   }
   assertCssoccerScoreState(score);
   if (!sameValue(current.score, score)) {
-    throw new Error("Period-transition goal score must match the live match.");
+    throw new Error(`${owner} goal score must match the live match.`);
   }
   return liveState(score, current.goalSequence, current.lastGoalScorerNative);
 }

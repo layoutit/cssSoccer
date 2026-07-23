@@ -1316,16 +1316,17 @@ function advanceActuaGameplayCamera(camera, frame) {
       effectiveBall: input.effectiveBall,
     });
   }
+  // The retained native terminal tick publishes the existing framebuffer and
+  // has no update_3d camera sample. Hold the last rendered gameplay camera.
+  if (frame.terminal) return camera;
   return stepCssoccerActuaGameplayCamera(camera, {
     tick: frame.tick,
     effectiveBall: input.effectiveBall,
     justScored: input.justScored,
     goalScorer: input.goalScorer,
     matchMode: input.matchMode,
-    // Product ticks stop at full time, before camera 16 can finish its source
-    // buffer. Publish the fixed centred-WIRE end card while retaining the
-    // source-selected tunnel mode and target in the authoritative camera state.
-    terminal: frame.terminal,
+    lastTouch: input.lastTouch,
+    restartTaker: input.restartTaker,
   });
 }
 
@@ -1420,6 +1421,8 @@ function createActuaGameplayCameraBinding(sceneData, camera) {
     sourceLabel: camera.sourceLabel,
     modeEnteredTick: camera.modeEnteredTick,
     justScored: camera.justScored,
+    lastTouch: camera.lastTouch,
+    restartTaker: camera.restartTaker,
     trackedPlayer: clonePreparedMetadata(camera.trackedPlayer),
     effectiveBall: clonePreparedMetadata(camera.effectiveBall),
     desired: clonePreparedMetadata(camera.desired),
@@ -1473,6 +1476,17 @@ function isActuaCameraInput(value) {
     || !Number.isSafeInteger(value.matchMode)
     || value.matchMode < 0
     || value.matchMode > 255
+    || !Number.isSafeInteger(value.lastTouch)
+    || value.lastTouch < 0
+    || value.lastTouch > 22
+    || !(
+      value.restartTaker === null
+      || (
+        Number.isSafeInteger(value.restartTaker)
+        && value.restartTaker >= 1
+        && value.restartTaker <= 22
+      )
+    )
   ) {
     return false;
   }

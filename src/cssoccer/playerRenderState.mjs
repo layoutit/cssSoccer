@@ -247,14 +247,19 @@ export function createCssoccerFreePlayRenderFrame(contract, {
       effectiveBall: { ...match.ball.ball.position },
       justScored: match.goal.justScored,
       matchMode: match.rules.matchMode,
+      lastTouch: match.possession.lastTouch,
+      restartTaker: currentCameraRestartTaker(match),
       goalScorer: goalScorer === null
         ? null
         : {
             nativePlayerNumber: goalScorer.nativePlayerNumber,
             position: { ...goalScorer.position },
             displacement: {
-              x: goalScorer.velocity.x,
-              y: goalScorer.velocity.y,
+              // 3D_UPD2.CPP camera 15 consumes tm_xdis/tm_ydis, the
+              // persistent player facing displacement, even while celebration
+              // movement velocity is zero.
+              x: goalScorer.facing.x,
+              y: goalScorer.facing.y,
             },
           },
     },
@@ -428,6 +433,12 @@ function freePlayPresentationPhase(match) {
     : "second-half-live-clock";
 }
 
+function currentCameraRestartTaker(match) {
+  const active = match.rules.boundary?.descriptor?.taker?.nativePlayerNumber;
+  if (active !== undefined) return active;
+  return match.rules.lastBoundaryRestart?.takerNativePlayer ?? null;
+}
+
 /**
  * Convert the browser engine's authoritative post-tick projection into the
  * stable-root player/ball publication consumed by the mounted PolyCSS scene.
@@ -553,6 +564,8 @@ export function createCssoccerLiveRenderFrame(contract, {
       },
       justScored: requireIntegerValue(values["score.just_scored"], "score.just_scored"),
       matchMode: requireIntegerValue(values["rules.match_mode"], "rules.match_mode"),
+      lastTouch: requireIntegerValue(values["ball.last_touch"], "ball.last_touch"),
+      restartTaker: null,
       goalScorer: goalScorerPlayer
         ? {
             nativePlayerNumber: goalScorerPlayer.nativePlayerNumber,

@@ -119,7 +119,8 @@ export async function publishDifferentialBundleAtomic(bundle, publicationRoot, {
 
 function createBundleContext(comparison, { publishedAt, title, subtitle, scenarioLabel, adapterId, historyRows }) {
   const { referenceStream, candidateStream } = comparison;
-  const { bindings, tickRange, phases } = referenceStream.header;
+  const { bindings, phases } = referenceStream.header;
+  const { tickRange } = comparison.coordinateWindow;
   const definitions = comparison.selectedFields;
   const scenarioId = bindings.scenarioId;
   const coordinateCount = tickRange.count * phases.length;
@@ -192,6 +193,7 @@ function createBundleContext(comparison, { publishedAt, title, subtitle, scenari
       engineIndependence: comparison.engineIndependence,
       typedExact: {
         coordinateOrder: comparison.coordinateOrder,
+        coordinateWindow: comparison.coordinateWindow,
         phaseOrder: phases,
         fieldSelection: comparison.fieldSelection,
         flattenedTick: firstOrdinal,
@@ -236,6 +238,8 @@ function createBundleContext(comparison, { publishedAt, title, subtitle, scenari
     scenarioId,
     coordinateCount,
     fieldCount,
+    sourceCoordinateOffset:
+      (tickRange.start - referenceStream.header.tickRange.start) * phases.length,
     flattenedTicks,
     fields,
     data,
@@ -303,7 +307,8 @@ function buildBufferedBundle(comparison, context) {
     const fullFieldOrdinal = fullFieldOrdinals.get(field.id);
     const samples = [];
     for (let coordinate = 0; coordinate < context.coordinateCount; coordinate += 1) {
-      const sampleIndex = coordinate * fullDefinitions.length + fullFieldOrdinal;
+      const sampleIndex = (context.sourceCoordinateOffset + coordinate)
+        * fullDefinitions.length + fullFieldOrdinal;
       const reference = referenceStream.samples[sampleIndex];
       const candidate = candidateStream.samples[sampleIndex];
       samples.push([
@@ -559,6 +564,14 @@ function assertComparison(comparison) {
   if (!comparison || comparison.schema !== "cssoccer-native-parity@1") throw new TypeError("comparison must be a cssoccer native parity report");
   if (!comparison.referenceStream || !comparison.candidateStream) throw new TypeError("comparison must retain its checked input stream summaries");
   if (!Array.isArray(comparison.selectedFields) || !Array.isArray(comparison.fieldResults)) throw new TypeError("comparison must retain its selected field results");
+  if (
+    comparison.coordinateWindow?.schema !== "cssoccer-parity-coordinate-window@1"
+    || !Number.isSafeInteger(comparison.coordinateWindow.tickRange?.start)
+    || !Number.isSafeInteger(comparison.coordinateWindow.tickRange?.count)
+    || comparison.coordinateWindow.tickRange.count < 1
+  ) {
+    throw new TypeError("comparison must retain its checked coordinate window");
+  }
   if (!/^[a-f0-9]{64}$/u.test(comparison.reportSha256)) throw new TypeError("comparison report identity is missing");
   if (comparison.engineIndependence?.status !== "pass") throw new TypeError("comparison lacks passing engine-independence metadata");
   if (comparison.selectedFields.some((field) => field.id.startsWith("camera."))) throw new TypeError("gameplay comparison contains a camera field");

@@ -4,27 +4,35 @@ import { decodeActuaOffsetArchive } from "./formatAdapters.mjs";
 
 const TEXTURE_RECORD_BYTES = 32;
 
-/** Assemble the complete demo-plus-retail texture table during preparation. */
+/** Assemble the exact fixture player table during preparation. */
 export function prepareExactActuaPlayerTextureTable({
-  actRendDatBytes,
-  actRendOffBytes,
+  euroRendDatBytes,
+  euroRendOffBytes,
   retailActRendDatBytes,
   retailActRendOffBytes,
 }) {
-  const demo = decodeActuaOffsetArchive({
-    dataBytes: requireBytes(actRendDatBytes, "demo ACTREND.DAT"),
-    indexBytes: requireBytes(actRendOffBytes, "demo ACTREND.OFF"),
-    label: "Actua demo renderer",
+  const exact = decodeActuaOffsetArchive({
+    dataBytes: requireBytes(euroRendDatBytes, "exact EUROREND.DAT"),
+    indexBytes: requireBytes(euroRendOffBytes, "exact EUROREND.OFF"),
+    label: "Actua exact renderer",
   });
   const retail = decodeActuaOffsetArchive({
     dataBytes: requireBytes(retailActRendDatBytes, "retail ACTREND.DAT"),
     indexBytes: requireBytes(retailActRendOffBytes, "retail ACTREND.OFF"),
     label: "Actua retail renderer",
   });
-  const output = Buffer.alloc(578 * TEXTURE_RECORD_BYTES);
-  demo.recordBytes(8).copy(output, 0);
+  const matchBytes = exact.recordBytes(8);
+  const playerBytes = exact.recordBytes(16);
+  const retailBytes = retail.recordBytes(8);
   const firstNumberByte = (549 - 1) * TEXTURE_RECORD_BYTES;
-  retail.recordBytes(8).copy(output, firstNumberByte, firstNumberByte, output.length);
+  if (
+    matchBytes.length !== 1_006 * TEXTURE_RECORD_BYTES
+    || playerBytes.length !== 573 * TEXTURE_RECORD_BYTES
+    || retailBytes.length !== matchBytes.length
+  ) throw new Error("Exact fixture player texture-table records changed.");
+  const output = Buffer.from(matchBytes);
+  playerBytes.copy(output, 0, 0, firstNumberByte);
+  retailBytes.copy(output, firstNumberByte, firstNumberByte, output.length);
   return output;
 }
 

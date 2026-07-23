@@ -1,3 +1,6 @@
+import { CSSOCCER_MATCH_MODE } from "./boundaryState.mjs";
+import { CSSOCCER_NATIVE_GAMEPLAY_PROFILE } from "./nativeGameplayProfile.mjs";
+
 const F32 = Math.fround;
 
 export const CSSOCCER_ACTUA_GAMEPLAY_CAMERA = deepFreeze({
@@ -14,6 +17,36 @@ export const CSSOCCER_ACTUA_GAMEPLAY_CAMERA = deepFreeze({
       routine: "process_camera",
       mode: 8,
       label: "WIRE",
+    },
+    goalKickLeft: {
+      file: "3D_UPD2.CPP",
+      routine: "process_camera",
+      mode: 9,
+      label: "GOAL KICK LEFT",
+    },
+    goalKickRight: {
+      file: "3D_UPD2.CPP",
+      routine: "process_camera",
+      mode: 10,
+      label: "GOAL KICK RIGHT",
+    },
+    cornerLeft: {
+      file: "3D_UPD2.CPP",
+      routine: "process_camera",
+      mode: 11,
+      label: "CORNER LEFT",
+    },
+    cornerRight: {
+      file: "3D_UPD2.CPP",
+      routine: "process_camera",
+      mode: 12,
+      label: "CORNER RIGHT",
+    },
+    throwIn: {
+      file: "3D_UPD2.CPP",
+      routine: "process_camera",
+      mode: 13,
+      label: "THROW IN",
     },
     faceCelebration: {
       file: "3D_UPD2.CPP",
@@ -35,6 +68,17 @@ export const CSSOCCER_ACTUA_GAMEPLAY_CAMERA = deepFreeze({
   }),
   setDistance: 260,
   setHeight: 100,
+  restart: {
+    pitchRatio: CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value,
+    // The prepared Spain/Argentina renderer binding decodes these dimensions
+    // from the compiled stad_info selected by the full-match native stage.
+    stadiumPerimeter: {
+      stW: 190,
+      stL: 190,
+      stH: 290,
+      cameraHeightLimit: 360,
+    },
+  },
   celebration: {
     scoreWait: 220,
     entryDelay: 30,
@@ -50,9 +94,24 @@ export const CSSOCCER_ACTUA_GAMEPLAY_CAMERA = deepFreeze({
     eye: [640, 400, 40],
     target: [595, 1425, 31],
   },
-  fullTimePresentation: {
-    policy: "centred-wire-freeze",
-    effectiveBall: { x: 640, y: 400, z: 2 },
+  openingEffectiveBall: { x: 640, y: 400, z: 2 },
+  openingPreviousSample: {
+    schema: "cssoccer-actua-opening-previous-camera@1",
+    sourceBoundary:
+      "3D_UPD2.CPP old_cam and old_t values at the line_up to gameplay handoff",
+    nextRenderedTick: 0,
+    gameplay: {
+      eye: [
+        638.1781616210938,
+        895.5472412109375,
+        236.50567626953125,
+      ],
+      target: [
+        640,
+        400,
+        2,
+      ],
+    },
   },
   maxDifference: 140,
   moveRate: 0.1,
@@ -69,16 +128,21 @@ export function createCssoccerActuaGameplayCamera({
   requireTick(tick);
   const ball = requireGameplayPoint(effectiveBall, "Actua camera effective ball");
   const desired = projectCssoccerActuaWireCamera(ball);
+  const rendered = tick === 0 && isOpeningCentreBall(ball)
+    ? createPose(CSSOCCER_ACTUA_GAMEPLAY_CAMERA.openingPreviousSample.gameplay)
+    : desired;
   return createCameraState({
     tick,
     sourceMode: CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.wire.mode,
     modeEnteredTick: tick,
     justScored: 0,
     matchMode: 0,
+    lastTouch: 0,
+    restartTaker: null,
     trackedPlayer: null,
     effectiveBall: ball,
     desired,
-    rendered: desired,
+    rendered,
   });
 }
 
@@ -92,7 +156,8 @@ export function stepCssoccerActuaGameplayCamera(camera, {
   justScored = 0,
   goalScorer = null,
   matchMode = 0,
-  terminal = false,
+  lastTouch,
+  restartTaker,
 } = {}) {
   const current = requireCameraState(camera);
   requireTick(tick);
@@ -102,13 +167,9 @@ export function stepCssoccerActuaGameplayCamera(camera, {
   const ball = requireGameplayPoint(effectiveBall, "Actua camera effective ball");
   const countdown = requireJustScored(justScored);
   const rulesMode = requireMatchMode(matchMode);
-  if (typeof terminal !== "boolean") {
-    throw new TypeError("Actua gameplay camera terminal flag must be boolean.");
-  }
-  if (terminal && rulesMode !== CSSOCCER_ACTUA_GAMEPLAY_CAMERA.tunnel.matchMode) {
-    throw new Error("Actua gameplay camera terminal presentation requires source match mode 19.");
-  }
-  const sourceMode = nextSourceMode(current.sourceMode, countdown, rulesMode);
+  const touch = requireLastTouch(lastTouch);
+  const taker = requireRestartTaker(restartTaker);
+  const sourceMode = nextSourceMode(current, countdown, rulesMode, taker);
   const modeEnteredTick = sourceMode === current.sourceMode
     ? current.modeEnteredTick
     : tick;
@@ -116,11 +177,7 @@ export function stepCssoccerActuaGameplayCamera(camera, {
     ? requireGoalScorer(goalScorer)
     : null;
   const desired = projectModeCamera(sourceMode, { ball, trackedPlayer });
-  const renderedGameplay = terminal
-    ? projectCssoccerActuaWireCamera(
-        CSSOCCER_ACTUA_GAMEPLAY_CAMERA.fullTimePresentation.effectiveBall,
-      ).gameplay
-    : smoothPose(current.rendered.gameplay, desired.gameplay);
+  const renderedGameplay = smoothPose(current.rendered.gameplay, desired.gameplay);
   const rendered = createPose(renderedGameplay);
   return createCameraState({
     tick,
@@ -128,6 +185,8 @@ export function stepCssoccerActuaGameplayCamera(camera, {
     modeEnteredTick,
     justScored: countdown,
     matchMode: rulesMode,
+    lastTouch: touch,
+    restartTaker: taker,
     trackedPlayer,
     effectiveBall: ball,
     desired,
@@ -173,8 +232,9 @@ export function projectCssoccerActuaWireCamera(effectiveBall) {
   let cameraY = F32(
     targetY - directionY * (distance - (distance * (targetY / (width * 2)))),
   );
+  const verticalRatio = F32(F32(targetY - centreY) / F32(centreY));
   const cameraZ = F32(
-    height - ((height * 0.8) * Math.abs((targetY - centreY) / centreY)),
+    height - ((height * 0.8) * Math.abs(verticalRatio)),
   );
   if (targetY < centreY) cameraY = F32(cameraY + (centreY - targetY) / 20);
 
@@ -191,17 +251,143 @@ export function projectCssoccerActuaWireCamera(effectiveBall) {
   });
 }
 
+/** Direct translation of 3D_UPD2.CPP camera == 9 (left goal kick). */
+export function projectCssoccerActuaGoalKickLeftCamera(effectiveBall) {
+  const ball = requireGameplayPoint(
+    effectiveBall,
+    "Actua left-goal-kick camera effective ball",
+  );
+  const { centre } = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.pitch;
+  const [centreX, centreY] = centre;
+  return createRestartPose({
+    eye: [
+      F32(ball.x - CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance),
+      F32(centreY),
+      F32(ball.z / 2 + CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setHeight),
+    ],
+    target: [
+      F32(ball.x + ((centreX - ball.x) / 10)),
+      F32(ball.y),
+      F32(ball.z),
+    ],
+  });
+}
+
+/** Direct translation of 3D_UPD2.CPP camera == 10 (right goal kick). */
+export function projectCssoccerActuaGoalKickRightCamera(effectiveBall) {
+  const ball = requireGameplayPoint(
+    effectiveBall,
+    "Actua right-goal-kick camera effective ball",
+  );
+  const { centre } = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.pitch;
+  const [centreX, centreY] = centre;
+  return createRestartPose({
+    eye: [
+      F32(ball.x + CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance),
+      F32(centreY),
+      F32(ball.z / 2 + CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setHeight),
+    ],
+    target: [
+      F32(ball.x - ((ball.x - centreX) / 10)),
+      F32(ball.y),
+      F32(ball.z),
+    ],
+  });
+}
+
+/** Direct translation of 3D_UPD2.CPP camera == 11 (left corner). */
+export function projectCssoccerActuaCornerLeftCamera(effectiveBall) {
+  return projectCssoccerActuaCornerCamera(effectiveBall, { rightGoal: false });
+}
+
+/** Direct translation of 3D_UPD2.CPP camera == 12 (right corner). */
+export function projectCssoccerActuaCornerRightCamera(effectiveBall) {
+  return projectCssoccerActuaCornerCamera(effectiveBall, { rightGoal: true });
+}
+
+/** Direct translation of 3D_UPD2.CPP camera == 13 (throw-in). */
+export function projectCssoccerActuaThrowInCamera(effectiveBall) {
+  const ball = requireGameplayPoint(
+    effectiveBall,
+    "Actua throw-in camera effective ball",
+  );
+  const { centre } = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.pitch;
+  const cameraY = ball.y > centre[1]
+    ? F32(ball.y + CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance / 2)
+    : F32(ball.y - CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance / 2);
+  return createRestartPose({
+    eye: [
+      F32(ball.x),
+      cameraY,
+      F32(ball.z + CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setHeight / 4),
+    ],
+    target: [F32(ball.x), F32(ball.y), F32(ball.z)],
+  });
+}
+
+function projectCssoccerActuaCornerCamera(effectiveBall, { rightGoal }) {
+  const side = rightGoal ? "right" : "left";
+  const ball = requireGameplayPoint(
+    effectiveBall,
+    `Actua ${side}-corner camera effective ball`,
+  );
+  const { length, centre } = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.pitch;
+  const targetXOffset = F32(
+    CSSOCCER_ACTUA_GAMEPLAY_CAMERA.restart.pitchRatio * 12,
+  );
+  const targetX = rightGoal
+    ? F32(length - targetXOffset)
+    : targetXOffset;
+  const targetY = F32(centre[1]);
+  const ballXDistance = F32(ball.x - targetX);
+  const ballYDistance = F32(ball.y - targetY);
+  const distance = F32(Math.hypot(ballXDistance, ballYDistance));
+  if (!(distance > 0)) {
+    throw new Error(`Actua ${side}-corner camera cannot normalize its ball vector.`);
+  }
+  const divisor = rightGoal ? 2 : 1;
+  return createRestartPose({
+    eye: [
+      F32(
+        ball.x
+          + (ballXDistance * CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance / distance)
+            / divisor,
+      ),
+      F32(
+        ball.y
+          + (ballYDistance * CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance / distance)
+            / divisor,
+      ),
+      F32(CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setHeight / 4),
+    ],
+    target: [targetX, targetY, F32(0)],
+  });
+}
+
+function createRestartPose({ eye, target }) {
+  const perimeter = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.restart.stadiumPerimeter;
+  const { length, width } = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.pitch;
+  const limitedEye = [
+    F32(Math.max(-perimeter.stL / 2, Math.min(length + perimeter.stL / 2, eye[0]))),
+    F32(Math.max(-perimeter.stW / 2, Math.min(width + perimeter.stW / 2, eye[1]))),
+    F32(Math.min(perimeter.cameraHeightLimit, eye[2])),
+  ];
+  return createPose({ eye: limitedEye, target });
+}
+
 /** Direct translation of 3D_UPD2.CPP camera == 15 (FACE CELEBRATION). */
 export function projectCssoccerActuaFaceCelebrationCamera(goalScorer) {
   const scorer = requireGoalScorer(goalScorer);
   const profile = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.celebration;
-  const distance = F32(
-    CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance / profile.distanceDivisor,
-  );
+  const distance = F32(CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setDistance);
   const targetX = F32(scorer.position.x);
   const targetY = F32(scorer.position.y);
-  const cameraX = F32(targetX + F32(scorer.displacement.x * distance));
-  const cameraY = F32(targetY + F32(scorer.displacement.y * distance));
+  const cameraX = F32(
+    targetX + F32(scorer.displacement.x) * distance / profile.distanceDivisor,
+  );
+  const cameraY = F32(
+    targetY + F32(scorer.displacement.y) * distance / profile.distanceDivisor,
+  );
   const cameraZ = F32(
     CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setHeight / profile.heightDivisor,
   );
@@ -275,6 +461,11 @@ function canonicalZero(value) {
   return value === 0 ? 0 : value;
 }
 
+function isOpeningCentreBall(ball) {
+  const opening = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.openingEffectiveBall;
+  return ball.x === opening.x && ball.y === opening.y && ball.z === opening.z;
+}
+
 /** Source projection helper used by prepare-time landmark sizing and tests. */
 export function projectCssoccerActuaRendererPoint(point, camera, {
   viewportWidth = 640,
@@ -311,15 +502,17 @@ function smoothPose(previous, desired) {
 }
 
 function smoothVector(previous, desired, rateMultiplier) {
-  const maxDifference = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.maxDifference;
-  const rate = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.moveRate * rateMultiplier;
+  const maxDifference = F32(CSSOCCER_ACTUA_GAMEPLAY_CAMERA.maxDifference);
+  const moveRate = F32(CSSOCCER_ACTUA_GAMEPLAY_CAMERA.moveRate);
   return previous.map((oldValue, index) => {
     const requested = desired[index];
-    const difference = requested - oldValue;
-    const clamped = Math.abs(difference) > maxDifference
-      ? F32(oldValue + Math.sign(difference) * maxDifference)
-      : requested;
-    return F32(oldValue + (clamped - oldValue) * rate);
+    // 3D_UPD2.CPP stores each requested-minus-old delta in a float before
+    // clamping and multiplying it by the static float move_rate.
+    const difference = F32(requested - oldValue);
+    const clampedDifference = Math.abs(difference) > maxDifference
+      ? F32(Math.sign(difference) * maxDifference)
+      : difference;
+    return F32(oldValue + clampedDifference * moveRate * rateMultiplier);
   });
 }
 
@@ -344,6 +537,8 @@ function createCameraState({
   modeEnteredTick,
   justScored,
   matchMode,
+  lastTouch,
+  restartTaker,
   trackedPlayer,
   effectiveBall,
   desired,
@@ -359,6 +554,8 @@ function createCameraState({
     modeEnteredTick,
     justScored,
     matchMode,
+    lastTouch,
+    restartTaker,
     trackedPlayer: trackedPlayer === null ? null : cloneGoalScorer(trackedPlayer),
     effectiveBall: {
       x: F32(effectiveBall.x),
@@ -428,6 +625,8 @@ function requireCameraState(value) {
     || !Number.isSafeInteger(value.matchMode)
     || value.matchMode < 0
     || value.matchMode > 255
+    || !isLastTouch(value.lastTouch)
+    || !isRestartTaker(value.restartTaker)
     || (value.sourceMode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.faceCelebration.mode
       ? !isGoalScorer(value.trackedPlayer)
       : value.trackedPlayer !== null)
@@ -439,10 +638,11 @@ function requireCameraState(value) {
   return value;
 }
 
-function nextSourceMode(currentMode, justScored, matchMode) {
+function nextSourceMode(current, justScored, matchMode, restartTaker) {
   const wire = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.wire.mode;
   const celebration = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.faceCelebration.mode;
   const tunnel = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.tunnelView.mode;
+  const currentMode = sourceModeAfterProjection(current);
   if (matchMode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.tunnel.matchMode) return tunnel;
   if (currentMode === celebration) return justScored === 0 ? wire : celebration;
   if (
@@ -452,10 +652,39 @@ function nextSourceMode(currentMode, justScored, matchMode) {
   ) {
     return celebration;
   }
+  if (isRestartMode(currentMode)) {
+    if (
+      isTakerBoundRestartMode(currentMode)
+      && matchMode === CSSOCCER_MATCH_MODE.NORMAL
+      && restartTaker === null
+    ) {
+      throw new Error(
+        `Actua camera mode ${currentMode} requires the source restart taker before release.`,
+      );
+    }
+    return currentMode;
+  }
+  const restartMode = restartModeForMatchMode(matchMode);
+  if (restartMode !== null) return restartMode;
   return wire;
 }
 
 function projectModeCamera(mode, { ball, trackedPlayer }) {
+  if (mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.goalKickLeft.mode) {
+    return projectCssoccerActuaGoalKickLeftCamera(ball);
+  }
+  if (mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.goalKickRight.mode) {
+    return projectCssoccerActuaGoalKickRightCamera(ball);
+  }
+  if (mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerLeft.mode) {
+    return projectCssoccerActuaCornerLeftCamera(ball);
+  }
+  if (mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerRight.mode) {
+    return projectCssoccerActuaCornerRightCamera(ball);
+  }
+  if (mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.throwIn.mode) {
+    return projectCssoccerActuaThrowInCamera(ball);
+  }
   if (mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.faceCelebration.mode) {
     return projectCssoccerActuaFaceCelebrationCamera(trackedPlayer);
   }
@@ -463,6 +692,84 @@ function projectModeCamera(mode, { ball, trackedPlayer }) {
     return projectCssoccerActuaTunnelCamera();
   }
   return projectCssoccerActuaWireCamera(ball);
+}
+
+function sourceModeAfterProjection(camera) {
+  const mode = camera.sourceMode;
+  const wire = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.wire.mode;
+  if (
+    mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.goalKickLeft.mode
+    && !isLeftGoalKickMode(camera.matchMode)
+  ) {
+    return wire;
+  }
+  if (
+    mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.goalKickRight.mode
+    && !isRightGoalKickMode(camera.matchMode)
+  ) {
+    return wire;
+  }
+  if (
+    (
+      mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerLeft.mode
+      || mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerRight.mode
+      || mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.throwIn.mode
+    )
+    && camera.matchMode === CSSOCCER_MATCH_MODE.NORMAL
+    && camera.lastTouch !== camera.restartTaker
+  ) {
+    return wire;
+  }
+  return mode;
+}
+
+function restartModeForMatchMode(matchMode) {
+  if (isLeftGoalKickMode(matchMode)) {
+    return CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.goalKickLeft.mode;
+  }
+  if (isRightGoalKickMode(matchMode)) {
+    return CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.goalKickRight.mode;
+  }
+  if (
+    matchMode === CSSOCCER_MATCH_MODE.CORNER_TL
+    || matchMode === CSSOCCER_MATCH_MODE.CORNER_BL
+  ) {
+    return CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerLeft.mode;
+  }
+  if (
+    matchMode === CSSOCCER_MATCH_MODE.CORNER_TR
+    || matchMode === CSSOCCER_MATCH_MODE.CORNER_BR
+  ) {
+    return CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerRight.mode;
+  }
+  if (
+    matchMode === CSSOCCER_MATCH_MODE.THROW_IN_A
+    || matchMode === CSSOCCER_MATCH_MODE.THROW_IN_B
+  ) {
+    return CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.throwIn.mode;
+  }
+  return null;
+}
+
+function isLeftGoalKickMode(matchMode) {
+  return matchMode === CSSOCCER_MATCH_MODE.GOAL_KICK_TL
+    || matchMode === CSSOCCER_MATCH_MODE.GOAL_KICK_BL;
+}
+
+function isRightGoalKickMode(matchMode) {
+  return matchMode === CSSOCCER_MATCH_MODE.GOAL_KICK_TR
+    || matchMode === CSSOCCER_MATCH_MODE.GOAL_KICK_BR;
+}
+
+function isRestartMode(mode) {
+  return mode >= CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.goalKickLeft.mode
+    && mode <= CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.throwIn.mode;
+}
+
+function isTakerBoundRestartMode(mode) {
+  return mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerLeft.mode
+    || mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.cornerRight.mode
+    || mode === CSSOCCER_ACTUA_GAMEPLAY_CAMERA.modes.throwIn.mode;
 }
 
 function sourceForMode(mode) {
@@ -490,6 +797,31 @@ function requireMatchMode(value) {
     throw new TypeError("Actua camera match_mode must be an unsigned byte.");
   }
   return value;
+}
+
+function requireLastTouch(value) {
+  if (!isLastTouch(value)) {
+    throw new TypeError("Actua camera last_touch must be an integer from 0 through 22.");
+  }
+  return value;
+}
+
+function isLastTouch(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 22;
+}
+
+function requireRestartTaker(value) {
+  if (!isRestartTaker(value)) {
+    throw new TypeError(
+      "Actua camera restart taker must be null or a native player number from 1 through 22.",
+    );
+  }
+  return value;
+}
+
+function isRestartTaker(value) {
+  return value === null
+    || (Number.isSafeInteger(value) && value >= 1 && value <= 22);
 }
 
 function requireGoalScorer(value) {

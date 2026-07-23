@@ -45,6 +45,7 @@ export class ParityComparisonError extends Error {
 
 export function compareNativeParity(referenceStream, candidateStream, {
   fieldSelection = null,
+  coordinateWindow = null,
 } = {}) {
   assertParsedStream(referenceStream, "reference");
   assertParsedStream(candidateStream, "candidate");
@@ -52,21 +53,24 @@ export function compareNativeParity(referenceStream, candidateStream, {
   assertPassingEngineIndependence(candidateStream.header.engineIndependence);
 
   const selection = resolveFieldSelection(referenceStream.header, fieldSelection);
+  const window = resolveCoordinateWindow(referenceStream.header, coordinateWindow);
   const selectedOrdinals = new Map(selection.fields.map((field, ordinal) => [field.id, ordinal]));
   const fieldResults = createFieldResults(selection.fields);
-  const coordinateCount = referenceStream.header.tickRange.count * referenceStream.header.phases.length;
+  const coordinateCount = window.tickRange.count * referenceStream.header.phases.length;
   const nonPassCounts = Array(coordinateCount).fill(0);
+  const phaseById = new Map(referenceStream.header.phases.map((phase) => [phase.id, phase]));
   let earliestMismatch = null;
   let mismatchCount = 0;
 
   for (let index = 0; index < referenceStream.samples.length; index += 1) {
     const reference = referenceStream.samples[index];
     const candidate = candidateStream.samples[index];
+    if (reference.tick < window.tickRange.start) continue;
     const selectedOrdinal = selectedOrdinals.get(reference.fieldId);
     if (selectedOrdinal === undefined) continue;
-    const phase = referenceStream.header.phases.find((entry) => entry.id === reference.phase);
+    const phase = phaseById.get(reference.phase);
     const field = selection.fields[selectedOrdinal];
-    const coordinateOrdinal = (reference.tick - referenceStream.header.tickRange.start)
+    const coordinateOrdinal = (reference.tick - window.tickRange.start)
       * referenceStream.header.phases.length + phase.order;
     const equal = typedSamplesEqual(reference, candidate);
     updateFieldResult(fieldResults[selectedOrdinal], coordinateOrdinal, equal);
@@ -80,6 +84,7 @@ export function compareNativeParity(referenceStream, candidateStream, {
     referenceStream,
     candidateStream,
     selection,
+    coordinateWindow: window,
     fieldResults,
     nonPassCounts,
     mismatchCount,
@@ -90,6 +95,8 @@ export function compareNativeParity(referenceStream, candidateStream, {
       fullStreamValidation: true,
       retainedSamplePairs: referenceStream.samples.length,
       maxBufferedSampleBytes: null,
+      validatedTickRange: window.streamTickRange,
+      comparedTickRange: window.tickRange,
     },
   });
 }
@@ -103,6 +110,7 @@ export function compareNativeParity(referenceStream, candidateStream, {
  */
 export async function compareNativeParityFiles(referencePath, candidatePath, {
   fieldSelection = GAMEPLAY_FIELD_SELECTION,
+  coordinateWindow = null,
   sampleStoreRoot,
   maxBufferedSampleBytes = DEFAULT_SPOOL_BUFFER_BYTES,
 } = {}) {
@@ -126,9 +134,10 @@ export async function compareNativeParityFiles(referencePath, candidatePath, {
     assertPassingEngineIndependence(candidateReader.header.engineIndependence);
 
     const selection = resolveFieldSelection(referenceReader.header, fieldSelection);
+    const window = resolveCoordinateWindow(referenceReader.header, coordinateWindow);
     const selectedOrdinals = new Map(selection.fields.map((field, ordinal) => [field.id, ordinal]));
     const fieldResults = createFieldResults(selection.fields);
-    const coordinateCount = referenceReader.header.tickRange.count * referenceReader.header.phases.length;
+    const coordinateCount = window.tickRange.count * referenceReader.header.phases.length;
     const nonPassCounts = Array(coordinateCount).fill(0);
     const phaseById = new Map(referenceReader.header.phases.map((phase) => [phase.id, phase]));
     const spools = selection.fields.map((field, ordinal) => ({
@@ -162,12 +171,13 @@ export async function compareNativeParityFiles(referencePath, candidatePath, {
       if (reference.tick !== candidate.tick || reference.phase !== candidate.phase || reference.fieldId !== candidate.fieldId) {
         throw new ParityComparisonError("Reference and candidate sample coordinates differ after strict stream validation.");
       }
+      if (reference.tick < window.tickRange.start) continue;
       const selectedOrdinal = selectedOrdinals.get(reference.fieldId);
       if (selectedOrdinal === undefined) continue;
 
       const phase = phaseById.get(reference.phase);
       const field = selection.fields[selectedOrdinal];
-      const coordinateOrdinal = (reference.tick - referenceReader.header.tickRange.start)
+      const coordinateOrdinal = (reference.tick - window.tickRange.start)
         * referenceReader.header.phases.length + phase.order;
       const equal = typedSamplesEqual(reference, candidate);
       const state = equal ? 0 : 1;
@@ -213,7 +223,7 @@ export async function compareNativeParityFiles(referencePath, candidatePath, {
     const sampleStore = Object.freeze({
       schema: "cssoccer-parity-sample-store@1",
       root: storeRoot,
-      coordinateEncoding: "zero-based ordinal over contiguous (tick, phase)",
+      coordinateEncoding: "zero-based ordinal over the declared comparison-window (tick, phase)",
       spools: Object.freeze(finalizedSpools),
     });
 
@@ -221,6 +231,7 @@ export async function compareNativeParityFiles(referencePath, candidatePath, {
       referenceStream,
       candidateStream,
       selection,
+      coordinateWindow: window,
       fieldResults,
       nonPassCounts,
       mismatchCount,
@@ -232,6 +243,8 @@ export async function compareNativeParityFiles(referencePath, candidatePath, {
         retainedSamplePairs: 1,
         maxBufferedSampleBytes,
         peakBufferedSampleBytes,
+        validatedTickRange: window.streamTickRange,
+        comparedTickRange: window.tickRange,
       },
     });
   } catch (error) {
@@ -303,6 +316,49 @@ function resolveFieldSelection(header, selection) {
   });
 }
 
+function resolveCoordinateWindow(header, coordinateWindow) {
+  const streamStart = header.tickRange.start;
+  const streamEnd = streamStart + header.tickRange.count;
+  const normalized = coordinateWindow === null
+    ? {
+        schema: "cssoccer-parity-coordinate-window@1",
+        id: "full-declared-stream@1",
+        startTick: streamStart,
+        sourceBoundary: "declared parity stream tickRange",
+        reason: "Every declared stream tick belongs to the comparison.",
+      }
+    : coordinateWindow;
+  if (normalized?.schema !== "cssoccer-parity-coordinate-window@1") {
+    throw new ParityComparisonError("coordinate window must use cssoccer-parity-coordinate-window@1");
+  }
+  for (const key of ["id", "sourceBoundary", "reason"]) {
+    if (typeof normalized[key] !== "string" || normalized[key].trim().length === 0) {
+      throw new ParityComparisonError(`coordinate window ${key} must be non-empty`);
+    }
+  }
+  if (
+    !Number.isSafeInteger(normalized.startTick)
+    || normalized.startTick < streamStart
+    || normalized.startTick >= streamEnd
+  ) {
+    throw new ParityComparisonError(
+      `coordinate window startTick must be inside [${streamStart}, ${streamEnd})`,
+    );
+  }
+  return Object.freeze({
+    schema: normalized.schema,
+    id: normalized.id,
+    sourceBoundary: normalized.sourceBoundary,
+    reason: normalized.reason,
+    streamTickRange: Object.freeze({ ...header.tickRange }),
+    tickRange: Object.freeze({
+      start: normalized.startTick,
+      count: streamEnd - normalized.startTick,
+    }),
+    skippedPrefixTickCount: normalized.startTick - streamStart,
+  });
+}
+
 function createFieldResults(fields) {
   return fields.map((definition, ordinal) => ({
     definition,
@@ -324,6 +380,7 @@ function makeComparison({
   referenceStream,
   candidateStream,
   selection,
+  coordinateWindow,
   fieldResults,
   nonPassCounts,
   mismatchCount,
@@ -336,6 +393,7 @@ function makeComparison({
     schema: "cssoccer-native-parity@1",
     status: earliestMismatch === null ? "match" : "mismatch",
     coordinateOrder: ["tick", "phase", "field"],
+    coordinateWindow,
     fieldSelection: selectionMetadata(selection),
     bindings: {
       scenarioId: referenceStream.header.bindings.scenarioId,

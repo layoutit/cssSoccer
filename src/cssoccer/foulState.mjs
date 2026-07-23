@@ -74,10 +74,17 @@ export function resolveCssoccerFoulCall(state, {
   manDown,
   rng,
 } = {}) {
-  const current = assertCssoccerFoulState(state);
-  if (current.playAdvantage !== 0) {
-    throw new Error("A new foul cannot be resolved while source advantage is pending.");
-  }
+  const asserted = assertCssoccerFoulState(state);
+  // RULES.CPP init_foul clears play_advantage before it consumes visibility
+  // RNG. A later source-ordered contact in the same player_ints loop therefore
+  // supersedes a pending candidate even when the later foul is not seen.
+  const current = asserted.playAdvantage === 0
+    ? asserted
+    : {
+        ...clone(asserted),
+        playAdvantage: 0,
+        pending: null,
+      };
   const event = requireFoulCandidate(candidate);
   const incident = requirePosition(offenderPosition, "offenderPosition");
   const referee = requirePosition(refereePosition, "refereePosition");

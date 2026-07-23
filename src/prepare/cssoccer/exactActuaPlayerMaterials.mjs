@@ -28,14 +28,16 @@ const ATLAS_COLUMNS = 32;
 const ASSET_PATH = "assets/textures/spain-argentina-exact-player-materials.png";
 const ASSET_URL = `/cssoccer/${ASSET_PATH}`;
 const BOOT_FACE_INDEXES = new Set([2, 3]);
+const SPAIN_SHORTS_FACE_INDEXES = new Set([8, 10]);
+const SPAIN_LOWER_LEG_FACE_INDEXES = new Set([9, 11]);
 
 /** Prepare every view-selected team texture and fixture number once. */
 export function prepareCssoccerExactActuaPlayerMaterials({
   animationTable,
   sequences,
   geometry,
-  actRendDatBytes,
-  actRendOffBytes,
+  euroRendDatBytes,
+  euroRendOffBytes,
   retailActRendDatBytes,
   retailActRendOffBytes,
   sourceAtlasPngBytes,
@@ -51,15 +53,15 @@ export function prepareCssoccerExactActuaPlayerMaterials({
     geometry,
     onSample(sample) {
       sample.faces.forEach((face) => {
-        if (face.visibility === "visible") {
+        if (face.visibility !== "native-hidden") {
           selectorOffsetsByFace[face.faceIndex].add(face.materialSelectorOffset);
         }
       });
     },
   });
   const textureTable = prepareExactActuaPlayerTextureTable({
-    actRendDatBytes,
-    actRendOffBytes,
+    euroRendDatBytes,
+    euroRendOffBytes,
     retailActRendDatBytes,
     retailActRendOffBytes,
   });
@@ -122,6 +124,23 @@ export function prepareCssoccerExactActuaPlayerMaterials({
     || Math.max(...bootSlots) !== 356
     || [...bootSlots].some((slot) => nonBootSlots.has(slot))
   ) throw new Error("Exact player boot material slot domain changed.");
+  const spainPlan = profilePlans.find(({ profile }) => profile.country === "spain");
+  const spainShortsSlots = materialSlotsForFaces(
+    spainPlan,
+    SPAIN_SHORTS_FACE_INDEXES,
+  );
+  const spainLowerLegSlots = materialSlotsForFaces(
+    spainPlan,
+    SPAIN_LOWER_LEG_FACE_INDEXES,
+  );
+  if (
+    spainShortsSlots.size !== 7
+    || Math.min(...spainShortsSlots) !== 255
+    || Math.max(...spainShortsSlots) !== 261
+    || spainLowerLegSlots.size !== 7
+    || Math.min(...spainLowerLegSlots) !== 241
+    || Math.max(...spainLowerLegSlots) !== 247
+  ) throw new Error("Exact Spain shorts or lower-leg material slot domain changed.");
   const orderedSlots = [...requiredSlots].sort((left, right) => left - right);
   if (
     orderedSlots.length !== 386
@@ -216,6 +235,7 @@ export function prepareCssoccerExactActuaPlayerMaterials({
     {
       id: profile.id,
       country: profile.country,
+      sourceModelSymbol: profile.sourceModelSymbol,
       geometryId: geometry.geometry.geometryId,
       topologySha256: geometry.geometry.topologySha256,
       atlasUrl: ASSET_URL,
@@ -303,6 +323,25 @@ export function prepareCssoccerExactActuaPlayerMaterials({
         sourceRgbaPreserved: true,
         presentationOverride: false,
       },
+      spainLowerBodyTextures: {
+        sourceModelSymbol: "player_f1",
+        shortsThigh: {
+          faceIndexes: [...SPAIN_SHORTS_FACE_INDEXES],
+          nativeTextureSlots: [
+            Math.min(...spainShortsSlots),
+            Math.max(...spainShortsSlots),
+          ],
+        },
+        lowerLeg: {
+          faceIndexes: [...SPAIN_LOWER_LEG_FACE_INDEXES],
+          nativeTextureSlots: [
+            Math.min(...spainLowerLegSlots),
+            Math.max(...spainLowerLegSlots),
+          ],
+        },
+        sourceRgbaPreserved: true,
+        presentationOverride: false,
+      },
     },
     runtime: {
       geometryMutation: false,
@@ -324,6 +363,14 @@ export function prepareCssoccerExactActuaPlayerMaterials({
       expectedSha256: atlas.sha256,
     }),
   });
+}
+
+function materialSlotsForFaces(plan, faceIndexes) {
+  if (!plan) throw new Error("Exact player material profile is missing.");
+  return new Set(plan.faces
+    .filter(({ faceIndex }) => faceIndexes.has(faceIndex))
+    .flatMap(({ slotsBySelectorOffset }) => Object.values(slotsBySelectorOffset))
+    .filter((slot) => slot !== null));
 }
 
 function materialBinding(entryBySlot, slot) {

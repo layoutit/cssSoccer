@@ -109,6 +109,7 @@ export function mountCssoccerClient({
     inputMode: detectInputMode(windowImpl),
     hudState: null,
     lastInputCommand: null,
+    lastInputState: null,
     liveFrame: null,
     liveScheduler: null,
     requestAudit: createCssoccerPreparedRequestAudit(),
@@ -475,6 +476,7 @@ export function mountCssoccerClient({
     if (state.liveScheduler !== null) return state.lastInputCommand;
     const emitted = createCssoccerBrowserInputCommand(state.inputState, {
       tick: state.matchState.tick,
+      previousInput: state.lastInputState,
       movementBasis: state.mount.gameplayInputBasis(),
     });
     state.lastInputCommand = emitted.command;
@@ -652,6 +654,7 @@ export function mountCssoccerClient({
       state.mount.applyLiveRenderFrame(frame);
       state.matchState = snapshot.match;
       state.lastInputCommand = emitted.command;
+      state.lastInputState = emitted.input;
       state.liveFrame = frame;
       consumeCommand(emitted.command);
       renderHud();
@@ -971,6 +974,7 @@ export function mountCssoccerClient({
       state.engine = nextEngine;
       state.playerRenderContract = nextPlayerRenderContract;
       state.lastInputCommand = null;
+      state.lastInputState = null;
       state.liveFrame = null;
       performanceInitialFramePublished = false;
       performanceFrameScheduler.accumulator = 0;
@@ -1045,6 +1049,7 @@ export function mountCssoccerClient({
     state.playerRenderContract = null;
     state.hudState = null;
     state.lastInputCommand = null;
+    state.lastInputState = null;
     state.liveFrame = null;
     state.liveScheduler = null;
     visualCaptureDepth = 0;

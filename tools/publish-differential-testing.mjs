@@ -5,6 +5,9 @@ import { pathToFileURL } from "node:url";
 
 import { buildDifferentialBundle, publishDifferentialBundleAtomic } from "../src/parity/differentialBundle.mjs";
 import { compareNativeParityFiles, GAMEPLAY_FIELD_SELECTION } from "../src/parity/nativeParity.mjs";
+import {
+  CSSOCCER_FREE_PLAY_GAMEPLAY_COORDINATE_WINDOW,
+} from "./support/free-play-scenario-adapter.mjs";
 
 export async function main(argv = process.argv.slice(2), {
   env = process.env,
@@ -19,6 +22,7 @@ export async function main(argv = process.argv.slice(2), {
   try {
     comparison = await compareNativeParityFiles(options.reference, options.candidate, {
       fieldSelection: GAMEPLAY_FIELD_SELECTION,
+      coordinateWindow: CSSOCCER_FREE_PLAY_GAMEPLAY_COORDINATE_WINDOW,
       sampleStoreRoot: join(workRoot, "samples"),
     });
     const historyRows = loadHistoricalRows(options.outputRoot, transport, comparison);
@@ -67,7 +71,8 @@ export function loadHistoricalRows(outputRoot, transport, comparison) {
   ) {
     throw new TypeError("Installed Differential Testing transport cannot recover retained history.");
   }
-  const { bindings, tickRange, phases } = comparison.referenceStream.header;
+  const { bindings, phases } = comparison.referenceStream.header;
+  const { tickRange } = comparison.coordinateWindow;
   const scenarioId = bindings.scenarioId;
   const expectedContract = comparison.fieldSelection.comparisonContractSha256;
   const rows = [];
