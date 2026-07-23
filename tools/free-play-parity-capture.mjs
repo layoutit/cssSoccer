@@ -22,6 +22,7 @@ export async function installCssoccerFreePlayParityCapture({
   candidateIdentity,
   commandScenario,
   country,
+  inputAdapter,
   nativeIdentity,
   cryptoImpl = globalThis.crypto,
   fetchImpl = globalThis.fetch,
@@ -77,6 +78,7 @@ export async function installCssoccerFreePlayParityCapture({
   const adapter = await createCssoccerFreePlayScenarioAdapter({
     cryptoImpl,
     engine,
+    inputAdapter,
     projectSnapshot: (snapshot) => projectCssoccerFreePlaySnapshot({
       snapshot,
       preparedScene,

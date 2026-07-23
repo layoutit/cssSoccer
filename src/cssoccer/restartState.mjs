@@ -356,9 +356,13 @@ function restartTakerTarget({ spec, ballPosition, incidentPosition, seed }) {
     };
   } else {
     const angle = f32((64 - seed) * (3.1415 / (8 * 64)));
+    // RULES.CPP declares taker_x/taker_y as int. The trigonometric result is
+    // therefore truncated on assignment before gkick_pos reads it as a float.
     world = {
-      x: f32(ballPosition.x + (spec.team === "A" ? -1 : 1) * (Math.cos(angle) * 4)),
-      y: f32(ballPosition.y + (Math.sin(angle) * 4)),
+      x: f32(Math.trunc(
+        ballPosition.x + (spec.team === "A" ? -1 : 1) * (Math.cos(angle) * 4),
+      )),
+      y: f32(Math.trunc(ballPosition.y + (Math.sin(angle) * 4))),
     };
   }
   const sourceFrame = spec.team === "A" ? clone(world) : {

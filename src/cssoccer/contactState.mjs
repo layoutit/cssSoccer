@@ -1382,12 +1382,6 @@ function reboundFromPlayer({ possession, ball, player, seed, profile }) {
     z: f32(ball.displacement.z * profile.verticalBallDamp),
   };
   const distance = sourceDistance(displacement.x, displacement.y);
-  if (!(distance > 0)) {
-    throw new UnsupportedContactSemanticsError(
-      "The source rebound vector is zero and would divide by zero while placing the ball.",
-      { producer: "BALLINT.CPP rebound_off_plr", nativePlayer: player.nativePlayer },
-    );
-  }
   const offset = profile.touchBallBox + 1;
   const nextBall = {
     ...cloneBall(ball),
@@ -2258,7 +2252,8 @@ function opposingTeams(left, right) {
 }
 
 function sourceDistance(x, y) {
-  return Math.sqrt((x * x) + (y * y));
+  const distance = f32(Math.sqrt((x * x) + (y * y)));
+  return distance > 0.1 ? distance : f32(0.1);
 }
 
 function typedI16(fieldId, value) {

@@ -55,7 +55,7 @@ export const CSSOCCER_KICKOFF_PLAYER_MOTION_SOURCE = deepFreeze({
   ],
   sourceOrder: SOURCE_ORDER,
   requiredInputs: [
-    "22 prepared player identities, native slots, source/data-bound dynamic tm_rate values, positions, and facings",
+    "22 prepared player identities, native slots, active flags, source/data-bound dynamic tm_rate values, positions, and facings",
     "kickoffState source-owned centre targets",
     "nativeGameplayProfile compiled motion constants",
     "pitchLength",
@@ -63,6 +63,7 @@ export const CSSOCCER_KICKOFF_PLAYER_MOTION_SOURCE = deepFreeze({
   ],
   supportedSubset: [
     "active opening and post-swap kickoff starters",
+    "source-inactive dismissed slots retained but skipped by current-state restart positioning",
     "STAND_ACT and RUN_ACT",
     "dir_mode 0 target-facing and dir_mode 1 ball-facing",
     "normal no-possession, no-user-burst source travel",
@@ -269,6 +270,7 @@ function requireCurrentTargets(value, teamBySlot) {
       "target",
       "targetOwner",
     ], `current kickoff target ${index + 1}`);
+    requireBoolean(target.active, `current kickoff target ${index + 1} active`);
     const nativeTeamSlot = index < 11 ? "A" : "B";
     const expectedCountry = teamBySlot[nativeTeamSlot];
     if (
@@ -276,7 +278,6 @@ function requireCurrentTargets(value, teamBySlot) {
       || target.nativeTeamSlot !== nativeTeamSlot
       || target.country !== expectedCountry
       || target.id !== `${expectedCountry}-player-${String((index % 11) + 1).padStart(2, "0")}`
-      || target.active !== true
       || !["keeper", "outfield", "receiver", "taker"].includes(target.role)
       || typeof target.targetOwner !== "string"
       || target.targetOwner.length === 0

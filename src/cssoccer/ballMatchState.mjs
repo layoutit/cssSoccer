@@ -193,6 +193,36 @@ export function stepBallMatchState(
   return matchResult(ball, limbo, outcome, events);
 }
 
+/**
+ * Complete BALL.CPP's final boundary countdown visit. The ordinary reducer
+ * publishes ball_out_of_play=1 as a seam for match_rules; on the following
+ * source tick process_ball still advances the trajectory once, decrements to
+ * zero, and only then lets the restart owner respot the ball.
+ */
+export function stepBallBoundaryRespotTick(
+  state,
+  { afterTouchInput } = {},
+) {
+  const current = createBallMatchState(state);
+  if (
+    current.outcome?.kind !== "boundary"
+    || current.outcome.status !== "restart-required"
+    || current.ball.outOfPlay !== 1
+  ) {
+    throw new Error("Boundary respot tick requires the published out-of-play=1 seam.");
+  }
+  const physical = stepBallState(current.ball, { afterTouchInput });
+  const ball = createBallState({ ...physical.state, outOfPlay: 0 });
+  return matchResult(ball, current.limbo, null, [
+    ...physical.events,
+    {
+      type: "ball-boundary-respot-required",
+      outOfPlay: 0,
+      requiresRestartPolicy: true,
+    },
+  ]);
+}
+
 export function runBallMatchScript(
   initialState,
   script,

@@ -168,6 +168,14 @@ function sourceFreePlayShootingRange(player) {
       : 0) - player.position.x),
     y: Math.fround((CSSOCCER_BALL_CONSTANTS.pitchWidth / 2) - player.position.y),
   };
+  if (!Number.isFinite(goalOffset.x) || !Number.isFinite(goalOffset.y)) {
+    throw new Error(
+      `Free-play shooting range lost finite position for ${player.id}: ${JSON.stringify({
+        position: player.position,
+        goalOffset,
+      })}`,
+    );
+  }
   const minimum = CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 12;
   return sourceDistance2d(goalOffset) < minimum + player.gameplay.power * 3;
 }

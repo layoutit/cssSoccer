@@ -22,6 +22,14 @@ const PRE_LOOP_PRESENTATION_FIELDS = Object.freeze([
 const OPTION_KEYS = Object.freeze([
   "cryptoImpl",
   "engine",
+  "inputAdapter",
+  "projectSnapshot",
+  "scenario",
+]);
+
+const REQUIRED_OPTION_KEYS = Object.freeze([
+  "cryptoImpl",
+  "engine",
   "projectSnapshot",
   "scenario",
 ]);
@@ -32,10 +40,16 @@ const OPTION_KEYS = Object.freeze([
  */
 export async function createCssoccerFreePlayScenarioAdapter(options = {}) {
   requirePlainObject(options, "free-play scenario adapter options");
-  requireExactKeys(options, OPTION_KEYS, "free-play scenario adapter options");
+  requireAllowedKeys(
+    options,
+    OPTION_KEYS,
+    REQUIRED_OPTION_KEYS,
+    "free-play scenario adapter options",
+  );
   const scenario = assertCssoccerFreePlayTestScenario(options.scenario);
   const engine = assertCssoccerFreePlayEngineApi(options.engine);
   const stepPort = assertCssoccerFreePlayTestStepPort({ step: engine.step.bind(engine) });
+  const inputAdapter = requireSetPieceInputAdapter(options.inputAdapter ?? null);
   if (typeof options.projectSnapshot !== "function") {
     throw new TypeError("Free-play scenario adapter requires a read-only snapshot projector.");
   }
@@ -49,6 +63,8 @@ export async function createCssoccerFreePlayScenarioAdapter(options = {}) {
 
   let cursor = 0;
   let lastProjection = null;
+  let setPieceWasActive = false;
+  let setPiecePulseNext = false;
   return Object.freeze({
     schema: CSSOCCER_FREE_PLAY_SCENARIO_ADAPTER_SCHEMA,
     bindings: scenario.bindings,
@@ -72,7 +88,16 @@ export async function createCssoccerFreePlayScenarioAdapter(options = {}) {
       }
       const before = engine.snapshot();
       const comparisonBoundary = comparisonBoundaryFor(before);
-      const snapshot = stepPort.step(command);
+      const adapted = applySetPieceInputAdapter({
+        before,
+        command,
+        inputAdapter,
+        setPieceWasActive,
+        setPiecePulseNext,
+      });
+      setPieceWasActive = adapted.setPieceWasActive;
+      setPiecePulseNext = adapted.setPiecePulseNext;
+      const snapshot = stepPort.step(adapted.command);
       if (snapshot !== engine.snapshot()) {
         throw new Error("Free-play scenario step did not publish the engine snapshot.");
       }
@@ -83,7 +108,9 @@ export async function createCssoccerFreePlayScenarioAdapter(options = {}) {
         tick: command.tick,
         phase: "post_tick",
         snapshotTick: snapshot.tick,
-        command,
+        command: adapted.command,
+        sourceCommand: command,
+        inputAdapter: adapted.evidence,
         bindings: scenario.bindings,
         comparisonBoundary,
         values: projected.values,
@@ -98,10 +125,76 @@ export async function createCssoccerFreePlayScenarioAdapter(options = {}) {
         commandCount: scenario.commands.length,
         complete: cursor === scenario.commands.length,
         lastProjection,
+        inputAdapter,
         snapshot: engine.snapshot(),
       });
     },
   });
+}
+
+function applySetPieceInputAdapter({
+  before,
+  command,
+  inputAdapter,
+  setPieceWasActive,
+  setPiecePulseNext,
+}) {
+  if (inputAdapter === null) {
+    return {
+      command,
+      evidence: null,
+      setPieceWasActive: false,
+      setPiecePulseNext: false,
+    };
+  }
+  const active = before?.match?.rules?.setPiece !== 0;
+  if (!active) {
+    return {
+      command,
+      evidence: deepFreeze({ schema: inputAdapter.schema, active: false, pulsed: false }),
+      setPieceWasActive: false,
+      setPiecePulseNext: false,
+    };
+  }
+  // The native adapter first observes set_piece_on during the source tick
+  // that publishes the decision state. That first pulse is consumed by the
+  // source selection-change guard. The browser sees the published decision
+  // state only on the following step, so begin with its matching neutral
+  // half-cycle and then alternate the declared fire pulse.
+  if (!setPieceWasActive) {
+    return {
+      command,
+      evidence: deepFreeze({ schema: inputAdapter.schema, active: true, pulsed: false }),
+      setPieceWasActive: true,
+      setPiecePulseNext: true,
+    };
+  }
+  const pulsed = setPiecePulseNext;
+  return {
+    command: pulsed
+      ? deepFreeze({ ...command, buttons: command.buttons | 1 })
+      : command,
+    evidence: deepFreeze({ schema: inputAdapter.schema, active: true, pulsed }),
+    setPieceWasActive: true,
+    setPiecePulseNext: !setPiecePulseNext,
+  };
+}
+
+function requireSetPieceInputAdapter(value) {
+  if (value === null) return null;
+  requirePlainObject(value, "free-play set-piece input adapter");
+  if (
+    value.schema !== "cssoccer-native-set-piece-input-adapter@1"
+    || value.trigger !== "set_piece_on != 0"
+    || value.behavior
+      !== "alternate one neutral tick and one m=1,f=1 pulse at user_conts entry"
+    || value.externalTestCommandScenario !== "all commands explicitly zero-valued"
+    || value.rawFlag !== 32
+    || !/^[a-f0-9]{64}$/u.test(value.sha256 ?? "")
+  ) {
+    throw new Error("Free-play set-piece input adapter changed its declared native contract.");
+  }
+  return deepFreeze({ ...value });
 }
 
 /**
@@ -198,6 +291,19 @@ function requireExactKeys(value, expected, label) {
   const wanted = [...expected].sort();
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
     throw new Error(`${label} must contain exactly ${wanted.join(", ")}.`);
+  }
+}
+
+function requireAllowedKeys(value, allowed, required, label) {
+  const actual = Object.keys(value).sort();
+  const permitted = new Set(allowed);
+  const missing = required.filter((key) => !Object.hasOwn(value, key));
+  const unexpected = actual.filter((key) => !permitted.has(key));
+  if (missing.length !== 0 || unexpected.length !== 0) {
+    throw new Error(
+      `${label} must contain ${required.join(", ")}`
+        + ` and may contain only ${allowed.join(", ")}.`,
+    );
   }
 }
 

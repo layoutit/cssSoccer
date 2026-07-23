@@ -27,12 +27,19 @@ async function main() {
     inputMode: "keyboard",
     controlCountry: options.country,
   }));
-  const path = join(CSSOCCER_REPO_ROOT, ".local/cssoccer/free-play/adaptive/current.json");
-  const artifact = await atomicWriteJson(path, report);
+  const runId = report.generatedAt.replace(/[:.]/gu, "-");
+  const root = join(CSSOCCER_REPO_ROOT, ".local/cssoccer/free-play/adaptive");
+  const [retained, countryCurrent, current] = await Promise.all([
+    atomicWriteJson(join(root, "runs", `${runId}-${options.country}`, "report.json"), report),
+    atomicWriteJson(join(root, `current-${options.country}.json`), report),
+    atomicWriteJson(join(root, "current.json"), report),
+  ]);
   console.log(JSON.stringify({
     status: "pass",
-    report: relative(CSSOCCER_REPO_ROOT, artifact.path),
-    reportSha256: artifact.sha256,
+    report: relative(CSSOCCER_REPO_ROOT, current.path),
+    countryReport: relative(CSSOCCER_REPO_ROOT, countryCurrent.path),
+    retainedReport: relative(CSSOCCER_REPO_ROOT, retained.path),
+    reportSha256: current.sha256,
     terminal: report.terminal,
     rematch: report.rematch,
     interaction: {
@@ -41,6 +48,13 @@ async function main() {
       eventTypes: report.interaction.eventTypes,
       restartKinds: report.interaction.restartKinds,
       inputBranches: report.interaction.inputBranches.length,
+      officials: report.interaction.officials.map((official) => ({
+        id: official.id,
+        positionStateCount: official.positionStateCount,
+        renderAnimationStateCount: official.renderAnimationStateCount,
+        missingStateCount: official.missingStateCount,
+        projectionMismatchCount: official.projectionMismatchCount,
+      })),
     },
     integrity: report.integrity,
   }, null, 2));

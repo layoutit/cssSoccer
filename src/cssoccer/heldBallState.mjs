@@ -27,7 +27,7 @@ export const CSSOCCER_HELD_BALL_STATE_SCHEMA = "cssoccer-held-ball-state@1";
 export const CSSOCCER_HELD_BALL_OWNER_FRAME_SCHEMA =
   "cssoccer-held-ball-owner-frame@1";
 export const CSSOCCER_HELD_BALL_PROFILE_HASH =
-  "ff62632766dab4752c214c9f2516e42916df63f0449b2b4caa49611264e86f31";
+  "38fec419a1ff0662f9e13cc7bfa195d330dc06f659ccb60a36e5145f1af240f0";
 
 const PROFILE_BODY = deepFreeze({
   schema: "cssoccer-held-ball-profile@1",
@@ -375,6 +375,53 @@ export function stepCssoccerPossessedBallState(input) {
   if (current.limbo.active !== 0 || current.outcome !== null) {
     fail("possessed-ball-prepass", "Possessed-ball prepass requires no limbo or outcome.");
   }
+  return stepPossessedBallPhysicalState(current);
+}
+
+/**
+ * BALL.CPP's possessed process_ball branch during the post-goal countdown.
+ * Once just_scored reaches zero, BALLINT.CPP may let an outfielder collect
+ * the ball in the net before respot_ball runs. ball_trajectory keeps the
+ * owned ball fixed, ball_collision publishes prev_ball*, and the ordinary
+ * ball_out_of_play countdown continues.
+ */
+export function stepCssoccerPossessedGoalCountdownState(input) {
+  const current = createBallMatchState(input);
+  if (
+    current.limbo.active !== 0
+    || current.outcome?.kind !== "goal"
+    || current.ball.inGoal !== 1
+    || current.ball.outOfPlay < 1
+  ) {
+    fail(
+      "possessed-goal-countdown",
+      "Possessed post-goal ball requires one active qualified goal countdown.",
+    );
+  }
+  const physical = stepPossessedBallPhysicalState(current);
+  if (physical.ball.outOfPlay === 1) {
+    return deepFreeze({
+      state: physical,
+      events: [{ type: "ball-post-goal-respot-required", outOfPlay: 0 }],
+    });
+  }
+  const state = createBallMatchState({
+    ...clone(physical),
+    ball: {
+      ...clone(physical.ball),
+      outOfPlay: physical.ball.outOfPlay - 1,
+    },
+  });
+  return deepFreeze({
+    state,
+    events: [{
+      type: "ball-post-goal-countdown",
+      outOfPlay: state.ball.outOfPlay,
+    }],
+  });
+}
+
+function stepPossessedBallPhysicalState(current) {
   const displacement = current.ball.displacement;
   const total = F32(
     Math.abs(displacement.x)
@@ -386,6 +433,9 @@ export function stepCssoccerPossessedBallState(input) {
     ball: {
       ...clone(current.ball),
       tick: current.ball.tick + 1,
+      // BALL.CPP ball_collision stores the owned ball position before the
+      // later BALLINT.CPP hold_ball visit moves it to the player's feet.
+      previousPosition: clone(current.ball.position),
       speed: Math.trunc(Math.sqrt(total)),
       still: displacement.x !== 0 || displacement.y !== 0 ? 0 : 1,
     },

@@ -3,7 +3,6 @@ import { CSSOCCER_BALL_CONSTANTS } from "./ballState.mjs";
 import {
   sourceDistance2d,
   sourceFacingDirection,
-  sourceWatcomFistpI32,
 } from "./motionState.mjs";
 import { CSSOCCER_NATIVE_GAMEPLAY_PROFILE } from "./nativeGameplayProfile.mjs";
 import {
@@ -44,10 +43,10 @@ export const CSSOCCER_LIVE_SHOT_SOURCE = deepFreeze({
   ],
   currentStateOnly: true,
   supportedBoundary:
-    "ordinary outfield AI/user shot decisions, charged user shot release, and outfield/keeper punt release",
+    "ordinary AI/user shot decisions, outfield shot release, EURO96 new-set-piece shot release, charged user shot release, and outfield/keeper punt release",
 });
 
-/** INTELL.CPP range_flags -> shoot_decide for a current outfield holder. */
+/** INTELL.CPP range_flags -> shoot_decide for a current holder. */
 export function resolveCssoccerShotDecision(input = {}) {
   requirePlainObject(input, "shot decision input");
   requireExactKeys(input, [
@@ -60,7 +59,7 @@ export function resolveCssoccerShotDecision(input = {}) {
     "userControlled",
   ], "shot decision input");
   const ball = requirePoint(input.ball, "shot decision ball");
-  const holder = requireHolder(input.holder, { allowKeeper: false });
+  const holder = requireHolder(input.holder, { allowKeeper: true });
   const seed = requireInteger(input.seed, 0, 127, "shot decision seed");
   const userControlled = requireBoolean(input.userControlled, "shot decision userControlled");
   const firstTime = requireBoolean(input.firstTime, "shot decision firstTime");
@@ -185,6 +184,41 @@ export function resolveCssoccerPuntDecision(input = {}) {
 
 /** INTELL.CPP shoot_ball -> aim_shot_at_goal, including user aim/charge. */
 export function releaseCssoccerShot(input = {}) {
+  return releaseCssoccerShotKernel(input, null);
+}
+
+/** ACTIONS.CPP taker_nkick -> shoot_ball with retained setp_power/setp_hgt. */
+export function releaseCssoccerNewSetPieceShot(input = {}) {
+  requirePlainObject(input, "new set-piece shot release input");
+  requireExactKeys(input, [
+    "ball",
+    "direction",
+    "height",
+    "keeper",
+    "owner",
+    "possession",
+    "power",
+    "rng",
+    "tick",
+    "userControlled",
+  ], "new set-piece shot release input");
+  const power = requireInteger(input.power, 0, 30, "new set-piece shot power");
+  const height = requireInteger(input.height, 0, 30, "new set-piece shot height");
+  return releaseCssoccerShotKernel({
+    ball: input.ball,
+    charge: null,
+    direction: input.direction,
+    drive: false,
+    keeper: input.keeper,
+    owner: input.owner,
+    possession: input.possession,
+    rng: input.rng,
+    tick: input.tick,
+    userControlled: input.userControlled,
+  }, { power, height });
+}
+
+function releaseCssoccerShotKernel(input, newSetPieceKick) {
   requirePlainObject(input, "shot release input");
   requireExactKeys(input, [
     "ball",
@@ -200,7 +234,7 @@ export function releaseCssoccerShot(input = {}) {
   ], "shot release input");
   const ball = createBallMatchState(input.ball);
   const possession = createPossessionState(input.possession);
-  const owner = requireHolder(input.owner, { allowKeeper: false });
+  const owner = requireHolder(input.owner, { allowKeeper: newSetPieceKick !== null });
   const keeper = requireKeeper(input.keeper, owner.nativePlayerNumber);
   const rng = createCssoccerNativeRngState(input.rng);
   const tick = requireInteger(input.tick, 0, Number.MAX_SAFE_INTEGER, "shot release tick");
@@ -217,9 +251,14 @@ export function releaseCssoccerShot(input = {}) {
     || possession.owner !== owner.nativePlayerNumber
     || possession.inHands !== 0
     || (userControlled && direction === null)
-    || (!userControlled && (direction !== null || charge !== null || drive))
+    || (
+      newSetPieceKick === null
+      && !userControlled
+      && (direction !== null || charge !== null || drive)
+    )
+    || (newSetPieceKick !== null && direction === null)
   ) {
-    throw new Error("shot release requires its current outfield contact owner and source decision");
+    throw new Error("shot release requires its current contact owner and source decision");
   }
 
   const goalX = owner.nativePlayerNumber < 12
@@ -276,9 +315,14 @@ export function releaseCssoccerShot(input = {}) {
       shotRng.seed * (8 + (128 - owner.accuracy)) / 128,
     );
     const scaledAccuracyOffset = accuracyOffset * range / (20 * PITCH_RATIO);
-    accuracyOffset = (shotRng.seed & 4) !== 0
-      ? sourceWatcomFistpI32(-scaledAccuracyOffset)
-      : sourceWatcomFistpI32(scaledAccuracyOffset);
+    // INTELL.CPP assigns this floating result back to int through the C++
+    // conversion path, which truncates toward zero. It is not one of the
+    // recovered Watcom expression sites that retains the x87 rounding mode.
+    accuracyOffset = Math.trunc(
+      (shotRng.seed & 4) !== 0
+        ? -scaledAccuracyOffset
+        : scaledAccuracyOffset,
+    );
     yOffset = F32(side > 0
       ? CSSOCCER_BALL_CONSTANTS.bottomPostY
         - ball.ball.position.y
@@ -304,7 +348,12 @@ export function releaseCssoccerShot(input = {}) {
   let fullXY = F32(0);
   let fullZ = F32(0);
   let zDisplacement;
-  if (charge !== null) {
+  if (newSetPieceKick !== null) {
+    shotSpeed = F32((newSetPieceKick.power + 16) / 2);
+    zDisplacement = F32(newSetPieceKick.height / 3);
+    xOffset = F32(direction.x * 10);
+    yOffset = F32(direction.y * 10);
+  } else if (charge !== null) {
     shotSpeed = F32((charge + 16) / 2);
     zDisplacement = F32(charge / 3);
     xOffset = F32(direction.x * 10);
@@ -389,7 +438,9 @@ export function releaseCssoccerShot(input = {}) {
       ...clone(ball.ball),
       displacement,
       inAir: 1,
-      still: 0,
+      // A kick releases after this tick's process_ball visit. The native
+      // new-set-piece path therefore retains ball_still until the next tick.
+      still: newSetPieceKick === null ? 0 : ball.ball.still,
       spin: {
         swerve,
         count: 0,
@@ -423,6 +474,9 @@ export function releaseCssoccerShot(input = {}) {
       charge,
       drive,
       userControlled,
+      ...(newSetPieceKick === null
+        ? {}
+        : { newSetPiece: clone(newSetPieceKick) }),
       displacement,
     },
   });
@@ -454,10 +508,12 @@ export function releaseCssoccerPunt(input = {}) {
   ) {
     throw new Error("punt release requires its current feet or keeper-hands owner");
   }
-  // rand_range(129-tm_ac) consumes one source random sample even though its
-  // local result is unused by this release branch.
-  const randomized = advanceCssoccerNativeRng(rng);
-  const speed = F32(6 + owner.power / 8);
+  // rand_range(129-tm_ac) reads the current seed; unlike af_randomize it does
+  // not advance the native rand()/seed globals.
+  const randomized = rng;
+  // INTELL.CPP evaluates tm_pow/8 as integer division before the float
+  // facing multiply in punt_ball.
+  const speed = F32(6 + Math.trunc(owner.power / 8));
   const displacement = {
     x: F32(owner.facing.x * speed),
     y: F32(owner.facing.y * speed),
@@ -490,9 +546,16 @@ export function releaseCssoccerPunt(input = {}) {
       kind: "punt",
       tick,
       ownerNativePlayer: owner.nativePlayerNumber,
-      targetKeeperNativePlayer: isKeeper
-        ? (owner.nativePlayerNumber === 1 ? 12 : 1)
-        : (owner.nativePlayerNumber < 12 ? 12 : 1),
+      // BALL.CPP new_shot schedules the keeper on the ball's current half;
+      // on the centre line it uses the outgoing horizontal direction.
+      targetKeeperNativePlayer: ball.ball.position.x
+        > CSSOCCER_BALL_CONSTANTS.pitchLength / 2
+        || (
+          ball.ball.position.x <= CSSOCCER_BALL_CONSTANTS.pitchLength / 2
+          && displacement.x > Math.abs(displacement.y)
+        )
+        ? 12
+        : 1,
       keeperHands,
       displacement,
     },
@@ -500,7 +563,7 @@ export function releaseCssoccerPunt(input = {}) {
 }
 
 export function isCssoccerShootingRange(holderInput, ballInput) {
-  const holder = requireHolder(holderInput, { allowKeeper: false });
+  const holder = requireHolder(holderInput, { allowKeeper: true });
   const ball = requirePoint(ballInput, "shooting-range ball");
   return sourceDistance2d(attackingGoalOffset(holder.nativePlayerNumber, ball))
     < PITCH_RATIO * 12 + holder.power * 3;

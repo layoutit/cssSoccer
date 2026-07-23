@@ -189,6 +189,7 @@ const SHOT_KICK_PROFILE_BY_TYPE = deepFreeze({
   ...PASS_KICK_PROFILE_BY_TYPE,
   [-1]: passKickProfile({
     mode: "shoot-phase-foot",
+    phaseScale: 0.6,
     frameCount: 36,
     contact: 38 / 109,
     leftAnimation: 35,
@@ -245,7 +246,7 @@ export const CSSOCCER_PLAYER_ANIMATION_PROFILE_SCHEMA =
   "cssoccer-player-animation-profile@1";
 
 export const CSSOCCER_PLAYER_ANIMATION_BASELINE_HASH =
-  "ecd082a0c4ba7e293c60a5aa3df711f5409ad74bf80055d228e2176153648f6a";
+  "67eab11e76ec74831940afa04d3293696ed5af196c1ee4ed0be8a44ffcb9d340";
 
 const BINDINGS = deepFreeze({
   sourceRevision: "b40bd6d1e50e052030c5f0884fbe3deda7e9fa4b",
@@ -1379,7 +1380,8 @@ function sourcePassKickLaunch(profile, animation, advancedFrame) {
     return {
       animation: foot === "right" ? profile.rightAnimation : profile.leftAnimation,
       foot,
-      frame: F32(phase * 0.6),
+      // ACTIONS.CPP stores `f=0.6` in a float before multiplying the phase.
+      frame: F32(phase * profile.phaseScale),
     };
   }
 
@@ -1470,8 +1472,10 @@ function rotateSourceOffset(local, facing) {
   if (offsetDistance <= 1) return { x: F32(0), y: F32(0), z: F32(0) };
   const x = F32(local.x / offsetDistance);
   const y = F32(local.y / offsetDistance);
-  const rotatedX = F32(F32(x * nx) - F32(y * ny));
-  const rotatedY = F32(F32(y * nx) + F32(x * ny));
+  // Watcom evaluates each complete nsx/nsy expression in x87 precision and
+  // stores once into its float local; there are no stores after each product.
+  const rotatedX = F32((x * nx) - (y * ny));
+  const rotatedY = F32((y * nx) + (x * ny));
   return {
     x: F32(rotatedX * offsetDistance),
     y: F32(rotatedY * offsetDistance),

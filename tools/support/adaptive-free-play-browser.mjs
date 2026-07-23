@@ -25,6 +25,11 @@ const TOUCH_POINTERS = Object.freeze({
   "fire-1": 105,
   "fire-2": 106,
 });
+const OFFICIAL_CONTRACT = Object.freeze([
+  Object.freeze({ id: "referee-00", role: "referee" }),
+  Object.freeze({ id: "assistant-referee-01", role: "linesman-top" }),
+  Object.freeze({ id: "assistant-referee-02", role: "linesman-bottom" }),
+]);
 
 export async function runAdaptiveFreePlayBrowser({
   port = 5211,
@@ -75,6 +80,7 @@ export async function runAdaptiveFreePlayBrowser({
     const inputBranches = new Set();
     const possessionTransitions = [];
     const actionStates = new Set();
+    const officialTracks = createOfficialTracks();
     const stageTicks = {};
     let controls = new Set();
     let previousOwner = null;
@@ -103,6 +109,7 @@ export async function runAdaptiveFreePlayBrowser({
       }
       phases.add(sample.phase);
       phases.add(sample.clockPhase);
+      recordOfficialSample(officialTracks, sample);
       if (sample.active?.id) controlledPlayers.add(sample.active.id);
       for (const event of sample.events) {
         eventTypes.add(event.type);
@@ -308,6 +315,7 @@ export async function runAdaptiveFreePlayBrowser({
         restartKinds: [...restartKinds].sort(),
         restartEncountered,
         pause: paused,
+        officials: summarizeOfficialTracks(officialTracks),
       },
       terminal: {
         tick: terminal.tick,
@@ -371,6 +379,7 @@ export function assertAdaptiveReport(report) {
     || pass !== true
     || shot !== true
     || contact !== true
+    || !validOfficialEvidence(report.interaction?.officials)
     || report.rematch?.ready !== true
     || report.rematch?.tick !== 0
     || report.rematch?.terminal !== false
@@ -389,6 +398,7 @@ export function sampleExpression() {
   return `(() => {
     const debug = window.__cssoccerDebug;
     const match = debug.match;
+    const liveOfficialCommands = debug.live?.officials?.commands ?? [];
     const active = match.players.find(({ id }) => id === match.control.activePlayerId) ?? null;
     const owner = match.possession.owner;
     const ownerPlayer = match.players.find(({ nativePlayerNumber }) => nativePlayerNumber === owner) ?? null;
@@ -424,6 +434,21 @@ export function sampleExpression() {
         liveContact: stateName(active.liveContact),
         liveKeeper: stateName(active.liveKeeper),
       },
+      officials: match.officials.officials.map((official, index) => {
+        const command = liveOfficialCommands[index] ?? null;
+        return {
+          id: official.id,
+          role: official.role,
+          position: { ...official.position },
+          action: official.action,
+          sourceAnimationId: official.animation.id,
+          sourceAnimationFrame: official.animation.frame,
+          renderRootId: command?.rootId ?? null,
+          renderPosition: command === null ? null : [...command.transform.position],
+          renderAnimationSlotId: command?.animation?.slotId ?? null,
+          renderAnimationFrame: command?.animation?.frame ?? null,
+        };
+      }),
       kickoff: {
         phase: match.kickoff.phase,
         restartKind: match.kickoff.restartKind ?? null,
@@ -447,6 +472,179 @@ export function sampleExpression() {
       })),
     };
   })()`;
+}
+
+function createOfficialTracks() {
+  return new Map(OFFICIAL_CONTRACT.map(({ id, role }) => [id, {
+    id,
+    role,
+    sampleCount: 0,
+    missingStateCount: 0,
+    projectionMismatchCount: 0,
+    positions: new Set(),
+    sourceAnimationStates: new Set(),
+    sourceAnimationIds: new Set(),
+    renderAnimationStates: new Set(),
+    renderAnimationSlotIds: new Set(),
+    renderFrameIndices: new Set(),
+    actions: new Set(),
+    bounds: {
+      x: { min: Infinity, max: -Infinity },
+      y: { min: Infinity, max: -Infinity },
+      z: { min: Infinity, max: -Infinity },
+    },
+    halfXBounds: [
+      { min: Infinity, max: -Infinity },
+      { min: Infinity, max: -Infinity },
+    ],
+    first: null,
+    last: null,
+    examples: [],
+  }]));
+}
+
+function recordOfficialSample(tracks, sample) {
+  const officials = Array.isArray(sample.officials) ? sample.officials : [];
+  for (const expected of OFFICIAL_CONTRACT) {
+    const track = tracks.get(expected.id);
+    const official = officials.find(({ id }) => id === expected.id) ?? null;
+    track.sampleCount += 1;
+    if (!validOfficialSample(official, expected)) {
+      track.missingStateCount += 1;
+      continue;
+    }
+    const projectionMatches = official.renderRootId === official.id
+      && official.renderAnimationSlotId === official.sourceAnimationId
+      && official.renderPosition[0] === official.position.x
+      && official.renderPosition[1] === official.position.z
+      && official.renderPosition[2] === -official.position.y;
+    if (!projectionMatches) track.projectionMismatchCount += 1;
+    const positionKey = [official.position.x, official.position.y, official.position.z].join(":");
+    const sourceAnimationKey = [
+      official.sourceAnimationId,
+      official.sourceAnimationFrame,
+    ].join(":");
+    const renderAnimationKey = [
+      official.renderAnimationSlotId,
+      official.renderAnimationFrame,
+    ].join(":");
+    const positionChanged = !track.positions.has(positionKey);
+    const animationChanged = !track.renderAnimationStates.has(renderAnimationKey);
+    track.positions.add(positionKey);
+    track.sourceAnimationStates.add(sourceAnimationKey);
+    track.sourceAnimationIds.add(official.sourceAnimationId);
+    track.renderAnimationStates.add(renderAnimationKey);
+    track.renderAnimationSlotIds.add(official.renderAnimationSlotId);
+    track.renderFrameIndices.add(official.renderAnimationFrame);
+    track.actions.add(official.action);
+    for (const axis of ["x", "y", "z"]) {
+      track.bounds[axis].min = Math.min(track.bounds[axis].min, official.position[axis]);
+      track.bounds[axis].max = Math.max(track.bounds[axis].max, official.position[axis]);
+    }
+    if (sample.matchHalf === 0 || sample.matchHalf === 1) {
+      const bounds = track.halfXBounds[sample.matchHalf];
+      bounds.min = Math.min(bounds.min, official.position.x);
+      bounds.max = Math.max(bounds.max, official.position.x);
+    }
+    const state = {
+      tick: sample.tick,
+      matchHalf: sample.matchHalf,
+      position: { ...official.position },
+      action: official.action,
+      sourceAnimation: {
+        id: official.sourceAnimationId,
+        frame: official.sourceAnimationFrame,
+      },
+      renderedAnimation: {
+        slotId: official.renderAnimationSlotId,
+        frame: official.renderAnimationFrame,
+      },
+    };
+    if (track.first === null) track.first = state;
+    track.last = state;
+    if ((positionChanged || animationChanged) && track.examples.length < 16) {
+      track.examples.push(state);
+    }
+  }
+}
+
+function summarizeOfficialTracks(tracks) {
+  return OFFICIAL_CONTRACT.map(({ id }) => {
+    const track = tracks.get(id);
+    return {
+      id: track.id,
+      role: track.role,
+      sampleCount: track.sampleCount,
+      missingStateCount: track.missingStateCount,
+      projectionMismatchCount: track.projectionMismatchCount,
+      positionStateCount: track.positions.size,
+      sourceAnimationStateCount: track.sourceAnimationStates.size,
+      sourceAnimationIds: [...track.sourceAnimationIds].sort((left, right) => left - right),
+      renderAnimationStateCount: track.renderAnimationStates.size,
+      renderAnimationSlotIds: [...track.renderAnimationSlotIds].sort((left, right) => left - right),
+      renderFrameIndices: [...track.renderFrameIndices].sort((left, right) => left - right),
+      actions: [...track.actions].sort((left, right) => left - right),
+      positionBounds: finiteBounds(track.bounds),
+      halfXBounds: track.halfXBounds.map((bounds) => finiteRange(bounds)),
+      first: track.first,
+      last: track.last,
+      examples: track.examples,
+    };
+  });
+}
+
+function validOfficialSample(official, expected) {
+  return official !== null
+    && official.id === expected.id
+    && official.role === expected.role
+    && [official.position?.x, official.position?.y, official.position?.z].every(Number.isFinite)
+    && Number.isSafeInteger(official.action)
+    && Number.isFinite(official.sourceAnimationId)
+    && Number.isFinite(official.sourceAnimationFrame)
+    && official.renderRootId === expected.id
+    && Array.isArray(official.renderPosition)
+    && official.renderPosition.length === 3
+    && official.renderPosition.every(Number.isFinite)
+    && Number.isSafeInteger(official.renderAnimationSlotId)
+    && Number.isSafeInteger(official.renderAnimationFrame);
+}
+
+function validOfficialEvidence(officials) {
+  if (!Array.isArray(officials) || officials.length !== OFFICIAL_CONTRACT.length) return false;
+  return OFFICIAL_CONTRACT.every((expected, index) => {
+    const official = officials[index];
+    const dynamic = official?.id === expected.id
+      && official.role === expected.role
+      && official.sampleCount >= 100
+      && official.missingStateCount === 0
+      && official.projectionMismatchCount === 0
+      && official.positionStateCount > 1
+      && official.sourceAnimationStateCount > 1
+      && official.renderAnimationStateCount > 1
+      && official.renderFrameIndices.length > 1
+      && official.first !== null
+      && official.last !== null;
+    if (!dynamic) return false;
+    if (expected.role === "linesman-top") {
+      return official.positionBounds.y.max < 0
+        && official.positionBounds.x.min < 640;
+    }
+    if (expected.role === "linesman-bottom") {
+      return official.positionBounds.y.min > 800
+        && official.positionBounds.x.max > 640;
+    }
+    return true;
+  });
+}
+
+function finiteBounds(bounds) {
+  return Object.fromEntries(Object.entries(bounds).map(([axis, range]) => [axis, finiteRange(range)]));
+}
+
+function finiteRange(range) {
+  return Number.isFinite(range.min) && Number.isFinite(range.max)
+    ? { min: range.min, max: range.max }
+    : null;
 }
 
 function chooseAdaptiveControls(sample) {
@@ -540,11 +738,15 @@ async function capture(browser, root, name, tick, captures, expectedHalf) {
     const clock = document.getElementById("hud-clock");
     const inspect = window.__cssoccerDebug.inspect();
     const bounds = host.getBoundingClientRect();
+    const liveCommands = window.__cssoccerDebug.live.officials.commands;
+    const liveOfficials = window.__cssoccerDebug.match.officials.officials;
     const officials = ["referee-00", "assistant-referee-01", "assistant-referee-02"]
-      .map((id) => {
+      .map((id, index) => {
         const root = document.querySelector('[data-cssoccer-root-id="' + id + '"]');
         const rect = root.getBoundingClientRect();
         const style = getComputedStyle(root);
+        const command = liveCommands[index];
+        const official = liveOfficials[index];
         return {
           id,
           connected: root.isConnected,
@@ -559,6 +761,19 @@ async function capture(browser, root, name, tick, captures, expectedHalf) {
           materialId: root.dataset.cssoccerMaterialId,
           modelId: root.dataset.cssoccerModelId,
           leafCount: root.querySelectorAll(".cssoccer-exact-player-model > s").length,
+          sourceState: {
+            role: official.role,
+            position: { ...official.position },
+            action: official.action,
+            animationId: official.animation.id,
+            animationFrame: official.animation.frame,
+          },
+          renderState: {
+            rootId: command.rootId,
+            position: [...command.transform.position],
+            animationSlotId: command.animation.slotId,
+            animationFrame: command.animation.frame,
+          },
           bounds: {
             left: rect.left,
             top: rect.top,

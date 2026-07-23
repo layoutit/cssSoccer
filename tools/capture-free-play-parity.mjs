@@ -317,10 +317,12 @@ async function openBrowserMatch({
     await delay(50);
     await cdp.send("Page.setDocumentContent", {
       frameId: navigation.frameId,
-      html: "<!doctype html><meta charset=utf-8><link rel=icon href=data:,><title>cssoccer exact parity capture</title>",
+      html: "<!doctype html><meta charset=utf-8><link rel=icon href=\"data:,\"><title>cssoccer exact parity capture</title>",
     }, sessionId);
     // Ignore only navigation-shell diagnostics (Chrome requests favicon.ico
-    // before setDocumentContent). Engine/module errors are collected below.
+    // before setDocumentContent, but reports that request asynchronously).
+    // Engine/module errors are collected after the shell settles below.
+    await delay(50);
     pageErrors.length = 0;
     const inspected = await evaluate(cdp, sessionId, `
       (async () => {
@@ -329,6 +331,7 @@ async function openBrowserMatch({
           candidateIdentity: ${JSON.stringify(candidateIdentity)},
           commandScenario: ${JSON.stringify(commandScenario)},
           country: ${JSON.stringify(country)},
+          inputAdapter: ${JSON.stringify(native.inputAdapter)},
           nativeIdentity: ${JSON.stringify({
             sourceSha256: native.bindings.sourceSha256,
             buildSha256: native.bindings.buildSha256,
@@ -485,9 +488,17 @@ async function readNativePointer() {
   assert(Number.isSafeInteger(canonical?.terminalTick), "native terminal tick is missing");
   assert(canonical.ticks === canonical.terminalTick + 1, "native tick range is not contiguous");
   assertNativeBindings(pointer.bindings);
+  const profilePath = join(REPO_ROOT, canonical.artifacts.profile.path);
+  const profile = JSON.parse(await readFile(profilePath, "utf8"));
+  assert(
+    profile?.inputAdapter?.schema === "cssoccer-native-set-piece-input-adapter@1"
+      && profile.inputAdapter.sha256 === profile.binding?.inputAdapterSha256,
+    "native set-piece input adapter binding changed",
+  );
   return Object.freeze({
     fixtureId: pointer.fixtureId,
     bindings: Object.freeze({ ...pointer.bindings }),
+    inputAdapter: Object.freeze({ ...profile.inputAdapter }),
     terminalTick: canonical.terminalTick,
     tickCount: canonical.ticks,
   });

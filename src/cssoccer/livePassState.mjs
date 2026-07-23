@@ -31,7 +31,7 @@ export const CSSOCCER_LIVE_PASS_SOURCE = deepFreeze({
     },
   ],
   supportedBoundary:
-    "outfield KICK_ACT held-ball tween with receiver ground/chip/cross release and local directed or charged ground release",
+    "KICK_ACT held-ball tween, including the source-legal 25-tick out-of-play countdown and keeper goal kicks, with receiver ground/chip/cross release and local directed or charged ground release",
 });
 
 /** Apply BALLINT.CPP's possessed pre-contact kick tween for one source tick. */
@@ -45,13 +45,25 @@ export function stepCssoccerKickHeldBall(input = {}) {
     throw new Error("kick-held ball ticks must be contiguous");
   }
   const owner = requireKickOwner(input.owner);
+  const qualifiedPostGoalBall = ball.outcome?.kind === "goal"
+    && ball.ball.inGoal === 1
+    && ball.ball.outOfPlay > 0;
+  const qualifiedBoundaryBall = ball.outcome?.kind === "boundary"
+    && ball.ball.inGoal === 0
+    && ball.ball.outOfPlay > 0;
   if (
     possession.owner !== owner.nativePlayerNumber
     || possession.inHands !== 0
     || ball.limbo.active !== 0
-    || ball.outcome !== null
-    || ball.ball.inGoal !== 0
-    || ball.ball.outOfPlay !== 0
+    || (
+      !qualifiedPostGoalBall
+      && !qualifiedBoundaryBall
+      && (
+        ball.outcome !== null
+        || ball.ball.inGoal !== 0
+        || ball.ball.outOfPlay !== 0
+      )
+    )
   ) {
     throw new Error("kick-held ball requires its ordinary feet-possession owner");
   }
@@ -742,11 +754,10 @@ function requireKickOwner(value) {
   if (
     value.action !== CSSOCCER_NATIVE_ACTIONS.KICK
     || !Number.isSafeInteger(value.nativePlayerNumber)
-    || value.nativePlayerNumber < 2
+    || value.nativePlayerNumber < 1
     || value.nativePlayerNumber > 22
-    || value.nativePlayerNumber === 12
   ) {
-    throw new Error("kick-held ball owner must be an ordinary outfield KICK_ACT player");
+    throw new Error("kick-held ball owner must be a current KICK_ACT player");
   }
   const animationFrame = requireF32(value.animationFrame, "kick-held animation frame");
   const contact = requireF32(value.contact, "kick-held contact");

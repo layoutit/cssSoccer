@@ -141,7 +141,9 @@ function projectLifecycle(output, state) {
   if (!teamA || !teamB) {
     throw new Error("Free-play projection requires one team in each native slot.");
   }
-  set(output, "lifecycle.end_game", state.clock.terminal ? 1 : 0);
+  // watch_match_time terminates normal time with match_half=11; it does not
+  // raise FOOTBALL.CPP end_game. That separate lifecycle byte remains clear.
+  set(output, "lifecycle.end_game", 0);
   // FOOTBALL.CPP initialise_vars sets kick_off once; centre ownership is held
   // by match_mode/centre takers and never rewrites this lifecycle byte.
   set(output, "lifecycle.kick_off", 1);

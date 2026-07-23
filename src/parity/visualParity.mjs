@@ -24,7 +24,7 @@ export const VISUAL_CAPTURE_SCHEMA = "cssoccer-visual-capture@1";
 export const VISUAL_CALIBRATION_SCHEMA = "cssoccer-visual-source-aa-calibration@1";
 export const VISUAL_COMPARISON_SCHEMA = "cssoccer-visual-comparison@1";
 export const VISUAL_BUNDLE_FILES_SCHEMA = "cssoccer-visual-parity-bundle-files@1";
-export const VISUAL_PARITY_DATA_SCHEMA = "cssoccer-visual-parity-data@1";
+export const VISUAL_PARITY_DATA_SCHEMA = "burnlist-visual-parity-data@1";
 
 export const VISUAL_WINDOWS = Object.freeze([
   Object.freeze({ id: "kickoff", label: "Kickoff" }),

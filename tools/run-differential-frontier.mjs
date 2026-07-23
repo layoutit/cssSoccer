@@ -459,6 +459,7 @@ async function createDiagnosticRuntime({
     return createCssoccerFreePlayScenarioAdapter({
       cryptoImpl: webcrypto,
       engine,
+      inputAdapter: profile.inputAdapter,
       projectSnapshot: (snapshot) => projectionModule.projectCssoccerFreePlaySnapshot({
         snapshot,
         preparedScene: scene,

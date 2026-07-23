@@ -50,6 +50,7 @@ async function main() {
       pause: adaptive.interaction.pause,
       fullMatch: true,
     },
+    officials: adaptive.interaction.officials,
     touch,
     terminal: adaptive.terminal,
     rematch: adaptive.rematch,
@@ -201,17 +202,42 @@ function assertEvidenceReport(report) {
     officialEvidence.filter(({ visible }) => visible).map(({ id }) => id),
   );
   const exactOfficialEvidence = officialEvidence.length === 12
-    && officialEvidence.every(({ id, connected, leafCount, materialId, modelId }) => (
+    && officialEvidence.every(({
+      id,
+      connected,
+      leafCount,
+      materialId,
+      modelId,
+      sourceState,
+      renderState,
+    }) => (
       expectedOfficialMaterials.get(id) === materialId
       && connected === true
       && leafCount === 12
       && (id === "referee-00" ? modelId === "player_fr" : modelId === "player_fl")
+      && renderState.rootId === id
+      && renderState.animationSlotId === sourceState.animationId
+      && renderState.position[0] === sourceState.position.x
+      && renderState.position[1] === sourceState.position.z
+      && renderState.position[2] === -sourceState.position.y
+    ));
+  const dynamicOfficials = Array.isArray(report.officials)
+    && report.officials.length === 3
+    && report.officials.every((official) => (
+      official.sampleCount >= 100
+      && official.missingStateCount === 0
+      && official.projectionMismatchCount === 0
+      && official.positionStateCount > 1
+      && official.sourceAnimationStateCount > 1
+      && official.renderAnimationStateCount > 1
+      && official.renderFrameIndices.length > 1
     ));
   if (
     report.status !== "pass"
     || JSON.stringify(stageKeys) !== JSON.stringify(["fulltime", "halftime", "live", "restart"])
     || report.stages.captures.length !== 4
     || !exactOfficialEvidence
+    || !dynamicOfficials
     || visibleOfficialIds.size !== 3
     || !report.stages.contactSheet?.sha256
     || report.keyboard?.fullMatch !== true

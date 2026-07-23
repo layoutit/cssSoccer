@@ -243,6 +243,9 @@ export function createCssoccerFreePlayState({
       gameAction: CSSOCCER_KICKOFF_CONSTANTS.centreGameAction,
       setPiece: CSSOCCER_KICKOFF_CONSTANTS.centreSetPiece,
       deadBallCount: CSSOCCER_KICKOFF_CONSTANTS.centreDeadBallTicks,
+      // RULES.CPP init_match_mode enables offside for a centre restart and
+      // retains this global until a later restart/contact changes it.
+      canBeOffside: 1,
       state: ruleState,
       liveOffside: null,
     },
@@ -1161,6 +1164,7 @@ function requireRuleCoordinator(rules, players) {
     || rules.gameAction !== 1
     || rules.setPiece !== 3
     || rules.deadBallCount !== 40
+    || rules.canBeOffside !== 1
   ) {
     throw new Error("Free-play rules must start from the source centre restart.");
   }
