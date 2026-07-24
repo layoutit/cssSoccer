@@ -153,6 +153,7 @@ export function createCssoccerPerformanceRun({
     frame: sample.frame,
     tick: sample.tick,
     simulationSteps: sample.simulationSteps,
+    residencyTransition: sample.residencyTransition,
     stepCallMs: sample.stepCallMs,
   }));
   const runtimePhaseTiming = summarizePhases(
@@ -709,7 +710,9 @@ function aggregateMetrics(runs) {
     maxSimulationStepsPerFrame: Math.max(...simulationSteps),
     simulationUpdateFrameRatio:
       simulationSteps.filter((count) => count > 0).length / simulationSteps.length,
-    residencyTransitionStepCount: 0,
+    residencyTransitionStepCount: runs.reduce((sum, run) => (
+      sum + run.stepTiming.series.filter(({ residencyTransition }) => residencyTransition).length
+    ), 0),
     pageErrorCount: runs.reduce((sum, run) => sum + run.integrity.pageErrorCount, 0),
     nativeRequestCount: runs.reduce((sum, run) => sum + run.integrity.nativeRequestCount, 0),
     runtimeConstructionCount: construction,
@@ -998,6 +1001,7 @@ function assertSamples(value, window) {
       || sample.simulationSteps < 0
       || sample.simulationSteps > PERFORMANCE_MEASUREMENT.maxSimulationStepsPerFrame
       || sample.tick - priorTick !== sample.simulationSteps
+      || typeof sample.residencyTransition !== "boolean"
       || !Number.isFinite(sample.elapsedMs)
       || sample.elapsedMs < 0
       || sample.elapsedMs < priorElapsed
@@ -1086,6 +1090,7 @@ function assertStepTiming(value, window) {
       || sample.simulationSteps < 0
       || sample.simulationSteps > PERFORMANCE_MEASUREMENT.maxSimulationStepsPerFrame
       || sample.tick - priorTick !== sample.simulationSteps
+      || typeof sample.residencyTransition !== "boolean"
     ) {
       throw new Error("css.soccer performance step series does not follow the product scheduler.");
     }

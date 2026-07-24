@@ -154,6 +154,7 @@ export function createCssoccerPerformanceTraceRuntime({
           frame,
           tick: productFrame.tick,
           simulationSteps: productFrame.simulationSteps,
+          residencyTransition: productFrame.residencyTransition,
           elapsedMs: frameMs + (samples.at(-1)?.elapsedMs ?? 0),
           frameMs,
           stepCallMs,
@@ -225,6 +226,7 @@ function requireProductFrame(value, priorTick, measurement) {
     || value.simulationSteps < 0
     || value.simulationSteps > measurement.maxSimulationStepsPerFrame
     || value.tick - priorTick !== value.simulationSteps
+    || typeof value.residencyTransition !== "boolean"
   ) {
     throw new Error("css.soccer performance product frame drifted from the fixed-step scheduler.");
   }

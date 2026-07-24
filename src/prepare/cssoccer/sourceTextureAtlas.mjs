@@ -49,6 +49,8 @@ const PLAYER_HIGHLIGHT_MARKER_FAMILIES = deepFreeze([
     sourceRect: { x: 0, y: 0, width: 32, height: 31 },
   },
 ]);
+const PLAYER_HIGHLIGHT_FIRST_NATIVE_TEXTURE_SLOT = 533;
+const PLAYER_HIGHLIGHT_FINAL_NATIVE_TEXTURE_SLOT = 548;
 const PLAYER_NUMBER_PAGE_INDEX = 6;
 const PLAYER_NUMBER_TRANSPARENT_PALETTE_INDEX = 1;
 const PLAYER_NUMBER_FIRST_NATIVE_TEXTURE_SLOT = 549;
@@ -85,6 +87,14 @@ const CORNER_FLAG_TEXTURE = deepFreeze({
   atlasY: PITCH_HEIGHT,
   transparentSourceIndex: 1,
   paletteRemap: -1,
+  paletteSource: {
+    archive: "playable-demo",
+    symbol: "COL_XSPAIN",
+    selector: 1456,
+    firstEntry: 32,
+    entries: 24,
+    role: "native match corner-flag red ramp",
+  },
 });
 const ASSET_PATH = "assets/textures/spain-argentina-match.png";
 const ASSET_URL = cssoccerPublicUrl(ASSET_PATH);
@@ -343,6 +353,7 @@ const EXPECTED_RECORD_BYTES = new Map([
   [SELECTORS.player.argentinaLimbs, 19_968],
   [SELECTORS.pitch, 16_384],
   [SELECTORS.paletteOverrides.argentinaSkin, 24],
+  [CORNER_FLAG_TEXTURE.paletteSource.selector, 72],
 ]);
 
 const EXPECTED_NATIVE_PLAYER_RECORD_BYTES = new Map([
@@ -579,9 +590,10 @@ export function prepareCssoccerSourceTextureAtlas({
   const pitchPixels = archive.recordBytes(SELECTORS.pitch);
   const indexedPages = [...playerPages, paddedPitchPage(pitchPixels)];
   const rgba = renderAtlasRgba(indexedPages, palette);
+  const cornerFlagPalette = prepareCornerFlagPalette(archive, palette);
   const cornerFlagCutout = prepareCornerFlagCutout({
     nativeArchive,
-    palette,
+    palette: cornerFlagPalette,
     rgba,
   });
   const pngBytes = encodeRgbaPng(ATLAS_WIDTH, ATLAS_HEIGHT, rgba);
@@ -671,7 +683,7 @@ export function prepareCssoccerSourceTextureAtlas({
         index: { file: "EUROREND.OFF", ...PINNED_NATIVE_ARCHIVE.index },
         selectors: NATIVE_PLAYER_SELECTORS,
         usage:
-          "Spain pages and palette, shared boot texels, goalkeeper pages, and slots 1 through 548",
+          "Spain pages and palette, shared boot texels, goalkeeper pages, and player slots 1 through 532",
         publication: "prepare-derived browser assets only; source records remain ignored local input",
       },
       nativeCornerFlagSupplement: {
@@ -790,7 +802,8 @@ export function prepareCssoccerSourceTextureAtlas({
       sha256: sha256(textureTableBytes),
       composition: {
         base: "retained native match table",
-        nativePlayerFoundation: "EUROREND TMD_MANDATA slots 1 through 548",
+        nativePlayerFoundation: "EUROREND TMD_MANDATA slots 1 through 532",
+        nativePlayerHighlights: "EUROREND TMD_TEXDATA slots 533 through 548",
         retailPlayerSupplement: "retail TMD_TEXDATA slots 549 through 1006",
       },
     },
@@ -853,6 +866,7 @@ export function prepareCssoccerSourceTextureAtlas({
       sourceTransparencyIndex: CORNER_FLAG_TEXTURE.transparentSourceIndex,
       nativePaletteRemap: CORNER_FLAG_TEXTURE.paletteRemap,
       paletteRemapAuthority: "3DENG.C remapxgfx(-1) rows 143..170 columns 177..255",
+      paletteSource: CORNER_FLAG_TEXTURE.paletteSource,
       nativeFaceDispatch: "source color < -2000 selects 3DENG.C polyt",
       geometryPose: "3DENG.C wind_on == 0 point 8 = [1.751, 6.629, 1.751]",
       projectionStage: "prepare-time tight edge-basis cutout",
@@ -2047,13 +2061,17 @@ function preparePlayerTextureTableBytes(nativeArchive, retailArchive) {
     NATIVE_PLAYER_SELECTORS.playerTextureTable,
   );
   const retailBytes = retailArchive.recordBytes(RETAIL_PLAYER_SELECTORS.textureTable);
+  const firstHighlightByte = (
+    PLAYER_HIGHLIGHT_FIRST_NATIVE_TEXTURE_SLOT - 1
+  ) * 32;
   const firstNumberByte = (PLAYER_NUMBER_FIRST_NATIVE_TEXTURE_SLOT - 1) * 32;
   if (
     matchBytes.length !== retailBytes.length
-    || playerBytes.length < firstNumberByte
+    || playerBytes.length < firstHighlightByte
+    || firstNumberByte !== PLAYER_HIGHLIGHT_FINAL_NATIVE_TEXTURE_SLOT * 32
   ) throw new Error("Exact fixture player texture-table composition changed.");
   const output = Buffer.from(matchBytes);
-  playerBytes.copy(output, 0, 0, firstNumberByte);
+  playerBytes.copy(output, 0, 0, firstHighlightByte);
   retailBytes.copy(output, firstNumberByte, firstNumberByte, output.length);
   return output;
 }
@@ -2094,6 +2112,17 @@ function preparePlayerPages(
   remapRuntimeNumberRange(pages[6], 89 * PAGE_SIZE, 27 * PAGE_SIZE);
   rotatePlayerNumberTexels180(pages[6], textureRecords);
   return pages;
+}
+
+function prepareCornerFlagPalette(archive, playerPalette) {
+  const palette = Buffer.from(playerPalette);
+  copyPalette(
+    archive,
+    palette,
+    CORNER_FLAG_TEXTURE.paletteSource.selector,
+    CORNER_FLAG_TEXTURE.paletteSource.firstEntry,
+  );
+  return palette;
 }
 
 function preparePlayerSourceAudit(pages, textureRecords) {

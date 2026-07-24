@@ -577,6 +577,8 @@ export function mountCssoccerClient({
       const published = transaction.commit();
       scheduler.previousInput = published.input;
       scheduler.pendingTick = null;
+      scheduler.accumulator = 0;
+      scheduler.lastTimestamp = null;
       if (!published.frame.terminal) scheduleAnimationFrame();
       else stopLiveScheduler();
     }).catch((error) => {
@@ -772,6 +774,7 @@ export function mountCssoccerClient({
     requirePerformanceTracePage();
     let productSimulationMs = 0;
     let preparedLivePublicationMs = 0;
+    let residencyTransition = false;
     const advanced = await advanceAsyncProductFrameScheduler(
       performanceFrameScheduler,
       timestamp,
@@ -785,13 +788,19 @@ export function mountCssoccerClient({
           performanceFrameScheduler.previousInput = published.input;
           productSimulationMs += published.timings.productSimulationMs;
           preparedLivePublicationMs += published.timings.preparedLivePublicationMs;
+          residencyTransition ||= published.residencyTransition;
           return published.frame;
         },
       },
     );
+    if (residencyTransition) {
+      performanceFrameScheduler.accumulator = 0;
+      performanceFrameScheduler.lastTimestamp = null;
+    }
     return Object.freeze({
       tick: state.liveFrame.tick,
       simulationSteps: advanced.steps,
+      residencyTransition,
       productSimulationMs,
       preparedLivePublicationMs,
     });
@@ -799,10 +808,14 @@ export function mountCssoccerClient({
 
   async function publishPerformanceProductTick(previousInput) {
     const transaction = prepareProductTick(previousInput);
-    if (transaction.missingExactStates.length > 0) {
+    const residencyTransition = transaction.missingExactStates.length > 0;
+    if (residencyTransition) {
       await preloadExactTransaction(transaction);
     }
-    return transaction.commit();
+    return Object.freeze({
+      ...transaction.commit(),
+      residencyTransition,
+    });
   }
 
   function requirePerformanceTracePage() {

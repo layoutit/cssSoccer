@@ -24,14 +24,16 @@ export function prepareExactActuaPlayerTextureTable({
   const matchBytes = exact.recordBytes(8);
   const playerBytes = exact.recordBytes(16);
   const retailBytes = retail.recordBytes(8);
+  const firstHighlightByte = (533 - 1) * TEXTURE_RECORD_BYTES;
   const firstNumberByte = (549 - 1) * TEXTURE_RECORD_BYTES;
   if (
     matchBytes.length !== 1_006 * TEXTURE_RECORD_BYTES
     || playerBytes.length !== 573 * TEXTURE_RECORD_BYTES
     || retailBytes.length !== matchBytes.length
+    || firstNumberByte !== 548 * TEXTURE_RECORD_BYTES
   ) throw new Error("Exact fixture player texture-table records changed.");
   const output = Buffer.from(matchBytes);
-  playerBytes.copy(output, 0, 0, firstNumberByte);
+  playerBytes.copy(output, 0, 0, firstHighlightByte);
   retailBytes.copy(output, firstNumberByte, firstNumberByte, output.length);
   return output;
 }

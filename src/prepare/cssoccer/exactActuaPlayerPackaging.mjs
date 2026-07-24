@@ -56,10 +56,10 @@ export function prepareCssoccerExactActuaPlayerPackaging({
     const brotliBytes = brotliCompressSync(json, {
       params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 },
     }).length;
-    const parseStart = performance.now();
+    const parseStart = process.cpuUsage();
     const parsed = JSON.parse(json);
-    const parseMs = performance.now() - parseStart;
-    const applyStart = performance.now();
+    const parseMs = cpuDurationMs(parseStart);
+    const applyStart = process.cpuUsage();
     const decoded = decodeCssoccerExactActuaPlayerChunk(parsed);
     const style = { transform: "", visibility: "", materialSelectorOffset: 0 };
     for (let sampleOffset = 0; sampleOffset < current.samples.length; sampleOffset += 1) {
@@ -86,7 +86,7 @@ export function prepareCssoccerExactActuaPlayerPackaging({
       }
       roundTripSamples += 1;
     }
-    const decodeLookupApplyMs = performance.now() - applyStart;
+    const decodeLookupApplyMs = cpuDurationMs(applyStart);
     maxNodeParseMs = Math.max(maxNodeParseMs, parseMs);
     maxNodeDecodeLookupApplyMs = Math.max(maxNodeDecodeLookupApplyMs, decodeLookupApplyMs);
     const meta = {
@@ -252,6 +252,7 @@ export function prepareCssoccerExactActuaPlayerPackaging({
         selectedUncompressedBytes / (verboseGeometryBytes * 2),
     },
     nodeProbe: {
+      measurement: "node-process-cpu",
       maxParseMs: maxNodeParseMs,
       maxDecodeLookupApplyMs: maxNodeDecodeLookupApplyMs,
       longTaskBoundaryMs: 50,
@@ -535,6 +536,11 @@ function canonicalJson(value) {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function cpuDurationMs(start) {
+  const { user, system } = process.cpuUsage(start);
+  return (user + system) / 1_000;
 }
 
 function deepFreeze(value) {
