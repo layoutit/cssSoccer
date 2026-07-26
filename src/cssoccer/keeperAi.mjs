@@ -232,13 +232,23 @@ export function selectCssoccerKeeperSaveTarget(player, context = {}) {
     if (!point) throw new Error("Forced keeper dive requires prediction index 3.");
     const distance = planarDistance(current.position, point);
     if (distance === 0) {
-      return deepFreeze({ predictionIndex: 3, target: { ...point }, forced: true });
+      return deepFreeze({
+        status: "save-path",
+        predictionIndex: 3,
+        target: { ...point },
+        forced: true,
+      });
     }
+    // go_to_save_path first extends the DIVE_POINT target by prat while
+    // keep_dive is set, then extends the forced contact another three source
+    // units along the same keeper-to-ball direction.
+    const extension = pitch.ratio + 3;
     return deepFreeze({
+      status: "save-path",
       predictionIndex: 3,
       target: {
-        x: point.x + ((point.x - current.position.x) / distance) * pitch.ratio,
-        y: point.y + ((point.y - current.position.y) / distance) * pitch.ratio,
+        x: point.x + ((point.x - current.position.x) / distance) * extension,
+        y: point.y + ((point.y - current.position.y) / distance) * extension,
         z: point.z,
       },
       forced: true,
@@ -291,6 +301,28 @@ export function planCssoccerKeeperSave(input = {}) {
   const keeper = requireKeeper(input.keeper);
   const pitch = requirePitch(input.pitch);
   const ball = createBallMatchState(input.ball);
+  const forced = input.forced === true;
+  const possessionOwner = requireIntegerRange(
+    input.possessionOwner ?? 0,
+    0,
+    22,
+    "keeper save-plan possessionOwner",
+  );
+  const frozenPrediction = input.frozenPrediction === undefined
+    || input.frozenPrediction === null
+    ? null
+    : {
+        position: requirePoint(
+          input.frozenPrediction.position,
+          "keeper save-plan frozen prediction position",
+          true,
+        ),
+        displacement: requirePoint(
+          input.frozenPrediction.displacement,
+          "keeper save-plan frozen prediction displacement",
+          true,
+        ),
+      };
   if (
     ball.limbo.active !== 0
     || ball.outcome !== null
@@ -307,22 +339,37 @@ export function planCssoccerKeeperSave(input = {}) {
     });
   }
 
-  const predictions = [clonePoint(ball.ball.position)];
-  let predicted = ball;
-  for (let index = 1; index < 50; index += 1) {
-    let stepped;
-    try {
-      stepped = stepBallMatchState(predicted, {
-        ...(predicted.ball.afterTouch.user === 0
-          ? {}
-          : { afterTouchInput: { x: F32(0), y: F32(0) } }),
+  const predictionOrigin = possessionOwner !== 0 && frozenPrediction !== null
+    ? frozenPrediction.position
+    : ball.ball.position;
+  const predictions = [clonePoint(predictionOrigin)];
+  if (possessionOwner !== 0) {
+    const displacement = frozenPrediction?.displacement ?? ball.ball.displacement;
+    for (let index = 1; index < 50; index += 1) {
+      const previous = predictions.at(-1);
+      predictions.push({
+        x: F32(previous.x + displacement.x),
+        y: F32(previous.y + displacement.y),
+        z: previous.z,
       });
-    } catch {
-      break;
     }
-    predicted = stepped.state;
-    predictions.push(clonePoint(predicted.ball.position));
-    if (predicted.outcome !== null) break;
+  } else {
+    let predicted = ball;
+    for (let index = 1; index < 50; index += 1) {
+      let stepped;
+      try {
+        stepped = stepBallMatchState(predicted, {
+          ...(predicted.ball.afterTouch.user === 0
+            ? {}
+            : { afterTouchInput: { x: F32(0), y: F32(0) } }),
+        });
+      } catch {
+        break;
+      }
+      predicted = stepped.state;
+      predictions.push(clonePoint(predicted.ball.position));
+      if (predicted.outcome !== null) break;
+    }
   }
   if (predictions.length < 4) {
     return deepFreeze({
@@ -338,7 +385,7 @@ export function planCssoccerKeeperSave(input = {}) {
     pitch,
     sourceConstants: BOUND_KEEPER_CONSTANTS,
     predictions,
-    forced: false,
+    forced,
   });
   if (save.status !== "save-path") {
     return deepFreeze({
@@ -375,10 +422,16 @@ export function planCssoccerKeeperSave(input = {}) {
     });
   }
 
-  const keeperSpeed = F32((keeper.attributes.flair + keeper.attributes.pace) / 128);
-  const profile = SAVE_ACTION_PROFILES[zone][height].find((candidate) => (
-    save.predictionIndex <= candidate.contactTicks / keeperSpeed
-  ));
+  const keeperSpeed = F32(
+    ((keeper.attributes.flair + keeper.attributes.pace) / 128)
+      * (forced ? 2 : 1),
+  );
+  const profiles = SAVE_ACTION_PROFILES[zone][height];
+  const profile = forced
+    ? profiles.at(-1)
+    : profiles.find((candidate) => (
+        save.predictionIndex <= candidate.contactTicks / keeperSpeed
+      ));
   if (profile === undefined) {
     return deepFreeze({
       schema: CSSOCCER_KEEPER_SAVE_PLAN_SCHEMA,
@@ -406,6 +459,7 @@ export function planCssoccerKeeperSave(input = {}) {
     keeperNativePlayer: keeper.nativePlayerNumber,
     contactTick: ball.ball.tick + ticksToContact,
     predictionIndex: save.predictionIndex,
+    forced,
     target: clonePoint(save.target),
     contactOffset: { x: F32(0), y: F32(0), z: F32(0) },
     goDisplacement,
@@ -450,7 +504,7 @@ export function resolveCssoccerKeeperSaveContact(input = {}) {
   const distance = planarDistance(contactPoint, ball.ball.position);
   const saveContact = CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.contact.saveContact.value;
   if (
-    !(distance < saveContact)
+    (plan.forced !== true && !(distance < saveContact))
     || ball.ball.inGoal !== 0
     || ball.outcome !== null
   ) {
@@ -471,11 +525,15 @@ export function resolveCssoccerKeeperSaveContact(input = {}) {
       ...clone(ball),
       ball: {
         ...clone(ball.ball),
-        position: clonePoint(ball.ball.position),
-        displacement: { x: F32(0), y: F32(0), z: F32(0) },
-        inAir: 0,
-        still: 1,
-        speed: 0,
+        // collect_ball calls hold_ball before the keeper's SAVE_ACT movement
+        // for this visit. The caught ball is published at the motion-capture
+        // contact offset with the current save displacement.
+        position: clonePoint(contactPoint),
+        displacement: {
+          x: F32(goDisplacement.x),
+          y: F32(goDisplacement.y),
+          z: F32(0),
+        },
         spin: {
           swerve: 0,
           count: 0,

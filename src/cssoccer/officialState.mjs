@@ -870,7 +870,7 @@ function lmanFollow(assistant, frame) {
     return;
   }
 
-  const defense = defensiveLines(frame.players);
+  const defense = frame.defensiveLines ?? defensiveLines(frame.players);
   const { centreX, centreY, width } = CSSOCCER_OFFICIAL_CONSTANTS.pitch;
   if (assistant.position.y < centreY.value) {
     assistant.facing.x = F32(0);
@@ -947,12 +947,15 @@ function followPlay(referee, frame) {
 
   const { centreX, centreY } = CSSOCCER_OFFICIAL_CONSTANTS.pitch;
   const prat = CSSOCCER_OFFICIAL_CONSTANTS.prat.value;
+  const touchOffset = F32(prat * (frame.lastTouch < 12 ? 10 : -10));
   let tx = F32(
     centreX.value
-      + ((frame.ball.x - centreX.value) * 0.5)
-      + (frame.lastTouch < 12 ? prat * 10 : prat * -10),
+      + (F32(frame.ball.x - centreX.value) * 0.5)
+      + touchOffset,
   );
-  let ty = F32(centreY.value + ((frame.ball.y - centreY.value) * 0.5));
+  let ty = F32(
+    centreY.value + (F32(frame.ball.y - centreY.value) * 0.5),
+  );
   tx = F32(tx - next.position.x);
   ty = F32(ty - next.position.y);
   let distance = sourceDistance(tx, ty);
@@ -1106,7 +1109,13 @@ function playerTarget(players, nativePlayerNumber) {
 
 function requireOfficialFrame(value, expectedTick) {
   requirePlainObject(value, "official frame input");
-  requireExactKeys(value, FRAME_KEYS, "official frame input");
+  requireExactKeys(
+    value,
+    value.defensiveLines === undefined
+      ? FRAME_KEYS
+      : [...FRAME_KEYS, "defensiveLines"],
+    "official frame input",
+  );
   if (value.tick !== expectedTick || !Number.isSafeInteger(value.tick)) {
     throw new Error(`Official frame must advance contiguously to tick ${expectedTick}.`);
   }
@@ -1116,6 +1125,16 @@ function requireOfficialFrame(value, expectedTick) {
   requireI32(value.deadBallCount, "official frame deadBallCount");
   requireInteger(value.refereeAccuracy, 0, 0xff, "official frame refereeAccuracy");
   requireInteger(value.kickTaker, 0, 22, "official frame kickTaker");
+  if (value.defensiveLines !== undefined) {
+    requirePlainObject(value.defensiveLines, "official frame defensive lines");
+    requireExactKeys(
+      value.defensiveLines,
+      ["teamA", "teamB"],
+      "official frame defensive lines",
+    );
+    requireF32(value.defensiveLines.teamA, "official frame defense_a");
+    requireF32(value.defensiveLines.teamB, "official frame defense_b");
+  }
   if (!Array.isArray(value.players) || value.players.length !== 22) {
     throw new Error("Official frame must retain all 22 native players.");
   }

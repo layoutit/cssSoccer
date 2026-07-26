@@ -25,7 +25,8 @@ export const CSSOCCER_INTERCEPT_SOURCE = deepFreeze({
       producers: ["calc_dist minimum 0.1"],
     },
   ],
-  supportedBranch: "ground run-on plus foot/chest/down-head control for a free ball",
+  supportedBranch:
+    "ground run-on, first-time foot shot, and foot/chest/down-head control for a free ball",
   predictionOffsets: "odd ticks 1..49",
 });
 
@@ -89,11 +90,106 @@ const CSSOCCER_FIRST_TIME_CHIP_PROFILE = deepFreeze({
   // control timing, rather than the chip animation cadence.
   timingContact: 50 / 149,
   timingFrameStep: 2 / 49,
+  // BALLINT.CPP strike_ball_off calls standard_fstep after contact, which
+  // switches either chip clip to MC_CHIP_FS for the released follow-through.
+  standardFrameStep: F32(1 / 15),
   localOffsets: [
     { x: F32(9.38531494140625), y: F32(2.523958921432495), z: F32(3.210542917251587) },
     { x: F32(9.38531494140625), y: F32(-2.523958921432495), z: F32(3.210542917251587) },
   ],
 });
+
+const CSSOCCER_FIRST_TIME_SHOT_PROFILE = deepFreeze({
+  actionIndex: 8,
+  animationId: 35,
+  contact: F32(38 / 109),
+  timingContact: 38 / 109,
+  // MC_SHOOT contains 36 frames and runs at 40 source frames per second.
+  timingFrameStep: 1 / 18,
+  localOffsets: [
+    { x: F32(7.5185089111328125), y: F32(-5.521873950958252), z: F32(1.78097403049469) },
+    { x: F32(7.5185089111328125), y: F32(5.521873950958252), z: F32(1.78097403049469) },
+  ],
+});
+
+const CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE = deepFreeze({
+  actionIndex: 9,
+  animationId: 79,
+  contact: F32(103 / 155),
+  timingContact: 103 / 155,
+  // MC_S_HEAD's source cadence is 40 frames per second over 31 timing
+  // frames. The compiled animation slot contains the longer recovery tail.
+  timingFrameStep: 2 / 31,
+  // ACTIONS.OBJ save_offs[MC_S_HEAD], with rotate_offs' stored-y negation.
+  localOffsets: [
+    {
+      x: F32(8.369156837463379),
+      y: F32(-0.6143770217895508),
+      z: F32(23.45513916015625),
+    },
+  ],
+});
+
+/** Project INTELL.CPP can_i_intercept's first-time foot-shot candidate. */
+export function projectCssoccerFirstTimeShotIntercept(input = {}) {
+  requirePlainObject(input, "first-time shot intercept input");
+  requireExactKeys(input, [
+    "contactFacing",
+    "player",
+    "playerHeight",
+    "target",
+    "tickOffset",
+  ], "first-time shot intercept input");
+  const player = requireFreeBallControlPlayer(input.player);
+  requireF32Vector2(input.contactFacing, "first-time shot intercept contactFacing");
+  requirePositiveF32(input.playerHeight, "first-time shot intercept playerHeight");
+  requireF32Vector3(input.target, "first-time shot intercept target");
+  if (!Number.isSafeInteger(input.tickOffset) || input.tickOffset <= 0) {
+    throw new TypeError("first-time shot intercept tickOffset must be a positive safe integer.");
+  }
+  if (input.target.z >= input.playerHeight / 4) return null;
+
+  const contactOffset = rotateAndAverageSourceOffsets(
+    CSSOCCER_FIRST_TIME_SHOT_PROFILE.localOffsets,
+    input.contactFacing,
+  );
+  const target = {
+    x: F32(input.target.x - contactOffset.x),
+    y: F32(input.target.y - contactOffset.y),
+    z: input.target.z,
+  };
+  const travel = getInterceptTravel(player, target);
+  const animationTime = sourceControlAnimationTime(
+    CSSOCCER_FIRST_TIME_SHOT_PROFILE,
+    player.flairAttribute,
+    player.userControlled,
+  );
+  const waitTicks = Math.trunc(
+    input.tickOffset - (travel.ticks + animationTime),
+  );
+  if (
+    waitTicks < 0
+    || (!player.controlled && waitTicks >= player.reactionTicks)
+  ) return null;
+
+  return deepFreeze({
+    kind: "first-time-shot",
+    actionIndex: CSSOCCER_FIRST_TIME_SHOT_PROFILE.actionIndex,
+    animationId: CSSOCCER_FIRST_TIME_SHOT_PROFILE.animationId,
+    contact: CSSOCCER_FIRST_TIME_SHOT_PROFILE.contact,
+    tickOffset: input.tickOffset,
+    waitTicks,
+    target,
+    predictionTarget: { ...input.target },
+    contactOffset,
+    animationTime,
+    standardFrameStep: F32(
+      CSSOCCER_FIRST_TIME_SHOT_PROFILE.timingFrameStep,
+    ),
+    strikeTime: F32(animationTime + 1),
+    travel,
+  });
+}
 
 /** Project INTELL.CPP can_i_intercept's first-time chip candidate. */
 export function projectCssoccerFirstTimeChipIntercept(input = {}) {
@@ -150,6 +246,76 @@ export function projectCssoccerFirstTimeChipIntercept(input = {}) {
     predictionTarget: { ...input.target },
     contactOffset,
     animationTime,
+    standardFrameStep: CSSOCCER_FIRST_TIME_CHIP_PROFILE.standardFrameStep,
+    strikeTime: F32(animationTime + 1),
+    travel,
+  });
+}
+
+/** Project INTELL.CPP can_i_intercept's standing first-time header candidate. */
+export function projectCssoccerFirstTimeStandingHeaderIntercept(input = {}) {
+  requirePlainObject(input, "first-time standing-header intercept input");
+  requireExactKeys(input, [
+    "contactFacing",
+    "player",
+    "playerHeight",
+    "target",
+    "tickOffset",
+  ], "first-time standing-header intercept input");
+  const player = requireFreeBallControlPlayer(input.player);
+  requireF32Vector2(
+    input.contactFacing,
+    "first-time standing-header intercept contactFacing",
+  );
+  requirePositiveF32(input.playerHeight, "first-time standing-header intercept playerHeight");
+  requireF32Vector3(input.target, "first-time standing-header intercept target");
+  if (!Number.isSafeInteger(input.tickOffset) || input.tickOffset <= 0) {
+    throw new TypeError(
+      "first-time standing-header intercept tickOffset must be a positive safe integer.",
+    );
+  }
+  if (
+    input.target.z < input.playerHeight * 0.67
+    || input.target.z >= input.playerHeight + 2
+  ) return null;
+
+  const contactOffset = rotateAndAverageSourceOffsets(
+    CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.localOffsets,
+    input.contactFacing,
+  );
+  const target = {
+    x: F32(input.target.x - contactOffset.x),
+    y: F32(input.target.y - contactOffset.y),
+    z: input.target.z,
+  };
+  const travel = getInterceptTravel(player, target);
+  const animationTime = sourceControlAnimationTime(
+    CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE,
+    player.flairAttribute,
+    player.userControlled,
+  );
+  const waitTicks = Math.trunc(
+    input.tickOffset - (travel.ticks + animationTime),
+  );
+  if (
+    waitTicks < 0
+    || (!player.controlled && waitTicks >= player.reactionTicks)
+  ) return null;
+
+  return deepFreeze({
+    kind: "first-time-standing-header",
+    actionIndex: CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.actionIndex,
+    animationId: CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.animationId,
+    contact: CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.contact,
+    tickOffset: input.tickOffset,
+    waitTicks,
+    target,
+    predictionTarget: { ...input.target },
+    contactOffset,
+    animationTime,
+    standardFrameStep: F32(
+      CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.timingFrameStep,
+    ),
     strikeTime: F32(animationTime + 1),
     travel,
   });
@@ -392,6 +558,7 @@ export function scanCssoccerFreeBallControlIntercept(input = {}) {
       firstTimeEligible,
       ballIntSpeed,
       controlCandidate: null,
+      controlTravel: null,
     };
     interceptChecks.push(check);
     if (!firstTimeEligible) continue;
@@ -444,6 +611,10 @@ export function scanCssoccerFreeBallControlIntercept(input = {}) {
       z: target.z,
     };
     const contactTravel = getInterceptTravel(player, contactTarget);
+    // can_i_intercept keeps get_there_time's global x_face/y_face side
+    // effect even when this control candidate does not win the strike slot.
+    // Later first-time strike branches in the same source visit observe it.
+    check.controlTravel = contactTravel;
     const animationTime = sourceControlAnimationTime(
       action,
       player.controlAttribute,
@@ -590,6 +761,330 @@ export function projectCssoccerControlWaitTransition(input = {}) {
   });
 }
 
+/**
+ * Re-evaluate ACTIONS.CPP init_first_time_act/get_closest_pred when a
+ * first-time chip-pass run reaches its target.
+ */
+export function projectCssoccerFirstTimeChipArrival(input = {}) {
+  requirePlainObject(input, "first-time chip arrival input");
+  requireExactKeys(input, [
+    "ballState",
+    "entryAnimationFrame",
+    "entryAnimationId",
+    "face",
+    "freeTicks",
+    "playerPosition",
+    "strikeTime",
+  ], "first-time chip arrival input");
+  if (!Number.isSafeInteger(input.entryAnimationId)) {
+    throw new TypeError("first-time chip arrival entryAnimationId must be a safe integer.");
+  }
+  requireF32(input.entryAnimationFrame, "first-time chip arrival entryAnimationFrame");
+  requireF32Vector2(input.face, "first-time chip arrival face");
+  requireF32Vector3(input.playerPosition, "first-time chip arrival playerPosition");
+  requirePositiveF32(input.strikeTime, "first-time chip arrival strikeTime");
+  if (!Number.isSafeInteger(input.freeTicks) || input.freeTicks < 0) {
+    throw new TypeError("first-time chip arrival freeTicks must be a non-negative safe integer.");
+  }
+
+  const predictions = [input.ballState];
+  let prediction = input.ballState;
+  for (let tickOffset = 1; tickOffset < PREDICTION_LIMIT; tickOffset += 1) {
+    prediction = stepCssoccerInterceptPrediction(prediction);
+    predictions.push(prediction);
+  }
+  // ACTIONS.CPP init_kick_anim chooses MC_CHIPR from the fractional
+  // RUN/JOG/BARGE phase, but defaults to MC_CHIPL from every other clip.
+  // The retained offsets are ordered right then left.
+  const sourcePhase = input.entryAnimationId === 72
+    ? input.entryAnimationFrame
+    : input.entryAnimationId === 73 || input.entryAnimationId === 74
+      ? F32(input.entryAnimationFrame + 0.5)
+      : null;
+  const fractionalPhase = sourcePhase === null
+    ? null
+    : sourcePhase - Math.trunc(sourcePhase);
+  const animationId = fractionalPhase !== null
+    && fractionalPhase >= 0.3
+    && fractionalPhase < 0.8
+    ? 36
+    : CSSOCCER_FIRST_TIME_CHIP_PROFILE.animationId;
+  const contactOffset = rotateSourceOffset(
+    CSSOCCER_FIRST_TIME_CHIP_PROFILE.localOffsets[animationId === 36 ? 0 : 1],
+    input.face,
+  );
+  const oldRt = F32(input.strikeTime + input.freeTicks);
+  const sample = (rt) => {
+    const point = predictions[Math.trunc(rt)].ball.position;
+    const x = F32(F32(point.x - contactOffset.x) - input.playerPosition.x);
+    const y = F32(F32(point.y - contactOffset.y) - input.playerPosition.y);
+    const z = F32(F32(point.z - contactOffset.z) - input.playerPosition.z);
+    const planar = sourcePlanarDistance(x, y);
+    return { rt, x, y, z, distance: sourcePlanarDistance(z, planar) };
+  };
+  let cursor = oldRt;
+  let best = sample(cursor);
+  if (cursor < PREDICTION_LIMIT - 1) {
+    cursor = F32(cursor + 1);
+    const forward = sample(cursor);
+    if (forward.distance < best.distance) best = forward;
+  }
+  if (cursor >= 1) {
+    cursor = F32(cursor - 2);
+    const backward = sample(cursor);
+    if (backward.distance < best.distance) best = backward;
+  }
+
+  const freeTicks = Math.max(
+    0,
+    Math.trunc(input.freeTicks + (best.rt - oldRt)),
+  );
+  const receiveTicks = F32(best.rt);
+  const planarDistance = sourcePlanarDistance(best.x, best.y);
+  const receiveValid = planarDistance / receiveTicks <= 2
+    && Math.abs(best.z) <= 4;
+  const receiveDisplacement = receiveValid
+    ? {
+        x: F32(best.x / receiveTicks),
+        y: F32(best.y / receiveTicks),
+      }
+    : { x: F32(0), y: F32(0) };
+  const stepDistance = freeTicks > 0
+    ? F32(planarDistance / freeTicks)
+    : F32(0);
+  const displacement = freeTicks > 0
+    ? {
+        x: F32(F32(best.x / planarDistance) * stepDistance),
+        y: F32(F32(best.y / planarDistance) * stepDistance),
+      }
+    : receiveDisplacement;
+  const frameStep = F32(
+    CSSOCCER_FIRST_TIME_CHIP_PROFILE.contact / receiveTicks,
+  );
+  return deepFreeze({
+    actionIndex: CSSOCCER_FIRST_TIME_CHIP_PROFILE.actionIndex,
+    animationId,
+    contact: CSSOCCER_FIRST_TIME_CHIP_PROFILE.contact,
+    contactOffset,
+    displacement,
+    frame: F32(frameStep + 0.01),
+    frameStep,
+    freeTicks,
+    position: freeTicks > 0
+      ? {
+          x: F32(input.playerPosition.x + displacement.x),
+          y: F32(input.playerPosition.y + displacement.y),
+          z: input.playerPosition.z,
+        }
+      : { ...input.playerPosition },
+    receiveTicks,
+    receiveValid,
+  });
+}
+
+/**
+ * Re-evaluate ACTIONS.CPP init_first_time_act/get_closest_pred when a
+ * first-time foot-shot run reaches its target.
+ */
+export function projectCssoccerFirstTimeShotArrival(input = {}) {
+  requirePlainObject(input, "first-time shot arrival input");
+  requireExactKeys(input, [
+    "ballState",
+    "face",
+    "freeTicks",
+    "playerPosition",
+    "strikeTime",
+  ], "first-time shot arrival input");
+  requireF32Vector2(input.face, "first-time shot arrival face");
+  requireF32Vector3(input.playerPosition, "first-time shot arrival playerPosition");
+  requirePositiveF32(input.strikeTime, "first-time shot arrival strikeTime");
+  if (!Number.isSafeInteger(input.freeTicks) || input.freeTicks < 0) {
+    throw new TypeError("first-time shot arrival freeTicks must be a non-negative safe integer.");
+  }
+
+  const predictions = [input.ballState];
+  let prediction = input.ballState;
+  for (let tickOffset = 1; tickOffset < PREDICTION_LIMIT; tickOffset += 1) {
+    prediction = stepCssoccerInterceptPrediction(prediction);
+    predictions.push(prediction);
+  }
+  const contactOffset = rotateSourceOffset(
+    CSSOCCER_FIRST_TIME_SHOT_PROFILE.localOffsets[0],
+    input.face,
+  );
+  const oldRt = F32(input.strikeTime + input.freeTicks);
+  const sample = (rt) => {
+    const point = predictions[Math.trunc(rt)].ball.position;
+    const x = F32(F32(point.x - contactOffset.x) - input.playerPosition.x);
+    const y = F32(F32(point.y - contactOffset.y) - input.playerPosition.y);
+    const z = F32(F32(point.z - contactOffset.z) - input.playerPosition.z);
+    const planar = sourcePlanarDistance(x, y);
+    return { rt, x, y, z, distance: sourcePlanarDistance(z, planar) };
+  };
+  let cursor = oldRt;
+  let best = sample(cursor);
+  if (cursor < PREDICTION_LIMIT - 1) {
+    cursor = F32(cursor + 1);
+    const forward = sample(cursor);
+    if (forward.distance < best.distance) best = forward;
+  }
+  if (cursor >= 1) {
+    cursor = F32(cursor - 2);
+    const backward = sample(cursor);
+    if (backward.distance < best.distance) best = backward;
+  }
+
+  const freeTicks = Math.max(
+    0,
+    Math.trunc(input.freeTicks + (best.rt - oldRt)),
+  );
+  const receiveTicks = F32(best.rt);
+  const planarDistance = sourcePlanarDistance(best.x, best.y);
+  const receiveValid = planarDistance / receiveTicks <= 2
+    && Math.abs(best.z) <= 4;
+  const receiveDisplacement = receiveValid
+    ? {
+        x: F32(best.x / receiveTicks),
+        y: F32(best.y / receiveTicks),
+      }
+    : { x: F32(0), y: F32(0) };
+  const stepDistance = freeTicks > 0
+    ? F32(planarDistance / freeTicks)
+    : F32(0);
+  const displacement = freeTicks > 0
+    ? {
+        x: F32(F32(best.x / planarDistance) * stepDistance),
+        y: F32(F32(best.y / planarDistance) * stepDistance),
+      }
+    : receiveDisplacement;
+  const frameStep = F32(
+    CSSOCCER_FIRST_TIME_SHOT_PROFILE.contact / receiveTicks,
+  );
+  return deepFreeze({
+    actionIndex: CSSOCCER_FIRST_TIME_SHOT_PROFILE.actionIndex,
+    animationId: CSSOCCER_FIRST_TIME_SHOT_PROFILE.animationId,
+    contact: CSSOCCER_FIRST_TIME_SHOT_PROFILE.contact,
+    contactOffset,
+    displacement,
+    frame: F32(frameStep + 0.01),
+    frameStep,
+    freeTicks,
+    position: freeTicks > 0
+      ? {
+          x: F32(input.playerPosition.x + displacement.x),
+          y: F32(input.playerPosition.y + displacement.y),
+          z: input.playerPosition.z,
+        }
+      : { ...input.playerPosition },
+    receiveTicks,
+    receiveValid,
+  });
+}
+
+/**
+ * Re-evaluate ACTIONS.CPP init_first_time_act/get_closest_pred when a
+ * standing first-time header reaches its run target.
+ */
+export function projectCssoccerFirstTimeStandingHeaderArrival(input = {}) {
+  requirePlainObject(input, "first-time standing-header arrival input");
+  requireExactKeys(input, [
+    "ballState",
+    "face",
+    "freeTicks",
+    "playerPosition",
+    "strikeTime",
+  ], "first-time standing-header arrival input");
+  requireF32Vector2(input.face, "first-time standing-header arrival face");
+  requireF32Vector3(
+    input.playerPosition,
+    "first-time standing-header arrival playerPosition",
+  );
+  requirePositiveF32(input.strikeTime, "first-time standing-header arrival strikeTime");
+  if (!Number.isSafeInteger(input.freeTicks) || input.freeTicks < 0) {
+    throw new TypeError(
+      "first-time standing-header arrival freeTicks must be a non-negative safe integer.",
+    );
+  }
+
+  const predictions = [input.ballState];
+  let prediction = input.ballState;
+  for (let tickOffset = 1; tickOffset < PREDICTION_LIMIT; tickOffset += 1) {
+    prediction = stepCssoccerInterceptPrediction(prediction);
+    predictions.push(prediction);
+  }
+  const contactOffset = rotateSourceOffset(
+    CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.localOffsets[0],
+    input.face,
+  );
+  const oldRt = F32(input.strikeTime + input.freeTicks);
+  const sample = (rt) => {
+    const point = predictions[Math.trunc(rt)].ball.position;
+    const x = F32(F32(point.x - contactOffset.x) - input.playerPosition.x);
+    const y = F32(F32(point.y - contactOffset.y) - input.playerPosition.y);
+    const z = F32(F32(point.z - contactOffset.z) - input.playerPosition.z);
+    const planar = sourcePlanarDistance(x, y);
+    return { rt, x, y, z, distance: sourcePlanarDistance(z, planar) };
+  };
+  let cursor = oldRt;
+  let best = sample(cursor);
+  if (cursor < PREDICTION_LIMIT - 1) {
+    cursor = F32(cursor + 1);
+    const forward = sample(cursor);
+    if (forward.distance < best.distance) best = forward;
+  }
+  if (cursor >= 1) {
+    cursor = F32(cursor - 2);
+    const backward = sample(cursor);
+    if (backward.distance < best.distance) best = backward;
+  }
+
+  const freeTicks = Math.max(
+    0,
+    Math.trunc(input.freeTicks + (best.rt - oldRt)),
+  );
+  const receiveTicks = F32(best.rt);
+  const planarDistance = sourcePlanarDistance(best.x, best.y);
+  const receiveValid = planarDistance / receiveTicks <= 2
+    && Math.abs(best.z) <= 4;
+  const receiveDisplacement = receiveValid
+    ? {
+        x: F32(best.x / receiveTicks),
+        y: F32(best.y / receiveTicks),
+      }
+    : { x: F32(0), y: F32(0) };
+  const stepDistance = freeTicks > 0
+    ? F32(planarDistance / freeTicks)
+    : F32(0);
+  const displacement = freeTicks > 0
+    ? {
+        x: F32(F32(best.x / planarDistance) * stepDistance),
+        y: F32(F32(best.y / planarDistance) * stepDistance),
+      }
+    : receiveDisplacement;
+  const frameStep = F32(
+    CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.contact / receiveTicks,
+  );
+  return deepFreeze({
+    actionIndex: CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.actionIndex,
+    animationId: CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.animationId,
+    contact: CSSOCCER_FIRST_TIME_STANDING_HEADER_PROFILE.contact,
+    contactOffset,
+    displacement,
+    frame: F32(frameStep + 0.01),
+    frameStep,
+    freeTicks,
+    position: freeTicks > 0
+      ? {
+          x: F32(input.playerPosition.x + displacement.x),
+          y: F32(input.playerPosition.y + displacement.y),
+          z: input.playerPosition.z,
+        }
+      : { ...input.playerPosition },
+    receiveTicks,
+    receiveValid,
+  });
+}
+
 function requireFreeBallControlPlayer(value) {
   requirePlainObject(value, "free-ball control intercept player");
   requireExactKeys(value, [
@@ -607,6 +1102,7 @@ function requireFreeBallControlPlayer(value) {
     "automaticMoveSelection",
     "controlRequested",
     "controlAttribute",
+    "flairAttribute",
     "trapState",
   ], "free-ball control intercept player");
   requireF32Vector3(value.position, "free-ball control intercept player position");
@@ -623,6 +1119,9 @@ function requireFreeBallControlPlayer(value) {
   requireBoolean(value.controlRequested, "free-ball control intercept player controlRequested");
   if (!Number.isSafeInteger(value.controlAttribute) || value.controlAttribute < 0 || value.controlAttribute > 255) {
     throw new TypeError("free-ball control intercept player controlAttribute must be u8.");
+  }
+  if (!Number.isSafeInteger(value.flairAttribute) || value.flairAttribute < 0 || value.flairAttribute > 255) {
+    throw new TypeError("free-ball control intercept player flairAttribute must be u8.");
   }
   if (!Number.isSafeInteger(value.trapState) || value.trapState < -128 || value.trapState > 127) {
     throw new TypeError("free-ball control intercept player trapState must be i8.");

@@ -374,8 +374,12 @@ export function materializeCssoccerFoulTakerPlacement(restart, sourceConstant) {
   requireFinitePositive(sourceConstant, `prepared ${restart.takerPlacement?.constant ?? "constant"}`);
   if (restart.kind === "penalty") {
     return deepFreeze({
-      x: f32(restart.ballPosition.x + restart.takerPlacement.xDirection * sourceConstant),
-      y: restart.ballPosition.y,
+      // RULES.CPP publishes taker_x/taker_y as ints even though the placement
+      // expression is evaluated from float globals.
+      x: f32(Math.trunc(
+        restart.ballPosition.x + restart.takerPlacement.xDirection * sourceConstant,
+      )),
+      y: f32(Math.trunc(restart.ballPosition.y)),
     });
   }
   const vector = {
@@ -390,8 +394,12 @@ export function materializeCssoccerFoulTakerPlacement(restart, sourceConstant) {
     );
   }
   return deepFreeze({
-    x: f32(restart.ballPosition.x - f32(vector.x * sourceConstant / distance)),
-    y: f32(restart.ballPosition.y - f32(vector.y * sourceConstant / distance)),
+    x: f32(Math.trunc(
+      restart.ballPosition.x - vector.x * sourceConstant / distance,
+    )),
+    y: f32(Math.trunc(
+      restart.ballPosition.y - vector.y * sourceConstant / distance,
+    )),
   });
 }
 

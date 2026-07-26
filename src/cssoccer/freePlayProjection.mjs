@@ -222,7 +222,7 @@ function projectRules(output, state) {
   set(output, "rules.direct_free_kick", 0);
   set(output, "rules.game_action", state.rules.gameAction);
   set(output, "rules.match_mode", state.rules.matchMode);
-  set(output, "rules.offside_now", 0);
+  set(output, "rules.offside_now", state.rules.state.offside.offsideNow);
   set(output, "rules.offside_on", state.config.rules.offside ? 1 : 0);
   set(output, "rules.penalty_game", 0);
   set(output, "rules.set_piece", state.rules.setPiece);

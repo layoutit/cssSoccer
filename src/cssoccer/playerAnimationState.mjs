@@ -1458,8 +1458,11 @@ function requireLaunchFacing(value) {
     x: requireF32(value.x, "backheel kick launch facing.x"),
     y: requireF32(value.y, "backheel kick launch facing.y"),
   };
-  if (Math.abs(sourcePlanarDistance(facing.x, facing.y) - 1) > 0.0001) {
-    throw new TypeError("backheel kick launch facing must be normalized");
+  const distance = sourcePlanarDistance(facing.x, facing.y);
+  // ACTIONS.CPP init_kick_act consumes the stored tm_xdis/tm_ydis as-is.
+  // rotate_offs normalizes only its local contact-offset direction.
+  if (!(distance > 0)) {
+    throw new TypeError("backheel kick launch facing must be non-zero");
   }
   return facing;
 }

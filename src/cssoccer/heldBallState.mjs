@@ -3,6 +3,7 @@ import { createBallMatchState } from "./ballMatchState.mjs";
 import {
   CSSOCCER_BALL_CONSTANTS,
   projectBallNativeFields,
+  stepPossessedBallCollisionState,
 } from "./ballState.mjs";
 import {
   CSSOCCER_NATIVE_FIXTURE_PLAYER_PROFILE_HASH,
@@ -22,6 +23,7 @@ import {
 const F32 = Math.fround;
 const FIXTURE_ID = "spain-argentina-full-match";
 const KEEPER_NATIVE_PLAYER_NUMBERS = new Set([1, 12]);
+const KEEPER_IN_HANDS_DISTANCE = F32(10);
 
 export const CSSOCCER_HELD_BALL_STATE_SCHEMA = "cssoccer-held-ball-state@1";
 export const CSSOCCER_HELD_BALL_OWNER_FRAME_SCHEMA =
@@ -398,11 +400,18 @@ export function stepCssoccerPossessedGoalCountdownState(input) {
       "Possessed post-goal ball requires one active qualified goal countdown.",
     );
   }
-  const physical = stepPossessedBallPhysicalState(current);
+  const collision = stepPossessedBallCollisionState(current.ball);
+  const physical = createBallMatchState({
+    ...clone(current),
+    ball: collision.state,
+  });
   if (physical.ball.outOfPlay === 1) {
     return deepFreeze({
       state: physical,
-      events: [{ type: "ball-post-goal-respot-required", outOfPlay: 0 }],
+      events: [
+        ...collision.events,
+        { type: "ball-post-goal-respot-required", outOfPlay: 0 },
+      ],
     });
   }
   const state = createBallMatchState({
@@ -414,10 +423,13 @@ export function stepCssoccerPossessedGoalCountdownState(input) {
   });
   return deepFreeze({
     state,
-    events: [{
-      type: "ball-post-goal-countdown",
-      outOfPlay: state.ball.outOfPlay,
-    }],
+    events: [
+      ...collision.events,
+      {
+        type: "ball-post-goal-countdown",
+        outOfPlay: state.ball.outOfPlay,
+      },
+    ],
   });
 }
 
@@ -498,7 +510,9 @@ export function stepCssoccerKeeperHeldBall(input = {}) {
   );
   const physical = stepCssoccerPossessedBallState(ball);
   const holdingSave = action === 10;
-  const handsDistance = CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value;
+  // BALLINT.CPP IN_HANDS_DIST is 10; unlike several nearby spatial
+  // thresholds it is not derived from the pitch ratio.
+  const handsDistance = KEEPER_IN_HANDS_DISTANCE;
   const nextPosition = holdingSave
     ? {
         x: F32(position.x + saveOffset.x),
@@ -510,7 +524,11 @@ export function stepCssoccerKeeperHeldBall(input = {}) {
         y: F32(position.y + facing.y * handsDistance),
         z: F32(
           position.z
-            + CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.contact.playerHeight.value / 2,
+            // PLAYER_HEIGHT is an integer macro on this source path, so the
+            // division truncates before conversion to the stored f32.
+            + Math.trunc(
+              CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.contact.playerHeight.value / 2,
+            ),
         ),
       };
   const heldBall = createBallMatchState({
@@ -523,8 +541,11 @@ export function stepCssoccerKeeperHeldBall(input = {}) {
         y: goDisplacement.y,
         z: F32(0),
       },
-      inAir: 0,
-      still: goDisplacement.x === 0 && goDisplacement.y === 0 ? 1 : 0,
+      // hold_ball's hands branch does not clear ball_inair/ball_still for
+      // SAVE_ACT, KPHOLD_ACT, or a keeper RUN_ACT. Those globals still
+      // describe the earlier process_ball visit until the next logic tick.
+      inAir: physical.ball.inAir,
+      still: physical.ball.still,
     },
   });
   return deepFreeze({

@@ -16,6 +16,7 @@ const DATA_H_SHA256 = "7dba31d4e9af11b4c7686faa1bf75802142579db99bd41b23d5bfcd06
 const DISPLAY_CPP_SHA256 = "215bc1200c0af42eecb4c0bc73a3fdfb73e21f2eaab4681f2170d9c808f7fbca";
 const BALL_OBJ_SHA256 = "f8dd68af5519f5fd70085de559d57418f24beea6dea9f9fb2cfd8e4627e76ec5";
 const TEST_EXE_SHA256 = "9f7f37062957bfcb9ab3f84adc84714c981c879314dd18ea110d79e54a26e775";
+const FILES_C_SHA256 = "80c5c13ee829465c8daef3aa816deadda872c32cafffd37f9fcd565f9820a92b";
 
 export const CSSOCCER_BALL_CONSTANTS = Object.freeze({
   ballDiameter: f32(4),
@@ -38,6 +39,8 @@ export const CSSOCCER_BALL_CONSTANTS = Object.freeze({
   topPostY: 357,
   bottomPostY: 443,
   outOfPlayTicks: 25,
+  stadiumLengthMargin: 190,
+  stadiumWidthMargin: 190,
   maximumUsers: 20,
   kickoutAnimation: 98,
 });
@@ -55,6 +58,7 @@ export const CSSOCCER_BALL_SOURCE = deepFreeze({
     { file: "DISPLAY.CPP", sha256: DISPLAY_CPP_SHA256 },
     { file: "BALL.OBJ", sha256: BALL_OBJ_SHA256 },
     { file: "TEST.EXE", sha256: TEST_EXE_SHA256 },
+    { file: "FILES.C", sha256: FILES_C_SHA256 },
   ],
   constantProducers: {
     integrationAndCollision: "BALL.CPP:196-352, 589-648, 728-860, 1081-1303",
@@ -67,6 +71,7 @@ export const CSSOCCER_BALL_SOURCE = deepFreeze({
     gravity: "FOOTBALL.CPP:3452-3454",
     postLines: "DISPLAY.CPP:203-224",
     initializedData: "TEST.EXE object 3: bounce_dis, ball_diam, pitch, and goal globals",
+    stadiumBounds: "BALL.CPP stadium_bounds; FILES.C selected stad_info st_l/st_w",
     compiledMacros: "BALL.OBJ: AIR_FRICTION, GRND_FRICTION, SW_HOLD_FACTOR, REBOUND_FACTOR",
   },
   updateOrder: [
@@ -78,6 +83,7 @@ export const CSSOCCER_BALL_SOURCE = deepFreeze({
     "is_it_a_goal",
     "publish_previous_position",
     "pitch_bounds",
+    "stadium_bounds",
   ],
 });
 
@@ -249,6 +255,46 @@ export function stepBallState(
   if (!enteredOutOfPlay && draft.inGoal === 0) {
     resolvePitchBounds(draft, events);
   }
+  if (enteredOutOfPlay) {
+    resolveStadiumBounds(draft);
+  }
+
+  draft.tick += 1;
+  return Object.freeze({
+    state: createBallState(draft),
+    events: deepFreeze(events),
+  });
+}
+
+/**
+ * Advance the BALL.CPP process_ball branch for a current feet-possession
+ * owner. ball_trajectory does not integrate, gravitate, or apply friction
+ * while ball_poss is non-zero, but ball_collision and the bounds visit still
+ * run when the owner's contact is negative.
+ */
+export function stepPossessedBallCollisionState(state) {
+  const current = createBallState(state);
+  const draft = mutableState(current);
+  const events = [];
+  const enteredOutOfPlay = current.outOfPlay !== 0;
+
+  draft.speed = sourceBallSpeed(draft.displacement);
+  draft.still = draft.displacement.x !== 0 || draft.displacement.y !== 0 ? 0 : 1;
+
+  if (current.inGoal === 0) {
+    resolveOutsideGoalCollision(draft, events, !enteredOutOfPlay);
+  } else {
+    resolveInsideGoalCollision(draft, events);
+  }
+
+  draft.previousPosition = { ...draft.position };
+
+  if (!enteredOutOfPlay && draft.inGoal === 0) {
+    resolvePitchBounds(draft, events);
+  }
+  if (enteredOutOfPlay) {
+    resolveStadiumBounds(draft);
+  }
 
   draft.tick += 1;
   return Object.freeze({
@@ -338,6 +384,26 @@ function applyFriction(draft) {
   }
   if (draft.displacement.y > -threshold && draft.displacement.y < threshold) {
     draft.displacement.y = f32(0);
+  }
+}
+
+function resolveStadiumBounds(draft) {
+  const lengthMargin = CSSOCCER_BALL_CONSTANTS.stadiumLengthMargin;
+  const widthMargin = CSSOCCER_BALL_CONSTANTS.stadiumWidthMargin;
+  const maximumX = CSSOCCER_BALL_CONSTANTS.pitchLength + lengthMargin;
+  const maximumY = CSSOCCER_BALL_CONSTANTS.pitchWidth + widthMargin;
+  if (draft.position.x > maximumX) {
+    draft.position.x = f32(maximumX);
+    draft.displacement.x = f32(-draft.displacement.x);
+  } else if (draft.position.x < -lengthMargin) {
+    draft.position.x = f32(-lengthMargin);
+    draft.displacement.x = f32(-draft.displacement.x);
+  } else if (draft.position.y > maximumY) {
+    draft.position.y = f32(maximumY);
+    draft.displacement.y = f32(-draft.displacement.y);
+  } else if (draft.position.y < -widthMargin) {
+    draft.position.y = f32(-widthMargin);
+    draft.displacement.y = f32(-draft.displacement.y);
   }
 }
 

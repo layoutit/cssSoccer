@@ -31,7 +31,7 @@ export const CSSOCCER_LIVE_PASS_SOURCE = deepFreeze({
     },
   ],
   supportedBoundary:
-    "KICK_ACT held-ball tween, including the source-legal 25-tick out-of-play countdown and keeper goal kicks, with receiver ground/chip/cross release and local directed or charged ground release",
+    "KICK_ACT held-ball tween, including the source-legal 25-tick out-of-play countdown and keeper goal kicks, with receiver ground/chip/header/cross release and local directed or charged ground release",
 });
 
 /** Apply BALLINT.CPP's possessed pre-contact kick tween for one source tick. */
@@ -210,7 +210,22 @@ export function releaseCssoccerGroundPass(input = {}) {
 
 /** Apply the generic pass_type -1 aerial branch of INTELL.CPP pass_ball. */
 export function releaseCssoccerChipPass(input = {}) {
-  requirePlainObject(input, "chip-pass release input");
+  return releaseCssoccerAerialReceiverPass(input, {
+    kind: "chip",
+    speedBonus: 4,
+  });
+}
+
+/** Apply pass_ball's heading_ball aerial branch for a first-time header. */
+export function releaseCssoccerHeaderPass(input = {}) {
+  return releaseCssoccerAerialReceiverPass(input, {
+    kind: "header",
+    speedBonus: 2,
+  });
+}
+
+function releaseCssoccerAerialReceiverPass(input, { kind, speedBonus }) {
+  requirePlainObject(input, `${kind}-pass release input`);
   requireExactKeys(input, [
     "ball",
     "possession",
@@ -220,12 +235,12 @@ export function releaseCssoccerChipPass(input = {}) {
     "takerAccuracy",
     "tick",
     "wantedReceiver",
-  ], "chip-pass release input");
+  ], `${kind}-pass release input`);
   const ball = createBallMatchState(input.ball);
   const possession = createPossessionState(input.possession);
   requireUint32(input.tick, "chip-pass release tick");
   if (ball.ball.tick !== input.tick) {
-    throw new Error("chip-pass release must consume the current contact-tick ball");
+    throw new Error(`${kind}-pass release must consume the current contact-tick ball`);
   }
   if (
     possession.owner < 1
@@ -234,7 +249,7 @@ export function releaseCssoccerChipPass(input = {}) {
     || possession.owner === 12
     || possession.inHands !== 0
   ) {
-    throw new Error("chip-pass release requires an ordinary outfield possession owner");
+    throw new Error(`${kind}-pass release requires an ordinary outfield possession owner`);
   }
   if (
     !Number.isSafeInteger(input.takerAccuracy)
@@ -242,7 +257,9 @@ export function releaseCssoccerChipPass(input = {}) {
     || input.takerAccuracy > 128
     || typeof input.wantedReceiver !== "boolean"
   ) {
-    throw new TypeError("chip-pass release requires typed accuracy and wanted-receiver inputs");
+    throw new TypeError(
+      `${kind}-pass release requires typed accuracy and wanted-receiver inputs`,
+    );
   }
   const receiver = requireGroundPassReceiver(input.receiver, possession.owner);
   const pass = requireGroundPassProfile(input.profile);
@@ -276,10 +293,11 @@ export function releaseCssoccerChipPass(input = {}) {
   };
   const endSpeed = F32(pass.endSpeed - powerOffset);
   const passSpeed = F32(
-    endSpeed + 4 + (target.distance * pass.airDecay),
+    endSpeed + speedBonus + (target.distance * pass.airDecay),
   );
   let travelTicks = Math.trunc(
-    Math.log((endSpeed + 4) / passSpeed) / Math.log(pass.airFriction),
+    Math.log((endSpeed + speedBonus) / passSpeed)
+      / Math.log(pass.airFriction),
   );
   if (travelTicks < 0.1) travelTicks = 1;
   const displacement = {
@@ -677,13 +695,12 @@ function requireGroundPassReceiver(value, ownerNativePlayer) {
     || value.nativePlayerNumber < 1
     || value.nativePlayerNumber > 22
     || value.nativePlayerNumber === ownerNativePlayer
-    || (value.nativePlayerNumber < 12) !== (ownerNativePlayer < 12)
     || !Number.isSafeInteger(value.action)
     || typeof value.stableId !== "string"
     || value.stableId.length === 0
   ) {
     throw new Error(
-      "ground-pass receiver must be a distinct same-team player "
+      "ground-pass receiver must be a distinct active player "
         + `(owner ${ownerNativePlayer}, receiver ${String(value.nativePlayerNumber)})`,
     );
   }
@@ -692,8 +709,10 @@ function requireGroundPassReceiver(value, ownerNativePlayer) {
     value.goDisplacement,
     "ground-pass receiver displacement",
   );
-  // choose_pass stops receivers that are not running toward the opposing goal
-  // before pass_ahead evaluates their future position.
+  // pass_decide normally supplies a team-mate, but its leading want_pass
+  // branch does not verify teams. A stale opposing request can therefore be
+  // selected exactly as the compiled game does. choose_pass still stops any
+  // receiver that is not running toward that receiver's opposing goal.
   const runsForward = value.action === CSSOCCER_NATIVE_ACTIONS.RUN
     && (value.nativePlayerNumber < 12
       ? goDisplacement.x > 0

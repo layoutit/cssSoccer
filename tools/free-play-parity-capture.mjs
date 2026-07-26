@@ -115,6 +115,7 @@ export async function installCssoccerFreePlayParityCapture({
       tick: projection.tick,
       snapshotTick: projection.snapshotTick,
       phase: projection.phase,
+      values: projection.values,
       bindings: engineIndependence.bindings,
       samples: createCssoccerOracleTick({
         tick: projection.tick,
