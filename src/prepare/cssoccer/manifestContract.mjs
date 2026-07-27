@@ -212,6 +212,7 @@ function validatePreparedFiles(files, sceneEntry) {
     "assets/textures/spain-argentina-pitch.png",
     "assets/textures/spain-argentina-marking-pixel.png",
     "assets/textures/spain-argentina-hud-glyphs.png",
+    "assets/textures/spain-argentina-halftime-menu-sprites.png",
     "assets/textures/spain-argentina-stadium.png",
     "assets/textures/spain-argentina-sky.png",
     "assets/textures/spain-argentina-exact-player-materials.png",

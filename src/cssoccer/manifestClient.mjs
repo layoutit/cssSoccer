@@ -23,6 +23,8 @@ const TEXTURE_PATH = "assets/textures/spain-argentina-match.png";
 const PITCH_TEXTURE_PATH = "assets/textures/spain-argentina-pitch.png";
 const MARKING_PIXEL_PATH = "assets/textures/spain-argentina-marking-pixel.png";
 const HUD_GLYPH_TEXTURE_PATH = "assets/textures/spain-argentina-hud-glyphs.png";
+const HALFTIME_MENU_SPRITE_TEXTURE_PATH =
+  "assets/textures/spain-argentina-halftime-menu-sprites.png";
 const STADIUM_TEXTURE_PATH = "assets/textures/spain-argentina-stadium.png";
 const SKY_TEXTURE_PATH = "assets/textures/spain-argentina-sky.png";
 const EXACT_PLAYER_TEXTURE_PATH = "assets/textures/spain-argentina-exact-player-materials.png";
@@ -36,6 +38,7 @@ const TEXTURE_PATHS = new Set([
   PITCH_TEXTURE_PATH,
   MARKING_PIXEL_PATH,
   HUD_GLYPH_TEXTURE_PATH,
+  HALFTIME_MENU_SPRITE_TEXTURE_PATH,
   STADIUM_TEXTURE_PATH,
   SKY_TEXTURE_PATH,
   EXACT_PLAYER_TEXTURE_PATH,
@@ -46,6 +49,7 @@ const REQUIRED_FILES = Object.freeze([
   PITCH_TEXTURE_PATH,
   MARKING_PIXEL_PATH,
   HUD_GLYPH_TEXTURE_PATH,
+  HALFTIME_MENU_SPRITE_TEXTURE_PATH,
   STADIUM_TEXTURE_PATH,
   SKY_TEXTURE_PATH,
   EXACT_PLAYER_TEXTURE_PATH,

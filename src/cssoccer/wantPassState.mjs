@@ -43,6 +43,8 @@ export function projectCssoccerWantPassMotion({
 }) {
   const projected = { ...liveMotion };
   delete projected.wantPassStat;
+  delete projected.wantPassOffset;
+  delete projected.wantPassFaced;
   if (
     intelligence.move !== CSSOCCER_RUN_ON_INTELLIGENCE_MOVE
     || intelligence.count <= 0
@@ -54,6 +56,30 @@ export function projectCssoccerWantPassMotion({
       + "without an active source request.",
     );
   }
+  const wantPassOffset = liveMotion?.wantPassOffset
+    ?? sourcePlayer?.liveMotion?.wantPassOffset;
+  if (
+    !Number.isFinite(wantPassOffset?.x)
+    || !Number.isFinite(wantPassOffset?.y)
+  ) {
+    throw new Error(
+      `Source want_pass owner ${sourcePlayer?.id ?? "missing"} lost its `
+      + "original go_xoff/go_yoff vector.",
+    );
+  }
+  const wantPassFaced = liveMotion?.wantPassFaced
+    ?? sourcePlayer?.liveMotion?.wantPassFaced;
+  if (typeof wantPassFaced !== "boolean") {
+    throw new Error(
+      `Source want_pass owner ${sourcePlayer?.id ?? "missing"} lost its `
+      + "communication-facing state.",
+    );
+  }
   projected.wantPassStat = wantPassStat;
+  projected.wantPassOffset = {
+    x: wantPassOffset.x,
+    y: wantPassOffset.y,
+  };
+  projected.wantPassFaced = wantPassFaced;
   return projected;
 }

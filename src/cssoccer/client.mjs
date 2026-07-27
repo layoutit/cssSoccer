@@ -25,6 +25,7 @@ import { requireControlCountry } from "./fixtureContract.mjs";
 import {
   createCssoccerNativeHudState,
   createCssoccerNativeHudView,
+  projectCssoccerNativeInitialSurname,
   projectCssoccerNormalTimeHudClock,
 } from "./nativeHudView.mjs";
 import {
@@ -108,6 +109,7 @@ export function mountCssoccerClient({
     inputState: createCssoccerBrowserInputState(),
     inputMode: detectInputMode(windowImpl),
     hudState: null,
+    hudGoalHistory: [],
     lastInputCommand: null,
     lastInputState: null,
     liveFrame: null,
@@ -260,6 +262,7 @@ export function mountCssoccerClient({
       state.renderAssets = renderAssets;
       state.exactPlayerAssets = exactPlayerAssets;
       state.exactOfficialAssets = exactOfficialAssets;
+      state.hudGoalHistory = [];
       state.matchState = createMatchState({
         preparedFacts,
         preparedScene: sceneData,
@@ -304,6 +307,7 @@ export function mountCssoccerClient({
       state.exactPlayerAssets = null;
       state.exactOfficialAssets = null;
       state.hudState = null;
+      state.hudGoalHistory = [];
       state.liveFrame = null;
       hudHost.hidden = true;
       delete documentImpl.body.dataset.controlCountry;
@@ -915,6 +919,7 @@ export function mountCssoccerClient({
   function renderHud() {
     if (!state.matchState) return null;
     const live = state.liveFrame;
+    retainNativeHudGoals(state.matchState);
     state.hudState = createCssoccerNativeHudState({
       clock: projectCssoccerNormalTimeHudClock(live?.clock
         ? { minutes: live.clock.minutes, seconds: live.clock.seconds }
@@ -922,6 +927,16 @@ export function mountCssoccerClient({
             minutes: state.matchState.clock.gameMinute,
             seconds: state.matchState.clock.gameSecond,
           }),
+      score: live?.score
+        ? { spain: live.score.spain, argentina: live.score.argentina }
+        : {
+            spain: state.matchState.score.goals.spain,
+            argentina: state.matchState.score.goals.argentina,
+          },
+      tick: state.matchState.clock.tick,
+      phase: state.matchState.clock.phase,
+      halftimeTransitionTicks: state.matchState.clock.halftimeTransitionTicks,
+      goalHistory: state.hudGoalHistory,
     });
     documentImpl.body.dataset.matchPaused = String(state.inputState.paused);
     documentImpl.body.dataset.matchFocused = String(state.inputState.focused);
@@ -931,6 +946,30 @@ export function mountCssoccerClient({
     );
     renderTouchControls();
     return hudView.render(state.hudState);
+  }
+
+  function retainNativeHudGoals(match) {
+    const goalSequence = match.goal.goalSequence;
+    if (goalSequence === state.hudGoalHistory.length) return;
+    if (
+      goalSequence !== state.hudGoalHistory.length + 1
+      || !match.goal.activeGoal
+    ) {
+      throw new Error("cssoccer native HUD missed a source goal-history transition.");
+    }
+    const scorerId = match.goal.activeGoal.scorer.playerId;
+    const actor = state.preparedFacts?.actors?.actors?.find(({ id }) => id === scorerId);
+    if (!actor || typeof actor.name !== "string") {
+      throw new Error(`cssoccer native HUD cannot resolve source scorer ${String(scorerId)}.`);
+    }
+    state.hudGoalHistory = [
+      ...state.hudGoalHistory,
+      {
+        country: match.goal.activeGoal.scoringCountry,
+        label: projectCssoccerNativeInitialSurname(actor.name),
+        minute: match.clock.gameMinute + 1,
+      },
+    ];
   }
 
   function renderTouchControls() {
@@ -989,6 +1028,7 @@ export function mountCssoccerClient({
       state.lastInputCommand = null;
       state.lastInputState = null;
       state.liveFrame = null;
+      state.hudGoalHistory = [];
       performanceInitialFramePublished = false;
       performanceFrameScheduler.accumulator = 0;
       performanceFrameScheduler.lastTimestamp = null;
@@ -1061,6 +1101,7 @@ export function mountCssoccerClient({
     state.engine = null;
     state.playerRenderContract = null;
     state.hudState = null;
+    state.hudGoalHistory = [];
     state.lastInputCommand = null;
     state.lastInputState = null;
     state.liveFrame = null;

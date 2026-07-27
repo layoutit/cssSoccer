@@ -1420,7 +1420,10 @@ function sourcePassKickLaunch(profile, animation, advancedFrame) {
     } else {
       throw new Error(`Unsupported pass kick initializer ${profile.mode}.`);
     }
-    frame = F32(phase * BACKHEEL_PHASE_SCALE);
+    // The retail Watcom build keeps init_kick_anim's local `f=0.8` multiply
+    // at x87 precision until the final tm_frm store. Rounding the scale to
+    // f32 before this multiply adds one ULP for some retained run phases.
+    frame = F32(phase * 0.8);
   }
   return profile.mode === "left"
     ? { animation: profile.leftAnimation, foot: "left", frame }

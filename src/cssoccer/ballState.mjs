@@ -37,7 +37,9 @@ export const CSSOCCER_BALL_CONSTANTS = Object.freeze({
   goalDepth: 28,
   postWidth: 2,
   topPostY: 357,
-  bottomPostY: 443,
+  // GLOB_VAR.H truncates 400 + ((800 / 75) * 4) to this gameplay value;
+  // DISPLAY.CPP draws the outer frame one unit farther out at 443.
+  bottomPostY: 442,
   outOfPlayTicks: 25,
   stadiumLengthMargin: 190,
   stadiumWidthMargin: 190,
@@ -584,8 +586,10 @@ function resolveOutsideNetAfterCrossing(draft, events) {
       events.push({ type: "outside-net", surface: "top" });
       return;
     }
+    // outside_of_net only tests either side net from this already-behind-line
+    // branch while the ball is crossing down through the top-net plane.
+    resolveOutsideSideNet(draft, events);
   }
-  resolveOutsideSideNet(draft, events);
 }
 
 function resolveOutsideSideNet(draft, events) {

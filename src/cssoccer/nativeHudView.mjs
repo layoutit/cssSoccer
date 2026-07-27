@@ -1,15 +1,66 @@
-export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@1";
+export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@3";
 
-const HUD_STATE_KEYS = Object.freeze(["clock", "schema"]);
+const HUD_STATE_KEYS = Object.freeze([
+  "clock",
+  "goalHistory",
+  "halftimeTransitionTicks",
+  "phase",
+  "schema",
+  "score",
+  "tick",
+]);
 const CLOCK_SLOT_COUNT = 5;
-const CLOCK_GLYPHS = /^[0-9:]$/u;
+const SCORE_SLOT_COUNT = 5;
+const TEAM_A = "SPAIN";
+const TEAM_B = "ARGENTINA";
+const NATIVE_VIEWPORT_WIDTH = 640;
+const NATIVE_VIEWPORT_HEIGHT = 400;
+const FONT_COLUMNS = 10;
+const FONT_CELL_WIDTH = 16;
+const FONT_CELL_HEIGHT = 13;
+const FONT_BAND_HEIGHT = 65;
+const FONT_OFFSET = 7;
+const FONT_ASCII_BASE = 48;
+const FONT_WIDTHS = Object.freeze([
+  11, 8, 11, 11, 11, 10, 11, 11, 11, 11, 5, 9, 11, 11, 11, 7,
+  5, 14, 11, 12, 12, 9, 9, 14, 12, 5, 8, 13, 9, 16, 13, 14,
+  11, 14, 12, 10, 11, 12, 13, 16, 14, 11, 13,
+]);
+const COLOR_BAND_INDEX = Object.freeze({
+  neutral: 0,
+  "team-a": 1,
+  "team-b": 2,
+  heading: 3,
+  scorer: 4,
+});
+const SOURCE_HALFTIME_PHASES = new Set(["halftime-whistle", "halftime-transition"]);
+const SOURCE_HALFTIME_BOUNDARY_PHASE = "halftime-end-swap-second-half-kickoff";
+const SOURCE_PHASES = new Set([
+  "opening-kickoff",
+  "first-half-live-clock",
+  ...SOURCE_HALFTIME_PHASES,
+  SOURCE_HALFTIME_BOUNDARY_PHASE,
+  "second-half-live-clock",
+  "full-time-terminal",
+]);
+const HALFTIME_MENU_MAX_SLIDE = 108;
+const HALFTIME_MENU_SLIDE_PER_TICK = 5;
 
 export function createCssoccerNativeHudState(options = {}) {
   requirePlainObject(options, "cssoccer native HUD options");
-  requireOnlyKeys(options, ["clock"], "cssoccer native HUD options");
+  requireOnlyKeys(
+    options,
+    ["clock", "goalHistory", "halftimeTransitionTicks", "phase", "score", "tick"],
+    "cssoccer native HUD options",
+  );
   return assertCssoccerNativeHudState(deepFreeze({
     schema: CSSOCCER_NATIVE_HUD_STATE_SCHEMA,
     clock: clone(options.clock ?? { minutes: 0, seconds: 0 }),
+    goalHistory: clone(options.goalHistory ?? []),
+    halftimeTransitionTicks: options.halftimeTransitionTicks ?? 0,
+    phase: options.phase ?? "opening-kickoff",
+    score: clone(options.score ?? { spain: 0, argentina: 0 }),
+    tick: options.tick ?? 0,
   }));
 }
 
@@ -28,6 +79,49 @@ export function projectCssoccerNormalTimeHudClock(clock) {
   return deepFreeze(clock.minutes >= 90
     ? { minutes: 90, seconds: 0 }
     : { minutes: clock.minutes, seconds: clock.seconds });
+}
+
+/**
+ * Reproduce EURO_INT.CPP GetPLAYERSname(..., INITIAL_SURNAME).
+ *
+ * The retained native SCRIPT.96 fixture replaces the first two donor teams
+ * with source roster names in title case. The original routine only recognizes
+ * a surname as a run of uppercase letters, so "J.A. Goicoechea" intentionally
+ * projects to "G." in the native halftime score breakdown.
+ */
+export function projectCssoccerNativeInitialSurname(name) {
+  if (typeof name !== "string" || name.length === 0) {
+    throw new TypeError("cssoccer native player name must be a non-empty string.");
+  }
+  const output = [];
+  const isUpper = (value) => value >= "A" && value <= "Z";
+  const isLower = (value) => value >= "a" && value <= "z";
+
+  for (let index = 0; index < name.length; index += 1) {
+    if (isUpper(name[index]) && isLower(name[index + 1])) {
+      output.push(name[index], ".", " ");
+    }
+    if (name[index] === "-" && output.length > 1) {
+      output.splice(output.length - 2, 1, "-");
+    }
+  }
+
+  for (let index = 0; index < name.length; index += 1) {
+    if (isUpper(name[index]) && isUpper(name[index + 1])) {
+      output.push(
+        index > 0 && isUpper(name[index - 1])
+          ? name[index].toLowerCase()
+          : name[index],
+      );
+      continue;
+    }
+    if (isUpper(name[index]) && index > 0 && isUpper(name[index - 1])) {
+      output.push(name[index].toLowerCase());
+      if (name[index + 1] === " ") output.push(" ");
+    }
+  }
+
+  return output.join("").trimEnd();
 }
 
 export function assertCssoccerNativeHudState(state) {
@@ -49,6 +143,53 @@ export function assertCssoccerNativeHudState(state) {
   ) {
     throw new RangeError("cssoccer native HUD clock must stay inside 0:00..90:00.");
   }
+  requirePlainObject(state.score, "cssoccer native HUD score");
+  requireExactKeys(state.score, ["argentina", "spain"], "cssoccer native HUD score");
+  for (const country of ["spain", "argentina"]) {
+    if (
+      !Number.isSafeInteger(state.score[country])
+      || state.score[country] < 0
+      || state.score[country] > 99
+    ) {
+      throw new RangeError("cssoccer native HUD scores must stay inside 0..99.");
+    }
+  }
+  if (!Number.isSafeInteger(state.tick) || state.tick < 0) {
+    throw new TypeError("cssoccer native HUD tick must be a non-negative safe integer.");
+  }
+  if (!SOURCE_PHASES.has(state.phase)) {
+    throw new Error(`cssoccer native HUD has no source presentation for ${String(state.phase)}.`);
+  }
+  if (
+    !Number.isSafeInteger(state.halftimeTransitionTicks)
+    || state.halftimeTransitionTicks < 0
+  ) {
+    throw new TypeError(
+      "cssoccer native HUD halftimeTransitionTicks must be a non-negative safe integer.",
+    );
+  }
+  if (!Array.isArray(state.goalHistory)) {
+    throw new TypeError("cssoccer native HUD goalHistory must be an array.");
+  }
+  for (const entry of state.goalHistory) {
+    requirePlainObject(entry, "cssoccer native HUD goal history entry");
+    requireExactKeys(
+      entry,
+      ["country", "label", "minute"],
+      "cssoccer native HUD goal history entry",
+    );
+    if (
+      !["spain", "argentina"].includes(entry.country)
+      || typeof entry.label !== "string"
+      || entry.label.length === 0
+      || entry.label.length > 24
+      || !Number.isSafeInteger(entry.minute)
+      || entry.minute < 1
+      || entry.minute > 120
+    ) {
+      throw new Error("cssoccer native HUD goal history entry is invalid.");
+    }
+  }
   return state;
 }
 
@@ -63,23 +204,129 @@ export function createCssoccerNativeHudView({ host } = {}) {
   ) {
     throw new Error("cssoccer native HUD requires the browser manual Popover top layer.");
   }
+  materializeStableHudLeaves(host);
   const clock = host.querySelector("#hud-clock");
-  const glyphSlots = [...host.querySelectorAll("[data-native-hud-glyph-slot]")];
-  if (!clock || clock.tagName !== "TIME" || glyphSlots.length !== CLOCK_SLOT_COUNT) {
-    throw new Error("cssoccer native HUD requires one clock and five prepared glyph slots.");
+  const teamA = host.querySelector("#hud-team-a");
+  const score = host.querySelector("#hud-score");
+  const teamB = host.querySelector("#hud-team-b");
+  const halftimeMenu = host.querySelector("#hud-halftime-menu");
+  const halftimeHeading = host.querySelector("#hud-halftime-heading");
+  const halftimeTeamA = host.querySelector("#hud-halftime-team-a");
+  const halftimeScoreA = host.querySelector("#hud-halftime-score-a");
+  const halftimeScoreB = host.querySelector("#hud-halftime-score-b");
+  const halftimeTeamB = host.querySelector("#hud-halftime-team-b");
+  const halftimeScorerA = host.querySelector("#hud-halftime-scorer-a");
+  const halftimeScorerB = host.querySelector("#hud-halftime-scorer-b");
+  const clockSlots = preparedGlyphSlots(clock);
+  const teamASlots = preparedGlyphSlots(teamA);
+  const scoreSlots = preparedGlyphSlots(score);
+  const teamBSlots = preparedGlyphSlots(teamB);
+  const halftimeTextRuns = {
+    heading: preparedGlyphSlots(halftimeHeading),
+    teamA: preparedGlyphSlots(halftimeTeamA),
+    scoreA: preparedGlyphSlots(halftimeScoreA),
+    scoreB: preparedGlyphSlots(halftimeScoreB),
+    teamB: preparedGlyphSlots(halftimeTeamB),
+    scorerA: preparedGlyphSlots(halftimeScorerA),
+    scorerB: preparedGlyphSlots(halftimeScorerB),
+  };
+  if (
+    !clock
+    || clock.tagName !== "TIME"
+    || !teamA
+    || !score
+    || !teamB
+    || clockSlots.length !== CLOCK_SLOT_COUNT
+    || teamASlots.length !== TEAM_A.length
+    || scoreSlots.length !== SCORE_SLOT_COUNT
+    || teamBSlots.length !== TEAM_B.length
+    || !halftimeMenu
+    || halftimeTextRuns.heading.length !== 9
+    || halftimeTextRuns.teamA.length !== TEAM_A.length
+    || halftimeTextRuns.scoreA.length !== 2
+    || halftimeTextRuns.scoreB.length !== 2
+    || halftimeTextRuns.teamB.length !== TEAM_B.length
+    || halftimeTextRuns.scorerA.length !== 32
+    || halftimeTextRuns.scorerB.length !== 32
+  ) {
+    throw new Error("cssoccer native HUD requires its prepared match and halftime leaves.");
   }
 
   let destroyed = false;
   let popoverOpen = false;
+  let previousPhase = null;
+  let boundaryMenuTick = null;
   return Object.freeze({
     render(state) {
       if (destroyed) throw new Error("cssoccer native HUD view has been destroyed.");
       const current = assertCssoccerNativeHudState(state);
-      renderClock(host, clock, glyphSlots, current.clock);
+      renderClock(clock, clockSlots, current.clock);
+      const sourceHalftime = SOURCE_HALFTIME_PHASES.has(current.phase);
+      if (
+        current.phase === SOURCE_HALFTIME_BOUNDARY_PHASE
+        && SOURCE_HALFTIME_PHASES.has(previousPhase)
+      ) {
+        boundaryMenuTick = current.tick;
+      }
+      const halftimeVisible = sourceHalftime
+        || (
+          current.phase === SOURCE_HALFTIME_BOUNDARY_PHASE
+          && boundaryMenuTick === current.tick
+        );
+      previousPhase = current.phase;
+      if (halftimeVisible) {
+        renderHalftimeMenu({
+          menu: halftimeMenu,
+          current,
+          elements: {
+            heading: halftimeHeading,
+            teamA: halftimeTeamA,
+            scoreA: halftimeScoreA,
+            scoreB: halftimeScoreB,
+            teamB: halftimeTeamB,
+            scorerA: halftimeScorerA,
+            scorerB: halftimeScorerB,
+          },
+          slots: halftimeTextRuns,
+        });
+      } else {
+        halftimeMenu.hidden = true;
+      }
+      for (const element of [teamA, score, teamB]) element.hidden = halftimeVisible;
+      if (!halftimeVisible) {
+        renderSourceText(teamA, teamASlots, TEAM_A, {
+          anchorX: 280,
+          y: 386,
+          justification: "right",
+          colorBand: "team-a",
+        });
+        renderSourceText(
+          score,
+          scoreSlots,
+          `${current.score.spain}=${current.score.argentina}`,
+          {
+            anchorX: 320,
+            y: 386,
+            justification: "center",
+            colorBand: "neutral",
+          },
+        );
+        renderSourceText(teamB, teamBSlots, TEAM_B, {
+          anchorX: 360,
+          y: 386,
+          justification: "left",
+          colorBand: "team-b",
+        });
+      }
+      score.setAttribute(
+        "aria-label",
+        `Spain ${current.score.spain}, Argentina ${current.score.argentina}`,
+      );
       if (!popoverOpen || !host.matches(":popover-open")) {
         host.showPopover();
         popoverOpen = true;
       }
+      host.hidden = false;
       return current;
     },
     destroy() {
@@ -94,31 +341,242 @@ export function createCssoccerNativeHudView({ host } = {}) {
   });
 }
 
-function renderClock(host, clock, glyphSlots, value) {
+function renderHalftimeMenu({ menu, current, elements, slots }) {
+  const scorerLines = {
+    spain: formatSourceScorerLines(current.goalHistory, "spain"),
+    argentina: formatSourceScorerLines(current.goalHistory, "argentina"),
+  };
+  const scoreRowCount = Math.max(scorerLines.spain.length, scorerLines.argentina.length);
+  const nativeMenuHeight = ((104 + scoreRowCount * 13 + 84) >> 5) << 4;
+  const menuHeight = nativeMenuHeight * 2;
+  const initialSlide = Math.min(HALFTIME_MENU_MAX_SLIDE, nativeMenuHeight - 20);
+  const slide = Math.max(
+    0,
+    initialSlide - current.halftimeTransitionTicks * HALFTIME_MENU_SLIDE_PER_TICK,
+  );
+  const top = NATIVE_VIEWPORT_HEIGHT - menuHeight + (slide + 12) * 2;
+  menu.style.setProperty("--native-menu-height", `${menuHeight}em`);
+  menu.style.setProperty("--native-menu-filter-height", `${menuHeight - 102}em`);
+  menu.style.setProperty("--native-menu-bottom-edge-y", `${menuHeight - 51}em`);
+  menu.style.setProperty("--native-menu-bottom-corner-y", `${menuHeight - 64}em`);
+  menu.style.left = centeredNativeCoordinate(-288);
+  menu.style.top = centeredNativeCoordinate(top - (NATIVE_VIEWPORT_HEIGHT / 2));
+  const verticalSegments = Math.max(0, Math.min(4, (menuHeight - 128) / 32));
+  for (const column of menu.querySelectorAll(".hud-menu-edge-column")) {
+    [...column.children].forEach((child, index) => {
+      child.hidden = index >= verticalSegments;
+    });
+  }
+  renderLocalSourceText(elements.heading, slots.heading, "HALF TIME", {
+    anchorX: 288,
+    y: 56,
+    justification: "center",
+    colorBand: "heading",
+  });
+  renderLocalSourceText(elements.teamA, slots.teamA, TEAM_A, {
+    anchorX: 220,
+    y: 80,
+    justification: "right",
+    colorBand: "neutral",
+  });
+  renderLocalSourceText(elements.scoreA, slots.scoreA, String(current.score.spain), {
+    anchorX: 262,
+    y: 80,
+    justification: "right",
+    colorBand: "neutral",
+  });
+  renderLocalSourceText(elements.scoreB, slots.scoreB, String(current.score.argentina), {
+    anchorX: 314,
+    y: 80,
+    justification: "left",
+    colorBand: "neutral",
+  });
+  renderLocalSourceText(elements.teamB, slots.teamB, TEAM_B, {
+    anchorX: 356,
+    y: 80,
+    justification: "left",
+    colorBand: "neutral",
+  });
+  renderLocalSourceText(elements.scorerA, slots.scorerA, scorerLines.spain.join(" "), {
+    anchorX: 80,
+    y: 104,
+    justification: "left",
+    colorBand: "scorer",
+  });
+  renderLocalSourceText(elements.scorerB, slots.scorerB, scorerLines.argentina.join(" "), {
+    anchorX: 356,
+    y: 104,
+    justification: "left",
+    colorBand: "scorer",
+  });
+  elements.scoreA.setAttribute("aria-label", `Spain ${current.score.spain}`);
+  elements.scoreB.setAttribute("aria-label", `Argentina ${current.score.argentina}`);
+  elements.scorerA.setAttribute("aria-label", scorerLines.spain.join(", ") || "No Spain scorers");
+  elements.scorerB.setAttribute(
+    "aria-label",
+    scorerLines.argentina.join(", ") || "No Argentina scorers",
+  );
+  menu.hidden = false;
+}
+
+function renderLocalSourceText(element, slots, text, options) {
+  renderSourceText(element, slots, text, { ...options, coordinateSpace: "local" });
+}
+
+function formatSourceScorerLines(goalHistory, country) {
+  const byScorer = new Map();
+  for (const goal of goalHistory.filter((entry) => entry.country === country)) {
+    const minutes = byScorer.get(goal.label) ?? [];
+    minutes.push(goal.minute);
+    byScorer.set(goal.label, minutes);
+  }
+  return [...byScorer].map(([label, minutes]) => `${label} ${minutes.join(",")}`);
+}
+
+function renderClock(clock, glyphSlots, value) {
   const seconds = Math.floor(value.seconds);
   const text = `${value.minutes}:${String(seconds).padStart(2, "0")}`;
-  if (text.length > CLOCK_SLOT_COUNT) {
-    throw new RangeError("cssoccer native HUD clock exceeds its five prepared glyph slots.");
+  renderSourceText(clock, glyphSlots, text, {
+    anchorX: 320,
+    y: 1,
+    justification: "center",
+    colorBand: "neutral",
+  });
+  clock.setAttribute("datetime", `PT${value.minutes}M${seconds}S`);
+  clock.setAttribute("aria-label", `${value.minutes} minutes ${seconds} seconds`);
+}
+
+function renderSourceText(element, glyphSlots, text, {
+  anchorX,
+  y,
+  justification,
+  colorBand,
+  coordinateSpace = "viewport",
+}) {
+  if (text.length > glyphSlots.length) {
+    throw new RangeError(
+      `cssoccer native HUD text ${text} exceeds its ${glyphSlots.length} prepared glyph slots.`,
+    );
   }
-  const glyphs = text.padStart(CLOCK_SLOT_COUNT, " ");
+  const glyphs = [...text].map(sourceGlyph);
+  const length = glyphs.reduce((sum, glyph) => sum + glyph.advance, 0);
+  const x = justification === "right"
+    ? anchorX - length
+    : justification === "center"
+      ? anchorX - (length >> 1)
+      : anchorX;
+  const bandIndex = COLOR_BAND_INDEX[colorBand];
+  if (bandIndex === undefined) {
+    throw new Error(`cssoccer native HUD has no prepared ${colorBand} colour band.`);
+  }
+  element.style.left = coordinateSpace === "local"
+    ? `${x}em`
+    : centeredNativeCoordinate(x - (NATIVE_VIEWPORT_WIDTH / 2));
+  element.style.top = coordinateSpace === "local"
+    ? `${y}em`
+    : centeredNativeCoordinate(y - (NATIVE_VIEWPORT_HEIGHT / 2));
+  element.dataset.nativeHudText = text;
   for (let index = 0; index < glyphSlots.length; index += 1) {
     const slot = glyphSlots[index];
     const glyph = glyphs[index];
-    if (glyph === " ") {
-      slot.hidden = true;
-      delete slot.dataset.glyph;
+    if (!glyph) {
+      resetGlyphSlot(slot);
       continue;
     }
-    if (!CLOCK_GLYPHS.test(glyph)) {
-      throw new Error(`cssoccer native HUD has no prepared glyph for ${glyph}.`);
-    }
-    slot.dataset.glyph = glyph;
+    slot.dataset.glyph = glyph.character;
+    slot.style.setProperty("--native-hud-glyph-width", `${glyph.advance}em`);
+    slot.style.setProperty(
+      "--native-hud-glyph-x",
+      `${-(glyph.column * FONT_CELL_WIDTH)}em`,
+    );
+    slot.style.setProperty(
+      "--native-hud-glyph-y",
+      `${-(bandIndex * FONT_BAND_HEIGHT + glyph.row * FONT_CELL_HEIGHT)}em`,
+    );
     slot.hidden = false;
   }
-  clock.setAttribute("datetime", `PT${value.minutes}M${seconds}S`);
-  clock.setAttribute("aria-label", `${value.minutes} minutes ${seconds} seconds`);
-  clock.dataset.nativeHudText = text;
-  host.hidden = false;
+}
+
+function sourceGlyph(character) {
+  let mapped = character;
+  if (mapped === " ") mapped = ";";
+  if (mapped === ".") mapped = "@";
+  if (mapped === ",") mapped = "?";
+  if (mapped >= "a" && mapped <= "z") mapped = mapped.toUpperCase();
+  if (mapped === "O") mapped = "0";
+  if (mapped === "&") mapped = "O";
+  const glyphIndex = mapped.codePointAt(0) - FONT_ASCII_BASE;
+  const width = FONT_WIDTHS[glyphIndex];
+  if (width === undefined) {
+    throw new Error(`cssoccer native HUD has no prepared glyph for ${character}.`);
+  }
+  const atlasIndex = glyphIndex + FONT_OFFSET;
+  return {
+    character: mapped,
+    column: atlasIndex % FONT_COLUMNS,
+    row: Math.floor(atlasIndex / FONT_COLUMNS),
+    advance: width + 1,
+  };
+}
+
+function resetGlyphSlot(slot) {
+  slot.hidden = true;
+  delete slot.dataset.glyph;
+  slot.style.removeProperty("--native-hud-glyph-width");
+  slot.style.removeProperty("--native-hud-glyph-x");
+  slot.style.removeProperty("--native-hud-glyph-y");
+}
+
+function materializeStableHudLeaves(host) {
+  const documentImpl = host.ownerDocument;
+  for (const run of host.querySelectorAll("[data-native-hud-slot-count]")) {
+    const count = Number(run.dataset.nativeHudSlotCount);
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new Error("cssoccer native HUD text capacity must be a positive integer.");
+    }
+    if (run.children.length === 0) {
+      for (let index = 0; index < count; index += 1) {
+        const slot = documentImpl.createElement("span");
+        slot.dataset.nativeHudGlyphSlot = String(index);
+        slot.setAttribute("aria-hidden", "true");
+        slot.hidden = true;
+        run.append(slot);
+      }
+    }
+    if (run.children.length !== count) {
+      throw new Error("cssoccer native HUD text run changed its stable leaf count.");
+    }
+  }
+  for (const edge of host.querySelectorAll("[data-native-menu-edge-count]")) {
+    const count = Number(edge.dataset.nativeMenuEdgeCount);
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new Error("cssoccer native menu edge count must be a positive integer.");
+    }
+    if (edge.children.length === 0) {
+      const orientation = edge.classList.contains("hud-menu-edge-row")
+        ? "hud-menu-horizontal-edge"
+        : "hud-menu-vertical-edge";
+      for (let index = 0; index < count; index += 1) {
+        const leaf = documentImpl.createElement("span");
+        leaf.classList.add("hud-menu-sprite", orientation);
+        leaf.setAttribute("aria-hidden", "true");
+        edge.append(leaf);
+      }
+    }
+    if (edge.children.length !== count) {
+      throw new Error("cssoccer native menu edge changed its stable leaf count.");
+    }
+  }
+}
+
+function preparedGlyphSlots(element) {
+  return element
+    ? [...element.querySelectorAll(":scope > [data-native-hud-glyph-slot]")]
+    : [];
+}
+
+function centeredNativeCoordinate(offset) {
+  return `calc(50% ${offset < 0 ? "-" : "+"} ${Math.abs(offset)}em)`;
 }
 
 function requireOnlyKeys(value, keys, label) {

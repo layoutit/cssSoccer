@@ -7,6 +7,7 @@ import {
   createBallMatchState,
   stepBallMatchState,
 } from "./ballMatchState.mjs";
+import { CSSOCCER_BALL_CONSTANTS } from "./ballState.mjs";
 import {
   collectPossession,
   createPossessionState,
@@ -255,27 +256,38 @@ export function selectCssoccerKeeperSaveTarget(player, context = {}) {
     });
   }
 
-  let previous = predictions[0];
+  let previousClosest = predictions[0];
   let closest = null;
   let closestDistance = Number.POSITIVE_INFINITY;
   for (let index = 1; index < Math.min(predictions.length, 50); index += 1) {
     const point = predictions[index];
+    const betweenPosts = (
+      point.y > CSSOCCER_BALL_CONSTANTS.topPostY
+      && point.y < CSSOCCER_BALL_CONSTANTS.bottomPostY
+    );
+    const goalLineOffset = betweenPosts ? 4 : 0;
+    const crossedGoalLine = point.x > pitch.centreX
+      ? point.x >= pitch.length - goalLineOffset
+      : point.x < goalLineOffset;
+    if (crossedGoalLine) {
+      const wideLimit = (pitch.ratio * 4.5) + ((128 - current.attributes.flair) / 4);
+      if (Math.abs(point.y - pitch.centreY) > wideLimit) closest = null;
+      break;
+    }
     if (!insideKeeperSaveArea(current, point, pitch)) {
-      previous = point;
       continue;
     }
-    if (point.z > constants.saveJumpHeight + pitch.ratio / 2) {
-      previous = point;
+    if (!(point.z < constants.saveJumpHeight + pitch.ratio / 2)) {
       continue;
     }
     const distance = planarDistance(current.position, point);
     if (distance < closestDistance) {
-      closest = { index, point, previous };
+      closest = { index, point, previous: previousClosest };
+      previousClosest = point;
       closestDistance = distance;
     } else if (closest && distance - closestDistance > pitch.ratio) {
       break;
     }
-    previous = point;
   }
   if (!closest) {
     return deepFreeze({ status: "no-save-path", forced: false });
@@ -343,19 +355,23 @@ export function planCssoccerKeeperSave(input = {}) {
     ? frozenPrediction.position
     : ball.ball.position;
   const predictions = [clonePoint(predictionOrigin)];
+  const noSwervePredictions = [clonePoint(predictionOrigin)];
   if (possessionOwner !== 0) {
     const displacement = frozenPrediction?.displacement ?? ball.ball.displacement;
     for (let index = 1; index < 50; index += 1) {
       const previous = predictions.at(-1);
-      predictions.push({
+      const point = {
         x: F32(previous.x + displacement.x),
         y: F32(previous.y + displacement.y),
         z: previous.z,
-      });
+      };
+      predictions.push(point);
+      noSwervePredictions.push(clonePoint(point));
     }
   } else {
     let predicted = ball;
     for (let index = 1; index < 50; index += 1) {
+      const previousPosition = clonePoint(predicted.ball.position);
       let stepped;
       try {
         stepped = stepBallMatchState(predicted, {
@@ -368,6 +384,13 @@ export function planCssoccerKeeperSave(input = {}) {
       }
       predicted = stepped.state;
       predictions.push(clonePoint(predicted.ball.position));
+      // BALL.CPP move_ball publishes ns_ballx/y after planar movement but
+      // snapshots ns_ballz before the vertical movement and gravity pass.
+      noSwervePredictions.push({
+        x: predicted.ball.position.x,
+        y: predicted.ball.position.y,
+        z: previousPosition.z,
+      });
       if (predicted.outcome !== null) break;
     }
   }
@@ -381,10 +404,26 @@ export function planCssoccerKeeperSave(input = {}) {
     });
   }
 
+  // INTELL.CPP go_to_save_path only sees a vision-weighted share of swerve.
+  // tm_vis/2 is integer division; each blended coordinate is then stored as
+  // float before the closest-path and animation-height decisions.
+  const seeSwerve = F32(
+    (64 + Math.trunc(keeper.attributes.vision / 2)) / 128,
+  );
+  const perceivedPredictions = forced
+    ? predictions
+    : predictions.map((point, index) => {
+        const noSwerve = noSwervePredictions[index];
+        return {
+          x: F32(noSwerve.x + ((point.x - noSwerve.x) * seeSwerve)),
+          y: F32(noSwerve.y + ((point.y - noSwerve.y) * seeSwerve)),
+          z: F32(noSwerve.z + ((point.z - noSwerve.z) * seeSwerve)),
+        };
+      });
   const save = selectCssoccerKeeperSaveTarget(keeper, {
     pitch,
     sourceConstants: BOUND_KEEPER_CONSTANTS,
-    predictions,
+    predictions: perceivedPredictions,
     forced,
   });
   if (save.status !== "save-path") {
@@ -396,13 +435,26 @@ export function planCssoccerKeeperSave(input = {}) {
       reason: "trajectory-misses-keeper-area",
     });
   }
+  if (!forced && !(save.target.z < BOUND_KEEPER_CONSTANTS.saveJumpHeight)) {
+    // go_to_save_path retains candidates up to SAVE_JUMP_HGT + prat/2, but
+    // every save_in_zone_* height dispatch stops strictly at SAVE_JUMP_HGT.
+    // The retained high candidate only acknowledges the shot; it starts no
+    // physical keeper action.
+    return deepFreeze({
+      schema: CSSOCCER_KEEPER_SAVE_PLAN_SCHEMA,
+      status: "no-save-path",
+      plannedAtTick: ball.ball.tick,
+      keeperNativePlayer: keeper.nativePlayerNumber,
+      reason: "target-above-source-save-animation-envelope",
+    });
+  }
 
   const distance = planarDistance(keeper.position, save.target);
   const zone = distance <= pitch.ratio
     ? "A"
     : distance <= pitch.ratio * 2.5
       ? "B"
-      : distance <= pitch.ratio * 8.5
+      : distance <= pitch.ratio * 6.5
         ? "C"
         : null;
   const height = save.target.z < pitch.ratio

@@ -2,6 +2,7 @@ import { CSSOCCER_RULE_PITCH } from "./foulState.mjs";
 
 export const CSSOCCER_OFFSIDE_SCHEMA = "cssoccer-offside-state@1";
 export const CSSOCCER_LIVE_OFFSIDE_SNAPSHOT_SCHEMA = "cssoccer-live-offside-snapshot@1";
+export const CSSOCCER_OFFSIDE_RELEASE_TICKS = 40;
 
 const f32 = Math.fround;
 
@@ -87,6 +88,7 @@ export function createCssoccerLiveOffsideSnapshot({
         playerId: player.id,
         nativePlayerNumber: player.nativePlayerNumber,
         kickPosition: clone(player.position),
+        tmOff: -1,
       }))
     : [];
   return deepFreeze({
@@ -100,6 +102,12 @@ export function createCssoccerLiveOffsideSnapshot({
     defendingNativeTeam,
     defenderLine: f32(defenderLine),
     sourceMargin: f32(margin),
+    // BALLINT.CPP::holder_lose_ball publishes +/-OFFSIDE_REL_CNT after this
+    // tick's process_flags slot. The compiled retail constant is 40 ticks.
+    ballReleased: attackingNativeTeam === "A"
+      ? CSSOCCER_OFFSIDE_RELEASE_TICKS
+      : -CSSOCCER_OFFSIDE_RELEASE_TICKS,
+    processFlagsTick: tick,
     candidates,
   });
 }
@@ -187,6 +195,18 @@ export function assertCssoccerLiveOffsideSnapshot(snapshot) {
   }
   requireFinite(snapshot.defenderLine, "live offside snapshot defenderLine");
   requireFiniteNonnegative(snapshot.sourceMargin, "live offside snapshot sourceMargin");
+  requireIntegerRange(
+    snapshot.ballReleased,
+    -CSSOCCER_OFFSIDE_RELEASE_TICKS,
+    CSSOCCER_OFFSIDE_RELEASE_TICKS,
+    "live offside snapshot ballReleased",
+  );
+  requireIntegerRange(
+    snapshot.processFlagsTick,
+    snapshot.kickTick,
+    Number.MAX_SAFE_INTEGER,
+    "live offside snapshot processFlagsTick",
+  );
   if (!Array.isArray(snapshot.candidates)) {
     throw new TypeError("live offside snapshot candidates must be an array.");
   }
@@ -200,6 +220,7 @@ export function assertCssoccerLiveOffsideSnapshot(snapshot) {
       "live offside snapshot candidate nativePlayerNumber",
     );
     requirePosition(candidate.kickPosition, "live offside snapshot candidate kickPosition");
+    requireTmOff(candidate.tmOff, "live offside snapshot candidate tmOff");
     if (ids.has(candidate.playerId) || numbers.has(candidate.nativePlayerNumber)) {
       throw new Error("live offside snapshot candidates must be unique.");
     }

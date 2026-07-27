@@ -433,6 +433,73 @@ export function stepCssoccerPossessedGoalCountdownState(input) {
   });
 }
 
+/**
+ * BALL.CPP's owned-ball boundary countdown. Possession suppresses trajectory
+ * integration, but ball_collision, the countdown, and the eventual respot
+ * still execute.
+ */
+export function stepCssoccerPossessedBoundaryCountdownState(input) {
+  const current = createBallMatchState(input);
+  if (
+    current.limbo.active !== 0
+    || current.outcome?.kind !== "boundary"
+    || current.ball.inGoal !== 0
+    || current.ball.outOfPlay < 1
+  ) {
+    fail(
+      "possessed-boundary-countdown",
+      "Possessed boundary ball requires one active out-of-play countdown.",
+    );
+  }
+  const collision = stepPossessedBallCollisionState(current.ball);
+  if (current.ball.outOfPlay === 1) {
+    return deepFreeze({
+      state: createBallMatchState({
+        ...clone(current),
+        ball: {
+          ...clone(collision.state),
+          outOfPlay: 0,
+        },
+        outcome: null,
+      }),
+      events: [
+        ...collision.events,
+        {
+          type: "ball-boundary-respot-required",
+          outOfPlay: 0,
+          requiresRestartPolicy: true,
+        },
+      ],
+    });
+  }
+  const outOfPlay = current.ball.outOfPlay - 1;
+  const state = createBallMatchState({
+    ...clone(current),
+    ball: {
+      ...clone(collision.state),
+      outOfPlay,
+    },
+    outcome: {
+      ...clone(current.outcome),
+      status: outOfPlay === 1 ? "restart-required" : "countdown",
+    },
+  });
+  return deepFreeze({
+    state,
+    events: [
+      ...collision.events,
+      ...(outOfPlay === 1
+        ? [{
+            type: "ball-restart-required",
+            outcome: "boundary",
+            requiresRestartPolicy: true,
+            beforeNextTick: true,
+          }]
+        : []),
+    ],
+  });
+}
+
 function stepPossessedBallPhysicalState(current) {
   const displacement = current.ball.displacement;
   const total = F32(

@@ -165,6 +165,40 @@ export function stepCssoccerClockState(state, options = {}) {
   }));
 }
 
+/**
+ * Apply FOOTBALL.CPP watch_match_time after the current tick's live player
+ * visits made nothing_happening true. match_clock already advanced this
+ * state's time earlier in the same source tick, so this transition must not
+ * consume another clock tick.
+ */
+export function completeCssoccerExpiredPeriod(state) {
+  const current = assertCssoccerClockState(state);
+  if (!current.periodExpired) {
+    throw new Error("The cssoccer clock period has not expired.");
+  }
+  if (current.matchHalf === 0) {
+    const next = assemble({
+      ...current,
+      phase: "halftime-whistle",
+      halftimeTransitionTicks: 0,
+      halftimeCount: 1,
+      running: false,
+    });
+    return result(next, [clockEvent("halftime-whistle", next)]);
+  }
+  if (current.matchHalf === 1) {
+    const next = assemble({
+      ...current,
+      phase: "full-time-terminal",
+      matchHalf: CSSOCCER_FULL_TIME_MATCH_HALF,
+      running: false,
+      terminal: true,
+    });
+    return result(next, [clockEvent("full-time", next)]);
+  }
+  throw new Error("The cssoccer clock is already at full time.");
+}
+
 export function resetCssoccerClockState(state) {
   assertCssoccerClockState(state);
   return createCssoccerClockState();

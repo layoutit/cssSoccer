@@ -198,7 +198,22 @@ export async function assembleCssoccerPreparedFixture(request) {
       kind: "source-decoded-native-hud-glyph-atlas",
       sourceRevision: contracts.plan.source.revision,
       nativeProducer: "3DENG.C draw_string",
-      nativeFontTable: "FGFX.C font_data[1]",
+      nativeFontTable: "FGFX.C font_data[2]",
+      runtimeConstruction: false,
+    },
+  });
+  const halftimeMenuSpriteTextureFile = preparedBinaryFile({
+    ...actorDomain.texturePreparation.halftimeMenuSpriteAssetFile,
+    sourceIds: [
+      "source:EUROREND.DAT",
+      "source:EUROREND.OFF",
+      "source:3DENG.C",
+      "source:FGFX.C",
+    ],
+    lineage: {
+      kind: "source-decoded-native-halftime-menu-sprite-atlas",
+      sourceRevision: contracts.plan.source.revision,
+      nativeProducer: "3DENG.C halftime_menu and draw_menu_box",
       runtimeConstruction: false,
     },
   });
@@ -282,6 +297,7 @@ export async function assembleCssoccerPreparedFixture(request) {
     referenceFor(pitchTextureFile),
     referenceFor(markingPixelFile),
     referenceFor(hudGlyphTextureFile),
+    referenceFor(halftimeMenuSpriteTextureFile),
     referenceFor(stadiumTextureFile),
     referenceFor(skyBackdropFile),
     referenceFor(exactPlayerMaterialTextureFile),
@@ -495,6 +511,7 @@ export async function assembleCssoccerPreparedFixture(request) {
       pitchTextureFile,
       markingPixelFile,
       hudGlyphTextureFile,
+      halftimeMenuSpriteTextureFile,
       stadiumTextureFile,
       skyBackdropFile,
       exactPlayerMaterialTextureFile,
@@ -818,6 +835,7 @@ async function prepareActorDomain(contracts) {
       generatedPitchSurfaceFiles: 1,
       generatedMarkingPixelFiles: 1,
       generatedHudGlyphFiles: 1,
+      generatedHalftimeMenuSpriteFiles: 1,
       generatedStadiumTextureFiles: 1,
       generatedSkyBackdropFiles: 1,
       generatedTextureFiles: texturePreparation.metadata.counts.generatedFiles,
@@ -834,6 +852,7 @@ async function prepareActorDomain(contracts) {
     pitchSurface: texturePreparation.metadata.pitchSurface,
     markingPixel: texturePreparation.metadata.markingPixel,
     hudGlyphAtlas: texturePreparation.metadata.hudGlyphAtlas,
+    halftimeMenuSpriteAtlas: texturePreparation.metadata.halftimeMenuSpriteAtlas,
     stadiumAtlas: texturePreparation.metadata.stadiumAtlas,
     unsupportedClasses: frontendTextureAtlas.unsupportedClasses.filter(
       ({ id }) => id === "fapf-symbol-bindings",
@@ -1463,14 +1482,12 @@ function prepareTexturedStadiumPolygons(polygons, texturePreparation) {
       }
       return [{
         ...polygon,
-        // Actua's stadium solids are front-facing under the renderer's
-        // screen-space winding test. PolyCSS uses the opposite CSS face for
-        // these untextured leaves, so reverse only this native-solid subset.
-        // Textured crowd faces retain their source UV winding below.
+        // PolyCSS exposes the opposite CSS face for these source solids.
+        // Reverse once so CSS backface culling agrees with addpoly's native
+        // screen-space facing test; do not force the leaf two-sided.
         vertices: uniqueSourceVertexIndexes.map((vertexIndex) => (
           polygon.vertices[vertexIndex]
         )).reverse(),
-        doubleSided: true,
       }];
     }
     if (polygon.sources.length !== 1) {

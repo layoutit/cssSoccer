@@ -8,6 +8,7 @@ import {
 import {
   createBallLimbo,
   createBallMatchState,
+  qualifyCssoccerPossessedBallBoundary,
   stepBallBoundaryRespotTick,
   stepBallMatchState,
 } from "./ballMatchState.mjs";
@@ -17,6 +18,7 @@ import {
   CSSOCCER_MATCH_MODE,
 } from "./boundaryState.mjs";
 import {
+  completeCssoccerExpiredPeriod,
   CSSOCCER_LIVE_TICKS_PER_HALF,
   stepCssoccerClockState,
 } from "./clockState.mjs";
@@ -32,9 +34,11 @@ import {
 import {
   stepCssoccerKeeperHeldBall,
   stepCssoccerPossessedBallState,
+  stepCssoccerPossessedBoundaryCountdownState,
   stepCssoccerPossessedGoalCountdownState,
 } from "./heldBallState.mjs";
 import {
+  cssoccerKeeperBoxStatus,
   CSSOCCER_KEEPER_ACTIONS,
   planCssoccerKeeperSave,
   resolveCssoccerKeeperSaveContact,
@@ -114,6 +118,8 @@ import {
   createCssoccerLiveOffsideSnapshot,
   markCssoccerOffsideInvolvement,
   resolveCssoccerLiveOffsideSnapshot,
+  stepCssoccerOffsidePlayer,
+  syncCssoccerOffsidePlayerFlag,
 } from "./offsideState.mjs";
 import {
   collectPossession,
@@ -195,12 +201,19 @@ import {
 } from "./liveShotState.mjs";
 
 const F32 = Math.fround;
+const CSSOCCER_DEBUG_ENV = typeof globalThis.process?.env === "object"
+  ? globalThis.process.env
+  : Object.freeze({});
+const SOURCE_OFFSIDE_VISIT_SEED = Symbol("source-offside-visit-seed");
 const SNAPSHOT_SCHEMA = "cssoccer-free-play-snapshot@1";
 const NATIVE_CAPTURE_LOGIC_COUNT_ROOT = 180;
 const NATIVE_AUTO_SELECT_COUNT = 10;
 const NATIVE_SELECTION_CIRCLE = F32(
   CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 10,
 );
+const NATIVE_FACING_ANGLE =
+  CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.kickoff.facingAngle
+    .compiledOperand.value;
 const BUTTON_FIRE_1 = 1;
 const BUTTON_FIRE_2 = 2;
 const LIVE_PUNT_PASS_TYPE = 100;
@@ -405,7 +418,15 @@ function stepSnapshot(snapshot, command) {
   }));
   // RULES.CPP match_rules calls match_clock before ball_situation can release
   // a ready restart. Preserve the clock guard at that source entry point.
-  const clockAdvancesAtMatchRulesEntry = currentLifecycleClockAdvances(match);
+  // A completed goal countdown is different: BALL.CPP respot_ball installs
+  // the centre match_mode during process_ball, before match_rules enters
+  // match_clock. The JS rules owner materializes that mode below, so carry
+  // the process_ball event into this entry guard.
+  const postGoalRespotAtMatchRulesEntry = events.some(
+    ({ type }) => type === "ball-post-goal-respot-required",
+  );
+  const clockAdvancesAtMatchRulesEntry = !postGoalRespotAtMatchRulesEntry
+    && currentLifecycleClockAdvances(match);
   match = runStage("match_rules", trace, () => processRules(
     match,
     nextTick,
@@ -439,7 +460,7 @@ function stepSnapshot(snapshot, command) {
   match = runStage("player_distances", trace, () => {
     playerDistanceFrame = captureOpenPlayPlayerDistances(
       match.players,
-      sourcePredictionBall.position,
+      match.ball.ball.position,
     );
     playerDistanceRankFrame = captureOpenPlayPlayerDistanceRanks(
       match.players,
@@ -554,6 +575,7 @@ function stepSnapshot(snapshot, command) {
     events,
     nearest,
     nextTick,
+    playerDistanceFrame,
     playerVisitFrame,
     sourceInitialization,
   }));
@@ -574,6 +596,12 @@ function stepSnapshot(snapshot, command) {
       nextTick,
       sourceInitialization,
     });
+  } else if (
+    match.clock.periodExpired
+    && currentLifecyclePeriodReady(match)
+    && !currentLifecycleSuspendsGameplay(match)
+  ) {
+    match = completeOpeningClockPeriod(match, { events, nextTick });
   }
 
   match.tick = nextTick;
@@ -826,7 +854,10 @@ function processBall(match, nextTick, { command, events, sourceInitialization })
         ball = stepped.state;
         events.push(...stepped.events.map(clone));
       } else {
-        ball = stepCssoccerPossessedBallState(match.ball);
+        const possessed = stepCssoccerPossessedBallState(match.ball);
+        const bounded = qualifyCssoccerPossessedBallBoundary(possessed);
+        ball = bounded.state;
+        events.push(...bounded.events.map(clone));
       }
     }
     if (owner.liveControlIntercept?.phase === "tween") {
@@ -846,6 +877,11 @@ function processBall(match, nextTick, { command, events, sourceInitialization })
           : player),
       };
     }
+  } else if (sourceProcessesPossessedBoundary) {
+    const stepped = stepCssoccerPossessedBoundaryCountdownState(match.ball);
+    ball = stepped.state;
+    visitsSourceBallZone = true;
+    events.push(...stepped.events.map(clone));
   } else {
     const limboPlayer = match.ball.limbo.active === 0
       ? undefined
@@ -1039,8 +1075,22 @@ function processRules(match, nextTick, events, command, sourcePredictionBall) {
   if (
     match.kickoff.phase === "centre-positioning"
     && match.kickoff.ballStatus === "held-at-centre"
-    && match.kickoff.readiness.readyForLaunch
+    && (
+      match.kickoff.readiness.readyForLaunch
+      || (
+        (
+          match.kickoff.restartKind === "halftime"
+          || match.kickoff.restartKind === "post-goal"
+        )
+        && match.kickoff.readiness.setPieceWaitTicks === 1
+        && match.kickoff.readiness.takerReady
+        && match.kickoff.readiness.refereeReady
+      )
+    )
   ) {
+    // RULES.CPP pre-decrements the retained set-piece wait counter in
+    // match_rules. When one becomes zero, it forces all_standing and starts
+    // the centre action in this same visit, before process_teams.
     return beginCentrePass(match, nextTick, events);
   }
   return match;
@@ -2065,10 +2115,13 @@ function stepCurrentFoulKickAction(
   events,
   publishPlayerVisits,
   command,
+  nearPath,
+  opponentNearPath,
   playerDistanceFrame,
   playerDistanceRankFrame,
 ) {
   let currentMatch = match;
+  let heldVisits = null;
   const sourceTaker = currentMatch.players.find(({ id }) => (
     id === currentMatch.kickoff.action?.takerId
   ));
@@ -2077,7 +2130,9 @@ function stepCurrentFoulKickAction(
       currentMatch,
       sourceTaker,
       nextTick,
-      publishPlayerVisits,
+      (visits) => {
+        heldVisits = visits;
+      },
       currentMatch.kickoff.zoning,
       {
         command,
@@ -2099,6 +2154,10 @@ function stepCurrentFoulKickAction(
     throw new Error("Current foul action lost its single kick owner.");
   }
   if (F32(taker.animation.frame + taker.animation.frameStep) < taker.liveShot.contact) {
+    if (heldVisits === null) {
+      throw new Error("Current foul action lost its held-kick visits.");
+    }
+    publishPlayerVisits(heldVisits);
     return currentMatch;
   }
   let released;
@@ -2179,7 +2238,7 @@ function stepCurrentFoulKickAction(
     nativePlayerNumber: taker.nativePlayerNumber,
     displacement: clone(released.ball.ball.displacement),
   });
-  return completeCurrentFoulRelease({
+  let releasedMatch = completeCurrentFoulRelease({
     match: {
       ...currentMatch,
       ball: released.ball,
@@ -2190,6 +2249,79 @@ function stepCurrentFoulKickAction(
     nextTick,
     release,
   });
+  if (heldVisits === null) {
+    throw new Error("Current foul release lost its held-kick visits.");
+  }
+  const traversal = nativeContactTraversalOrder(match.tick & 1);
+  const takerVisitIndex = traversal.indexOf(taker.nativePlayerNumber);
+  if (takerVisitIndex < 0) {
+    throw new Error("Current foul release lost its taker traversal slot.");
+  }
+  const releasedVisits = heldVisits.map((visit) => (
+    traversal.indexOf(visit.nativePlayerNumber) > takerVisitIndex
+      ? {
+          ...clone(visit),
+          possession: clone(releasedMatch.possession),
+        }
+      : visit
+  ));
+  publishPlayerVisits(releasedVisits);
+  const frozenPredictionBall = taker.liveShot.sourcePrediction === undefined
+    ? match.ball
+    : {
+        ...clone(match.ball),
+        ball: {
+          ...clone(match.ball.ball),
+          position: clone(taker.liveShot.sourcePrediction.position),
+          displacement: clone(taker.liveShot.sourcePrediction.displacement),
+        },
+      };
+  const currentNearPaths = new Map(
+    [nearPath, opponentNearPath]
+      .filter((player) => player !== null && player !== undefined)
+      .map((player) => [player.nativeTeamSlot, player]),
+  );
+  const automaticNearPaths = ["A", "B"]
+    .map((nativeTeamSlot) => (
+      currentNearPaths.get(nativeTeamSlot)
+      ?? selectFreeBallNearPathPlayer(
+        match,
+        nativeTeamSlot,
+        command,
+        frozenPredictionBall,
+      )
+    ))
+    .filter((player, index, players) => (
+      player !== null
+      && player !== undefined
+      && players.findIndex((candidate) => candidate?.id === player.id) === index
+    ))
+    .sort((left, right) => (
+      traversal.indexOf(left.nativePlayerNumber)
+      - traversal.indexOf(right.nativePlayerNumber)
+    ));
+  for (const automaticNearPath of automaticNearPaths) {
+    const journey = stepOpponentFreeBallJourney({
+      command,
+      frozenKeeperPrediction: null,
+      match: releasedMatch,
+      nearPath: automaticNearPath,
+      nextTick,
+      sourceReleaseNativePlayer: taker.nativePlayerNumber,
+      sourcePredictionState: null,
+      skipPlayerIds: new Set(),
+      sourcePlayers: match.players,
+      sourcePossessionOwner: match.possession.owner,
+      visits: releasedVisits,
+      wantPassNativePlayer: 0,
+    });
+    releasedMatch = {
+      ...releasedMatch,
+      players: journey.players,
+      rng: { ...releasedMatch.rng, state: journey.rng },
+    };
+  }
+  return releasedMatch;
 }
 
 function completeCurrentFoulRelease({ match, nextTick, release }) {
@@ -3158,7 +3290,7 @@ function preparePlayersForCurrentBoundaryRestart(players, targets, nextTick) {
 }
 
 function blocksCurrentPositioningMotion(player) {
-  return (
+  return retainsPostGoalCentreJourney(player) || (
     player.liveContact !== undefined
     && player.liveContact.phase !== "barge"
   ) || (
@@ -4107,16 +4239,35 @@ function stepGoalCelebrationPlayers(match, nextTick, events) {
   let rng = match.rng.state;
   let scorerFrame = scorer;
   const players = match.players.map((player) => {
-    if (activeGoal.ownGoal) {
-      return player.id === scorer.id
-        ? stepGoalShamePlayer(player, match.goal.goalSequence, nextTick)
-        : settleGoalPlayer(player, match, nextTick);
+    const entered = player.role === "keeper" && player.liveKeeper !== undefined
+      ? player
+      : advanceGoalEntryRunAction(player, match);
+    if (
+      entered.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+      && (
+        entered.liveMotion?.goCount
+        ?? entered.liveCelebration?.goCount
+      ) === 0
+      && entered.liveFirstTimeIntercept?.phase === "run"
+    ) {
+      // The old first-touch RUN reaches init_strike_act before this visit can
+      // enter someone_has_scored. Its corrected post-goal prediction is no
+      // longer reachable, so init_first_time_act settles to STAND; celebration
+      // routing begins from stand_action on the following player visit.
+      const settled = settleGoalPlayer(entered, match, nextTick);
+      delete settled.liveFirstTimeIntercept;
+      return settled;
     }
-    if (player.id === scorer.id) {
+    if (activeGoal.ownGoal) {
+      return entered.id === scorer.id
+        ? stepGoalShamePlayer(entered, match.goal.goalSequence, nextTick)
+        : settleGoalPlayer(entered, match, nextTick);
+    }
+    if (entered.id === scorer.id) {
       if (scorerFinishesKick) {
-        return stepOpenPlayKickAnimation(player, match, nextTick);
+        return stepOpenPlayKickAnimation(entered, match, nextTick);
       }
-      const stepped = stepGoalScorerPlayer(player, { ...match, rng: { ...match.rng, state: rng } }, nextTick);
+      const stepped = stepGoalScorerPlayer(entered, { ...match, rng: { ...match.rng, state: rng } }, nextTick);
       rng = stepped.rng;
       scorerFrame = stepped.player;
       return scorerFrame;
@@ -4124,12 +4275,12 @@ function stepGoalCelebrationPlayers(match, nextTick, events) {
     // ACTIONS.CPP someone_has_scored does not interrupt a non-scoring
     // goalkeeper's current save, grounded recovery, or held-ball action.
     // keeper_boxes has already advanced that action for this logic tick.
-    if (player.role === "keeper" && player.liveKeeper !== undefined) {
-      return player;
+    if (entered.role === "keeper" && entered.liveKeeper !== undefined) {
+      return entered;
     }
-    if (player.country === activeGoal.scoringCountry && player.role !== "keeper") {
+    if (entered.country === activeGoal.scoringCountry && entered.role !== "keeper") {
       const stepped = stepGoalTeammatePlayer(
-        player,
+        entered,
         scorerFrame,
         { ...match, rng: { ...match.rng, state: rng } },
         nextTick,
@@ -4137,9 +4288,100 @@ function stepGoalCelebrationPlayers(match, nextTick, events) {
       rng = stepped.rng;
       return stepped.player;
     }
-    return settleGoalPlayer(player, match, nextTick);
+    return settleGoalPlayer(entered, match, nextTick);
   });
   return { ...match, rng: { ...match.rng, state: rng }, players };
+}
+
+/** ACTIONS.CPP intelligence -> run_action before someone_has_scored. */
+function advanceGoalEntryRunAction(source, match) {
+  if (
+    source.action.action.value !== CSSOCCER_NATIVE_ACTIONS.RUN
+    || source.liveMotion === undefined
+  ) return source;
+  let goCount = source.liveMotion.goCount;
+  let intelligence = clone(source.intelligence);
+  if (intelligence.count !== 0) {
+    const remaining = intelligence.count - 1;
+    if (remaining === 0) {
+      if (intelligence.move === 1) goCount = 1;
+      intelligence = { special: 0, move: 0, count: 0 };
+    } else {
+      intelligence.count = remaining;
+    }
+  }
+  if (goCount === 0) {
+    return { ...clone(source), intelligence };
+  }
+  let displacement = { x: F32(0), y: F32(0) };
+  let goStop = source.liveMotion.goStop === true;
+  if (source.liveMotion.directionMode !== 6) {
+    if (source.liveMotion.goStep === true) {
+      displacement = clone(source.liveMotion.goDisplacement);
+    } else if (goStop) {
+      const maxTurnRadians = projectCssoccerMotionSourceProfile(
+        CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+        { teamRate: source.liveMotion.teamRate },
+      ).maxTurnRadians;
+      if (
+        sourceAngleCosine({
+          target: source.liveMotion.goDisplacement,
+          facing: source.facing,
+        }) >= Math.cos(maxTurnRadians)
+      ) {
+        goStop = false;
+        displacement = clone(source.liveMotion.goDisplacement);
+      }
+    } else {
+      const teamRate = currentTeamRates(match.players, match.clock.gameMinute)
+        .find(({ id }) => id === source.id)?.value;
+      if (!Number.isSafeInteger(teamRate)) {
+        throw new Error(`Goal entry run lost current team rate for ${source.id}.`);
+      }
+      const speed = actualPlayerSpeed({
+        pitchLength: CSSOCCER_BALL_CONSTANTS.pitchLength,
+        teamRate,
+        speedIntent: intelligence.move === 1
+          ? CSSOCCER_SPEED_INTENT.intercept
+          : CSSOCCER_SPEED_INTENT.normal,
+        intentionCount: intelligence.count,
+        sideStep: false,
+        nativePlayer: source.nativePlayerNumber,
+        ballPossession: match.possession.owner,
+        ballInHands: match.possession.inHands !== 0,
+        keeperNativePlayers: [1, 12],
+        userControlIndex: 0,
+        burstTimer: 0,
+      });
+      displacement = sourceForwardDisplacement({
+        facing: source.facing,
+        targetOffset: {
+          x: F32(source.liveMotion.target.x - source.position.x),
+          y: F32(source.liveMotion.target.y - source.position.y),
+        },
+        speed,
+      }).displacement;
+    }
+  }
+  return {
+    ...clone(source),
+    previousPosition: clone(source.position),
+    position: {
+      ...updateSourcePosition2d({
+        position: { x: source.position.x, y: source.position.y },
+        displacement,
+      }),
+      z: source.position.z,
+    },
+    velocity: { ...clone(displacement), z: F32(0) },
+    intelligence,
+    liveMotion: {
+      ...clone(source.liveMotion),
+      goStop,
+      goCount: Math.max(0, goCount - 1),
+      goDisplacement: clone(displacement),
+    },
+  };
 }
 
 function stepGoalScorerPlayer(source, match, nextTick) {
@@ -4385,19 +4627,24 @@ function stepGoalScorerPlayer(source, match, nextTick) {
       },
     };
   }
+  return stepGoalCelebrationAction(current, match, nextTick);
+}
+
+/** ACTIONS.CPP celeb_action for scorer and teammate taunts alike. */
+function stepGoalCelebrationAction(source, match, nextTick) {
+  const current = clone(source);
+  const live = current.liveCelebration;
   let position = clone(current.position);
   let displacement = clone(live.displacement);
   let phase = live.phase;
   let goCount = live.goCount;
   let animation = current.animation.id;
   let frameStep = current.animation.frameStep;
-  if (phase === "knee" || phase === "duck") {
-    const planar = updateSourcePosition2d({
-      position: { x: position.x, y: position.y },
-      displacement,
-    });
-    position = { ...planar, z: position.z };
-  }
+  const planar = updateSourcePosition2d({
+    position: { x: position.x, y: position.y },
+    displacement,
+  });
+  position = { ...planar, z: position.z };
   if (phase === "knee") {
     displacement = {
       x: F32(displacement.x * 0.94),
@@ -4451,6 +4698,16 @@ function stepGoalScorerPlayer(source, match, nextTick) {
 }
 
 function stepGoalTeammatePlayer(source, scorer, match, nextTick) {
+  if (
+    source.liveCelebration?.goalSequence === match.goal.goalSequence
+    && (
+      source.liveCelebration.phase === "knee"
+      || source.liveCelebration.phase === "duck"
+      || source.liveCelebration.phase === "moon"
+    )
+  ) {
+    return stepGoalCelebrationAction(source, match, nextTick);
+  }
   if (
     source.liveCelebration?.goalSequence === match.goal.goalSequence
     && source.liveCelebration.phase === "taunt"
@@ -4583,71 +4840,7 @@ function stepGoalTeammatePlayer(source, scorer, match, nextTick) {
     };
   }
 
-  // run_action executes its current go_forward before it observes
-  // just_scored and calls someone_has_scored. Preserve that final source
-  // movement when a teammate was already on a live journey at the crossing.
-  const continuesSourceRun = source.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
-    && source.liveMotion?.goCount > 0
-    && source.liveMotion.directionMode !== 6
-    && (
-      (
-        source.intelligence.move === 8
-        && source.liveMotion.kind === "support-run"
-      )
-      || source.liveMotion.kind === "offside-runback"
-    );
-  let sourceRunStep = null;
-  if (continuesSourceRun) {
-    sourceRunStep = clone(source.liveMotion.goDisplacement);
-    // A non-step go_forward recalculates go_txdis/go_tydis from the current
-    // facing before moving. The retained offside displacement belongs to the
-    // preceding visit and is therefore one process_dir turn out of date.
-    if (
-      source.liveMotion.kind === "offside-runback"
-      && source.liveMotion.goStep === false
-    ) {
-      const speed = actualPlayerSpeed({
-        pitchLength: 1280,
-        teamRate: source.liveMotion.teamRate,
-        speedIntent: CSSOCCER_SPEED_INTENT.normal,
-        intentionCount: 0,
-        sideStep: false,
-        nativePlayer: source.nativePlayerNumber,
-        ballPossession: 0,
-        ballInHands: false,
-        keeperNativePlayers: [1, 12],
-        userControlIndex: 0,
-        burstTimer: 0,
-      });
-      sourceRunStep = sourceForwardDisplacement({
-        facing: source.facing,
-        targetOffset: {
-          x: F32(source.liveMotion.target.x - source.position.x),
-          y: F32(source.liveMotion.target.y - source.position.y),
-        },
-        speed,
-      }).displacement;
-    }
-  }
-  const entered = sourceRunStep === null
-    ? source
-    : {
-        ...clone(source),
-        previousPosition: clone(source.position),
-        position: {
-          ...updateSourcePosition2d({
-            position: { x: source.position.x, y: source.position.y },
-            displacement: sourceRunStep,
-          }),
-          z: source.position.z,
-        },
-        velocity: { ...sourceRunStep, z: F32(0) },
-        liveMotion: {
-          ...clone(source.liveMotion),
-          goCount: source.liveMotion.goCount - 1,
-        },
-      };
-  const player = clearLivePlayerActions(entered);
+  const player = clearLivePlayerActions(source);
   const scorerOffset = {
     x: F32(scorer.position.x - player.position.x),
     y: F32(scorer.position.y - player.position.y),
@@ -4842,8 +5035,19 @@ function stepGoalTeammatePlayer(source, scorer, match, nextTick) {
   const frameStep = goStep
     ? F32(speed * SIDE_STEP_FRAME_STEP / 2)
     : F32(RUN_FRAME_STEP * speed / RUN_REFERENCE_SPEED);
+  const retainedBargeCountdown = (
+    !goStep
+    && source.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+    && source.animation.id === BARGE_ANIMATION
+    && source.liveContact?.phase === "barge"
+    && source.liveContact.bargeCountdown > 1
+  )
+    ? source.liveContact.bargeCountdown - 1
+    : 0;
   const priorTrot = player.animation.kind === "goal-trot-to-scorer";
-  const animationId = goStep
+  const animationId = retainedBargeCountdown > 0
+    ? BARGE_ANIMATION
+    : goStep
     ? TROT_ANIMATION_BY_DIRECTION[sourceSideStepDirection({
         target: scorer.position,
         previousPosition: player.position,
@@ -4870,16 +5074,30 @@ function stepGoalTeammatePlayer(source, scorer, match, nextTick) {
       }),
       animation: {
         status: "browser-current-state",
-        kind: goStep ? "goal-trot-to-scorer" : "goal-run-to-scorer",
+        kind: retainedBargeCountdown > 0
+          ? "barge"
+          : goStep ? "goal-trot-to-scorer" : "goal-run-to-scorer",
         id: animationId,
         sourceActionId: CSSOCCER_NATIVE_ACTIONS.RUN,
-        frame: (goStep && priorTrot) || (!goStep && player.animation.id === RUN_ANIMATION)
+        frame: retainedBargeCountdown > 0
+          ? F32(player.animation.frame + player.animation.frameStep)
+          : (goStep && priorTrot) || (!goStep && player.animation.id === RUN_ANIMATION)
           ? F32(player.animation.frame + player.animation.frameStep)
           : F32(0),
-        frameStep,
+        frameStep: retainedBargeCountdown > 0
+          ? player.animation.frameStep
+          : frameStep,
         pending: null,
         tick: nextTick,
       },
+      ...(retainedBargeCountdown > 0
+        ? {
+            liveContact: {
+              ...clone(source.liveContact),
+              bargeCountdown: retainedBargeCountdown,
+            },
+          }
+        : {}),
       liveCelebration: {
         goalSequence: match.goal.goalSequence,
         phase: "approach-scorer",
@@ -5272,6 +5490,16 @@ function processKeeperBoxes(match, nextTick, events, sourcePredictionState) {
         possession,
       });
       keeper = continued.keeper;
+      if (
+        keeper.sourceKeeperStandTick === nextTick
+        && match.goal.phase === "celebration"
+      ) {
+        // Goal-celebration frames do not run the ordinary animation pass.
+        // Leave this keeper available to the same visit's scored-player
+        // facing logic; the newly installed stand frame cannot be advanced.
+        keeper = clone(keeper);
+        delete keeper.sourceKeeperStandTick;
+      }
       ball = continued.ball;
       possession = continued.possession;
       if (continued.outcome !== null) {
@@ -5697,11 +5925,16 @@ function rotateKeeperSaveOffset(storedOffset, facing) {
 
 function continueKeeperSave({ ball, keeper, nextTick, possession }) {
   const go = keeper.liveMotion.goDisplacement;
-  const position = {
-    x: F32(keeper.position.x + go.x),
-    y: F32(keeper.position.y + go.y),
-    z: keeper.position.z,
-  };
+  // ACTIONS.CPP save_action advances the clip and go_cnt outside the box, but
+  // suppresses tm_x/tm_y translation after keeper_boxes clears the flag.
+  const keeperInBox = cssoccerKeeperBoxStatus(keeperAiFrame(keeper));
+  const position = keeperInBox
+    ? {
+        x: F32(keeper.position.x + go.x),
+        y: F32(keeper.position.y + go.y),
+        z: keeper.position.z,
+      }
+    : clone(keeper.position);
   // SAVE_ACT keeps dir_mode=5 and the launch newdx/newdy. The moving ball does
   // not re-steer a keeper while the save animation is already in progress.
   const facing = clone(keeper.facing);
@@ -5729,7 +5962,9 @@ function continueKeeperSave({ ball, keeper, nextTick, possession }) {
     previousPosition: clone(keeper.position),
     previousFacing: clone(keeper.facing),
     position,
-    velocity: { x: go.x, y: go.y, z: F32(0) },
+    velocity: keeperInBox
+      ? { x: go.x, y: go.y, z: F32(0) }
+      : { x: F32(0), y: F32(0), z: F32(0) },
     facing,
     intelligence: {
       ...clone(keeper.intelligence),
@@ -5774,7 +6009,14 @@ function continueKeeperSave({ ball, keeper, nextTick, possession }) {
     } else if (keeperOwnsBallInHands(nextKeeper, nextPossession)) {
       nextKeeper = beginKeeperHold(nextKeeper, nextTick, nextBall.ball.position);
     } else {
-      nextKeeper = settleKeeperAfterOutcome(nextKeeper, nextTick, nextBall.ball.position);
+      nextKeeper = {
+        ...settleKeeperAfterOutcome(nextKeeper, nextTick, nextBall.ball.position),
+        // SAVE_ACT reaches init_stand_act during process_teams, after the
+        // frame's process_anims visit has already advanced the save clip.
+        // Keep a same-tick marker so the later browser animation projection
+        // does not advance the newly installed MC_STAND frame.
+        sourceKeeperStandTick: nextTick,
+      };
     }
   }
   return {
@@ -6132,6 +6374,7 @@ function continueKeeperKickout(keeper, nextTick) {
     previousPosition: clone(keeper.position),
     previousFacing: clone(keeper.facing),
     velocity: { x: F32(0), y: F32(0), z: F32(0) },
+    intelligence: { special: 0, move: 0, count: 0 },
     action: createCssoccerActionState({
       tick: nextTick,
       playerId: keeper.id,
@@ -6535,16 +6778,86 @@ function stepCurrentFoulRunup(match, {
   command,
   events,
   nextTick,
+  playerDistanceFrame,
+  playerDistanceRankFrame,
   publishPlayerVisits,
   sourcePredictionBall,
 }) {
-  const sourceTaker = match.players.find(({ id }) => id === match.kickoff.owner?.takerId);
+  const sourceTakerId = match.rules.foulRestart?.descriptor?.taker?.playerId;
+  const sourceTaker = match.players.find(({ id }) => id === sourceTakerId);
   if (
     match.rules.foulRestart?.phase !== "runup"
     || sourceTaker?.liveRestart?.phase !== "set-piece-runup"
     || sourceTaker.action.action.value !== CSSOCCER_NATIVE_ACTIONS.RUN
   ) {
     throw new Error("Foul run-up lost its current source action.");
+  }
+  if (
+    sourceTaker.liveRestart.startTick < nextTick
+    && sourceTaker.liveRestart.remainingMoves <= 0
+  ) {
+    let constrainedVisits = null;
+    const constrained = advanceCurrentFoulContactWaitTeams(match, {
+      command,
+      nextTick,
+      publishPlayerVisits(visits) {
+        constrainedVisits = visits;
+      },
+    });
+    const begun = beginCurrentFoulKick({
+      action: "shot",
+      aim: sourceTaker.liveRestart.aim,
+      events,
+      match,
+      nextTick,
+      sourcePredictionBall,
+      taker: sourceTaker,
+      userControlled: true,
+    });
+    const begunTaker = begun.players.find(({ id }) => id === sourceTaker.id);
+    if (begunTaker === undefined) {
+      throw new Error("Foul run-up action transition lost its current taker.");
+    }
+    let ordinaryVisits = null;
+    const ordinary = stepCurrentBoundaryKickActionTeamContinuation(
+      begun,
+      begunTaker,
+      nextTick,
+      (visits) => {
+        ordinaryVisits = visits;
+      },
+      begun.kickoff.zoning,
+      null,
+    );
+    const traversal = nativeContactTraversalOrder(match.tick & 1);
+    const takerVisitIndex = traversal.indexOf(sourceTaker.nativePlayerNumber);
+    if (
+      takerVisitIndex < 0
+      || constrainedVisits === null
+      || ordinaryVisits === null
+    ) {
+      throw new Error("Foul run-up action transition lost source traversal state.");
+    }
+    const constrainedById = new Map(
+      constrained.players.map((player) => [player.id, player]),
+    );
+    const constrainedVisitByNative = new Map(
+      constrainedVisits.map((visit) => [visit.nativePlayerNumber, visit]),
+    );
+    // user_runup -> taker_nkick -> ready_set_kick executes inside the taker's
+    // go_team slot. Earlier players still see match_mode/game_action; later
+    // players see the cleared globals and perform an ordinary live-play visit.
+    const players = ordinary.players.map((player) => (
+      traversal.indexOf(player.nativePlayerNumber) < takerVisitIndex
+        ? constrainedById.get(player.id) ?? player
+        : player
+    ));
+    publishPlayerVisits(ordinaryVisits.map((visit) => (
+      traversal.indexOf(visit.nativePlayerNumber) < takerVisitIndex
+        ? constrainedVisitByNative.get(visit.nativePlayerNumber) ?? visit
+        : visit
+    )));
+    return { ...ordinary, players };
   }
   const supported = advanceCurrentFoulContactWaitTeams(match, {
     command,
@@ -6787,12 +7100,23 @@ function advanceCurrentFoulContactWaitTeams(match, {
     const startingSupportRun = supportIntent.run?.playerId === current.id;
     let target;
     if (current.role === "keeper") {
-      // Keeper intelligence can either call find_zonal_target or settle
-      // directly, but both paths retain its current keeper target here.
-      target = {
-        x: F32(current.position.x),
-        y: F32(current.position.y),
-      };
+      // stand_action suppresses find_zonal_target only while this keeper's
+      // shot_pending guard is live. Once reset_shot clears it (including the
+      // restart taker's collection), resume the ordinary offline target.
+      target = keeperWaitsForShot
+        ? {
+            x: F32(current.position.x),
+            y: F32(current.position.y),
+          }
+        : {
+            x: current.nativePlayerNumber === 1
+              ? CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.kickoff.keeperOffline.value
+              : F32(
+                  CSSOCCER_BALL_CONSTANTS.pitchLength
+                  - CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.kickoff.keeperOffline.value
+                ),
+            y: F32(CSSOCCER_BALL_CONSTANTS.pitchWidth / 2 - 1),
+          };
     } else if (
       current.nativePlayerNumber === descriptor.taker.nativePlayerNumber
     ) {
@@ -6857,6 +7181,11 @@ function advanceCurrentFoulContactWaitTeams(match, {
           ...projected.liveMotion,
           kind: "support-run",
           wantPassStat: supportIntent.run.wantPassStat,
+          wantPassOffset: {
+            x: F32(supportIntent.run.target.x - current.position.x),
+            y: F32(supportIntent.run.target.y - current.position.y),
+          },
+          wantPassFaced: false,
         },
       };
     }
@@ -7018,6 +7347,8 @@ function processTeams(match, {
       command,
       events,
       nextTick,
+      playerDistanceFrame,
+      playerDistanceRankFrame,
       publishPlayerVisits,
       sourcePredictionBall,
     });
@@ -7037,6 +7368,8 @@ function processTeams(match, {
       events,
       publishPlayerVisits,
       command,
+      nearPath,
+      opponentNearPath,
       playerDistanceFrame,
       playerDistanceRankFrame,
     );
@@ -7095,12 +7428,13 @@ function processTeams(match, {
       nextTick,
       players: match.players,
       possession: match.possession,
-      // ready_set_kick has already cleared match_mode for a post-goal
-      // centre. Its receiver therefore enters ordinary zonal intelligence;
-      // the opening fixture's prepared receiver route is a separate seam.
-      receiverId: match.kickoff.restartKind === "post-goal"
-        ? null
-        : match.kickoff.owner.receiverId,
+      // ready_set_kick clears match_mode, but get_target retains its
+      // centre_guy_2 override for team A in ball zone 68. The source's team B
+      // branch checks zone 69 while a team B centre owns zone 68, so that
+      // branch deliberately falls through to ordinary zoning.
+      receiverId: match.kickoff.owner.nativeTeamSlot === "A"
+        ? match.kickoff.owner.receiverId
+        : null,
       rngSeed: match.rng.state.seed,
       sourceTick: match.tick,
       tactics: match.tactics,
@@ -7220,7 +7554,7 @@ function processTeams(match, {
     );
     publishPlayerVisits(contactPass.visits);
     if (
-      process.env.CSSOCCER_DEBUG_VISITS
+      CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_VISITS
         ?.split(",")
         .includes(String(nextTick))
     ) {
@@ -7301,6 +7635,7 @@ function processTeams(match, {
       nextTick,
       contactPass.visits,
       sourceAiPossession,
+      sourceControlledPlayerId,
     );
     const releasedInterceptorReset = projectSourceReleasedPassInterceptorReset({
       nextTick,
@@ -7320,22 +7655,34 @@ function processTeams(match, {
       ? null
       : sourceOrderedChallenge.kickoff.action?.recovered === true
       ? null
-      : sourceOrderedChallenge.kickoff.owner.takerId;
-    const supportVisits = projectSourceSupportIntentVisits(
-      contactPass.visits,
-      sourceOrderedChallenge.possession.owner !== 0
-        ? sourceOrderedChallenge.possession.owner
-        : sourceAiPossession.owner,
-    );
+      : sourceOrderedChallenge.kickoff.action?.takerId
+        ?? sourceOrderedChallenge.kickoff.owner.takerId;
     // A later source-order kick can release possession after an earlier
     // teammate has already run we_have_ball and requested support. Select
     // that request against the possession visible during those earlier
     // visits; the published match possession remains the post-release state.
-    const supportPossession = sourceOrderedChallenge.possession.owner !== 0
-      ? sourceOrderedChallenge.possession
-      : sourceAiPossession.owner !== 0
-        ? sourceAiPossession
-        : sourceOrderedChallenge.possession;
+    // The same ordering applies to collections: when the tick-entry holder
+    // still owns the ball at his own visit, his earlier teammates can install
+    // a support run before a later opponent collection changes the published
+    // owner.
+    const sourceHolderVisit = sourceAiPossession.owner === 0
+      ? undefined
+      : contactPass.visits.find(({ nativePlayerNumber }) => (
+          nativePlayerNumber === sourceAiPossession.owner
+        ));
+    const supportPossession = (
+      sourceHolderVisit?.possession.owner === sourceAiPossession.owner
+    )
+      ? sourceAiPossession
+      : sourceOrderedChallenge.possession.owner !== 0
+        ? sourceOrderedChallenge.possession
+        : sourceAiPossession.owner !== 0
+          ? sourceAiPossession
+          : sourceOrderedChallenge.possession;
+    const supportVisits = projectSourceSupportIntentVisits(
+      contactPass.visits,
+      supportPossession.owner,
+    );
     const supportIntentBeforeHolder = resolveCssoccerFreePlaySupportIntent({
       candidateWindow: "before-holder",
       controlledPlayerId: sourceComputerControlsActive
@@ -7472,20 +7819,25 @@ function processTeams(match, {
           },
         }
       : sourceOrderedReceiverChallenge;
-    const sourceDecisionPlayers = projectSourcePossessionDecisionPlayers({
+    const sourcePossessionProjection = projectSourcePossessionDecisionPlayers({
+      command,
       extraBusyPlayerIds: [
         ...firstTeamBusy.playerIds,
         ...preCollectionReceiverPlayerIds,
       ],
       logicCount,
       match: sourceDecisionMatch,
+      nearPath,
       nextTick,
       postGoalBallCountdown,
+      sourceActivePlayerId: sourceControlledPlayerId,
+      sourcePlayers: sourceLoopPlayers,
       sourcePossessionOwner: sourceAiPossession.owner,
       supportRun: supportIntentBeforeHolder.run,
       takerId,
       visits: contactPass.visits,
     });
+    const sourceDecisionPlayers = sourcePossessionProjection.decisionPlayers;
     const possessionDecision = resolveOpenPlayCollectedPossession({
       match: sourceDecisionMatch,
       sourceDecisionPlayers,
@@ -7495,6 +7847,12 @@ function processTeams(match, {
     // collect_ball can hand control to the holder before a later teammate's
     // we_have_ball visit. That requester reads the holder after the same-slot
     // user_play movement and process_dir turn, not the tick-entry facing.
+    const supportDecisionBasePlayers = expiredFirstTime.players.some((player) => (
+      player.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
+      && player.intelligence.count > 0
+    ))
+      ? expiredFirstTime.players
+      : sourcePossessionProjection.supportPlayers;
     const sourceSupportDecisionPlayers = supportIntentBeforeHolder.run === null
       ? applyOpenPlayCollectedUserVisit({
           ball: sourceOrderedReceiverChallenge.ball,
@@ -7502,16 +7860,16 @@ function processTeams(match, {
           events,
           match: {
             ...sourceOrderedReceiverChallenge,
-            players: expiredFirstTime.players,
+            players: supportDecisionBasePlayers,
           },
           nextTick,
-          players: expiredFirstTime.players,
+          players: supportDecisionBasePlayers,
           sourcePlayers: sourceLoopPlayers,
           sourcePossessionOwner: sourceAiPossession.owner,
           visits: contactPass.visits,
         })
       : expiredFirstTime.players;
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const sourcePlayer = sourceDecisionMatch.players.find(
         ({ id }) => id === "spain-player-07",
       );
@@ -7602,6 +7960,7 @@ function processTeams(match, {
       sourceAiPossession,
       contactPass.visits,
       firstTeamBusy.playerIds,
+      sourceControlledPlayerId,
     );
     decided = { ...decided, players: secondTeamBusy.players };
     const displacedDribble = projectSourceBusyDisplacedDribbleRuns(
@@ -7638,7 +7997,7 @@ function processTeams(match, {
       ],
       contactPass.visits,
     );
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       console.error("busy-free-ball-input", JSON.stringify({
         activeFirstTimePlayerIds: activeFirstTime.playerIds,
         expiringReplannedPlayerIds: expiringFreeBall.replannedPlayerIds,
@@ -7653,7 +8012,9 @@ function processTeams(match, {
       nextTick,
       sourceAiBall,
       {
+        controlledPlayerId: sourceControlledPlayerId,
         resetPlayerId: supportIntent.resetPlayerId,
+        supportRunPlayerId: supportIntent.run?.playerId ?? null,
         visits: contactPass.visits,
       },
     );
@@ -7739,10 +8100,16 @@ function processTeams(match, {
       ...busyFreeBall.playerIds,
       ...busySupport.playerIds,
       ...continuingCloseDownPlayerIds,
-      ...currentSourceSocksBusyPlayerIds(decided.players),
+      // A busy outfielder skips ordinary intelligence and find_zonal_target
+      // checks int_cnt before replacing MC_SOCKS. The keeper branch has no
+      // such guard: stand_action still runs keeper positioning, whose
+      // init_stand_act/init_run_act immediately resets I_GET_UP.
+      ...currentSourceSocksBusyPlayerIds(decided.players).filter((playerId) => (
+        decided.players.find(({ id }) => id === playerId)?.role !== "keeper"
+      )),
       ...postGoalCelebrationPlayerIds,
     ]);
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       console.error("tick-1416-busy", JSON.stringify({
         retainedReleasedReceiverIds: [...retainedReleasedReceiverIds],
         expiringFreeBallPlayerIds: expiringFreeBall.playerIds,
@@ -7754,15 +8121,12 @@ function processTeams(match, {
     const preHandoffVisitIndex = contactPass.visits.findIndex(
       ({ playerId }) => playerId === preHandoffControlledPlayerId,
     );
-    const collectionHandoffVisitIndex = postGoalBallCountdown
-      ? contactPass.visits.findLastIndex((visit) => (
-          visit.interaction === "collect"
-          && visit.nativePlayerNumber === decided.possession.owner
-        ))
-      : contactPass.visits.findIndex((visit) => (
-          visit.interaction === "collect"
-          && visit.playerId === decided.control.activePlayerId
-        ));
+    const sourceCollectionHandoff = events.find(({ type, previousPlayerId }) => (
+      type === "ball-collected-control-handoff"
+      && previousPlayerId === preHandoffControlledPlayerId
+    ));
+    const collectionHandoffVisitIndex =
+      sourceCollectionHandoff?.sourceVisitIndex ?? -1;
     const postHandoffControlledVisitIndex = contactPass.visits.findIndex(
       ({ playerId }) => playerId === decided.control.activePlayerId,
     );
@@ -7807,6 +8171,9 @@ function processTeams(match, {
       // Keep the control byte's final owner separate from the user_play slot
       // that was actually controlled during this traversal.
       controlledPlayerId: sourceJourneyControlledPlayerId,
+      freeBallOutOfPlay: !postGoalBallCountdown
+        && decided.ball.ball.outOfPlay !== 0
+        && sourceAiPossession.owner === 0,
       logicCount,
       nextTick,
       players: decided.players,
@@ -7844,7 +8211,21 @@ function processTeams(match, {
       zoneState: decided.kickoff.zoning,
     };
     let players = stepCssoccerFreePlayTeamJourneyContinuation(journeyInput);
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    const sourceSocksKeepers = new Set(decided.players
+      .filter((player) => (
+        player.role === "keeper"
+        && currentSourceSocksBusyPlayerIds([player]).length === 1
+      ))
+      .map(({ id }) => id));
+    if (sourceSocksKeepers.size > 0) {
+      players = players.map((player) => sourceSocksKeepers.has(player.id)
+        ? {
+            ...player,
+            intelligence: { special: 0, move: 0, count: 0 },
+          }
+        : player);
+    }
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const player = players.find(({ id }) => id === "spain-player-07");
       console.error("tick-1416-after-team-journey", JSON.stringify({
         controlledPlayerId: journeyInput.controlledPlayerId,
@@ -7955,10 +8336,10 @@ function processTeams(match, {
       wantPassNativePlayer: supportIntent.holderWantPassNativePlayer,
     });
     if (
-      process.env.CSSOCCER_DEBUG_PLAYER !== undefined
-      && process.env.CSSOCCER_DEBUG_TICK === String(nextTick)
+      CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_PLAYER !== undefined
+      && CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)
     ) {
-      const debugPlayerId = process.env.CSSOCCER_DEBUG_PLAYER;
+      const debugPlayerId = CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_PLAYER;
       console.error("open-play-receiver-pipeline", JSON.stringify({
         nextTick,
         decided: decided.players.find(({ id }) => id === debugPlayerId),
@@ -8145,7 +8526,7 @@ function processTeams(match, {
       rng: { ...decided.rng, state: opponentFreeBallJourney.rng },
       control: freeBallControl,
     };
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const player = receiverDecided.players.find(
         ({ id }) => id === "argentina-player-03",
       );
@@ -8225,7 +8606,7 @@ function processTeams(match, {
       sourcePossessionOwner: sourceAiPossession.owner,
       visits: contactPass.visits,
     });
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const player = sourceVisitedPlayers.find(
         ({ id }) => id === "argentina-player-03",
       );
@@ -8256,7 +8637,7 @@ function processTeams(match, {
             sourceAiPossession,
             sourceControlledPlayerId,
           );
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const player = activeJourneyPlayers.find(
         ({ id }) => id === "argentina-player-03",
       );
@@ -8292,6 +8673,20 @@ function processTeams(match, {
       reselection: contactPass.reselection,
       visits: contactPass.visits,
     };
+    const aiChallengeSourcePlayers = supportIntent.resetPlayerId === null
+      ? preTeamPlayers
+      : preTeamPlayers.map((player) => (
+          player.id === supportIntent.resetPlayerId
+            ? {
+                ...player,
+                // process_comments runs before process_teams. A last-touch
+                // change clears I_RUN_ON before this player's intelligence
+                // visit, so opponent pressure may replace the stale route
+                // immediately instead of treating the request as busy.
+                intelligence: { special: 0, move: 0, count: 0 },
+              }
+            : player
+        ));
     const preCollectionPressure = initializeOpenPlayAiChallenges(
       {
         ...controlledFreeBall,
@@ -8302,7 +8697,7 @@ function processTeams(match, {
       },
       nextTick,
       events,
-      preTeamPlayers,
+      aiChallengeSourcePlayers,
       sourceAiBall,
       { ...aiChallengeSource, pressureWindow: "before-collection" },
     );
@@ -8314,7 +8709,7 @@ function processTeams(match, {
       preCollectionJourney,
       nextTick,
       events,
-      preTeamPlayers,
+      aiChallengeSourcePlayers,
       sourceAiBall,
       {
         ...aiChallengeSource,
@@ -8330,7 +8725,7 @@ function processTeams(match, {
         pressureWindow: "final",
       },
     );
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const player = journey.players.find(({ id }) => id === "argentina-player-03");
       console.error("tick-1416-after-ai-challenges", JSON.stringify({
         activePlayerId: journey.control.activePlayerId,
@@ -8344,8 +8739,10 @@ function processTeams(match, {
       }));
     }
     let offsideJourney = applyOpenPlayOffsideRunbacks({
+      aiChallengePlayerIds: currentOpenPlayAiRoutePlayerIds(events, nextTick),
       command,
       completedRunbackPlayerIds: expiringOffsideRunbacks.playerIds,
+      expiredInterceptPlayerIds: expiringFreeBall.playerIds,
       logicCount,
       match: sourceComputerControlsActive
         ? {
@@ -8367,7 +8764,7 @@ function processTeams(match, {
         nextTick,
       );
     }
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const player = offsideJourney.players.find(
         ({ id }) => id === "argentina-player-03",
       );
@@ -8381,12 +8778,12 @@ function processTeams(match, {
         },
       }));
     }
-    const debugTussleIds = process.env.CSSOCCER_DEBUG_TUSSLE
+    const debugTussleIds = CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TUSSLE
       ?.split(",")
       .filter(Boolean) ?? [];
     if (
       debugTussleIds.length > 0
-      && process.env.CSSOCCER_DEBUG_TICK === String(nextTick)
+      && CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)
     ) {
       console.error("open-play-pre-tussle", JSON.stringify({
         possession: offsideJourney.possession.owner,
@@ -8403,11 +8800,17 @@ function processTeams(match, {
           })),
       }));
     }
+    const socksStarted = applyOpenPlayFreshSocksActions({
+      match: offsideJourney,
+      nextTick,
+      sourcePlayers: sourceLoopPlayers,
+      visits: contactPass.visits,
+    });
     const eventCountBeforeTussles = events.length;
-    const tussled = resolveOpenPlayPlayerTussles(offsideJourney, nextTick, events);
+    const tussled = resolveOpenPlayPlayerTussles(socksStarted, nextTick, events);
     if (
       debugTussleIds.length > 0
-      && process.env.CSSOCCER_DEBUG_TICK === String(nextTick)
+      && CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)
     ) {
       console.error("open-play-post-tussle", JSON.stringify({
         possession: tussled.possession.owner,
@@ -8426,10 +8829,10 @@ function processTeams(match, {
       }));
     }
     if (
-      process.env.CSSOCCER_DEBUG_PLAYER !== undefined
-      && process.env.CSSOCCER_DEBUG_TICK === String(nextTick)
+      CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_PLAYER !== undefined
+      && CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)
     ) {
-      const debugPlayerId = process.env.CSSOCCER_DEBUG_PLAYER;
+      const debugPlayerId = CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_PLAYER;
       console.error("open-play-final-pipeline", JSON.stringify({
         nextTick,
         activeJourney: activeJourneyPlayers.find(({ id }) => id === debugPlayerId),
@@ -8440,7 +8843,7 @@ function processTeams(match, {
         tussled: tussled.players.find(({ id }) => id === debugPlayerId),
       }));
     }
-    if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+    if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
       const player = tussled.players.find(
         ({ id }) => id === "argentina-player-03",
       );
@@ -8474,6 +8877,13 @@ function processTeams(match, {
   const restartPositioning = match.kickoff.phase === "boundary-positioning"
     || match.kickoff.phase === "rule-positioning"
     || boundaryDecisionMotion;
+  const sameVisitRecoveredKeeperIds = new Set(
+    restartPositioning
+      ? match.players
+          .filter(({ sourceKeeperStandTick }) => sourceKeeperStandTick === nextTick)
+          .map(({ id }) => id)
+      : [],
+  );
   const resetCentrePositioning = match.kickoff.phase === "centre-positioning"
     && match.kickoff.restartKind !== "opening";
   if (match.kickoff.phase !== "centre-positioning" && !restartPositioning) {
@@ -8497,6 +8907,47 @@ function processTeams(match, {
   let players = match.players.map((player) => {
     const current = motionById.get(player.id);
     if (current === undefined) throw new Error(`Kickoff motion lost ${player.id}.`);
+    if (sameVisitRecoveredKeeperIds.has(player.id)) {
+      // SAVE_ACT completed in this keeper's do_action slot. init_stand_act
+      // replaces the action immediately, and the trailing process_dir turns
+      // toward the ball, but stand_action cannot start restart positioning
+      // until the keeper's next source visit.
+      const facing = turnSourceFacing({
+        facing: player.facing,
+        target: {
+          x: F32(match.ball.ball.position.x - player.position.x),
+          y: F32(match.ball.ball.position.y - player.position.y),
+        },
+        maxTurnRadians: projectCssoccerMotionSourceProfile(
+          CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+          { teamRate: ratesById.get(player.id).value },
+        ).maxTurnRadians,
+      }).facing;
+      return {
+        ...clone(player),
+        previousPosition: clone(player.position),
+        previousFacing: clone(player.facing),
+        velocity: { x: F32(0), y: F32(0), z: F32(0) },
+        facing,
+        action: createCssoccerActionState({
+          tick: nextTick,
+          playerId: player.id,
+          actionId: CSSOCCER_NATIVE_ACTIONS.STAND,
+          facingX: facing.x,
+          facingY: facing.y,
+        }),
+        liveMotion: {
+          ...clone(player.liveMotion),
+          kind: "stand",
+          goCount: 0,
+          goDisplacement: { x: F32(0), y: F32(0) },
+          directionMode: 1,
+          resetAnimationFrame: true,
+          animationId: null,
+          animationFrameStep: null,
+        },
+      };
+    }
     const position = { ...clone(current.position), z: F32(0) };
     return {
       ...clone(player),
@@ -8535,9 +8986,19 @@ function processTeams(match, {
                 && current.id !== match.kickoff.owner?.takerId,
             ),
           }
-        : {}),
+      : {}),
     };
   });
+  if (sameVisitRecoveredKeeperIds.size > 0) {
+    // The positioning reducer was created before keeper_boxes completed the
+    // save. Rebase its dormant carrier onto the recovered source state so
+    // the first restart journey begins from here on the following tick.
+    motion = patchCurrentPositioningMotionPlayers(
+      motion,
+      players,
+      sameVisitRecoveredKeeperIds,
+    );
+  }
   if (
     restartPositioning
     && match.players.some(blocksCurrentPositioningMotion)
@@ -8652,6 +9113,7 @@ function mergeRetainedPostGoalCentreJourneys({
   });
   const continuedPlayers = stepCssoccerFreePlayTeamJourneyContinuation({
     controlledPlayerId: null,
+    freeBallOutOfPlay: false,
     logicCount: NATIVE_CAPTURE_LOGIC_COUNT_ROOT + Math.max(0, nextTick - 2),
     nextTick,
     // do_action owns a surviving contact before ordinary computer_play.
@@ -8672,9 +9134,24 @@ function mergeRetainedPostGoalCentreJourneys({
     zoneState: match.kickoff.zoning,
   });
   const continuedById = new Map(continuedPlayers.map((player) => [player.id, player]));
-  const players = positionedPlayers.map((player) => (
-    retainedIds.has(player.id) ? continuedById.get(player.id) : player
-  ));
+  const players = positionedPlayers.map((positioned) => {
+    if (!retainedIds.has(positioned.id)) return positioned;
+    const source = continuedById.get(positioned.id);
+    if (source === undefined) {
+      throw new Error(`Post-goal centre continuation lost ${positioned.id}.`);
+    }
+    if (source.liveContact?.phase === "barge") {
+      // tm_barge only overlays MC_BARGE on a still-running RUN_ACT. The new
+      // centre positioning journey owns movement and direction immediately;
+      // process_anims retains the overlay frame and countdown independently.
+      return {
+        ...positioned,
+        animation: clone(source.animation),
+        liveContact: clone(source.liveContact),
+      };
+    }
+    return source;
+  });
   return {
     players,
     motion: patchCurrentPositioningMotionPlayers(motion, players, retainedIds),
@@ -8695,8 +9172,64 @@ function mergeRetainedRestartActions({
     .filter(blocksCurrentPositioningMotion)
     .map((player) => player.id));
   const contacted = advanceOpenPlayContactActions(match, nextTick);
+  const retainedJourneyIds = new Set(contacted.players
+    .filter(retainsPostGoalCentreJourney)
+    .map((player) => player.id));
+  let journeyPlayers = contacted.players;
+  if (retainedJourneyIds.size > 0) {
+    const byNative = new Map(journeyPlayers.map((player) => [
+      player.nativePlayerNumber,
+      player,
+    ]));
+    const visits = nativeContactTraversalOrder(match.tick & 1)
+      .flatMap((nativePlayerNumber) => {
+        const player = byNative.get(nativePlayerNumber);
+        if (player === undefined) {
+          throw new Error(`Restart journey lost native player ${nativePlayerNumber}.`);
+        }
+        if (!player.active) return [];
+        return [{
+          playerId: player.id,
+          nativePlayerNumber,
+          ballPosition: clone(match.ball.ball.position),
+          canBeOffside: match.rules.canBeOffside,
+          distance: sourceDistance2d({
+            x: F32(player.position.x - match.ball.ball.position.x),
+            y: F32(player.position.y - match.ball.ball.position.y),
+          }),
+          interaction: "none",
+          possession: {
+            owner: match.possession.owner,
+            lastTouch: match.possession.lastTouch,
+            inHands: match.possession.inHands,
+          },
+        }];
+      });
+    const continued = stepCssoccerFreePlayTeamJourneyContinuation({
+      controlledPlayerId: null,
+      freeBallOutOfPlay: false,
+      logicCount: NATIVE_CAPTURE_LOGIC_COUNT_ROOT + Math.max(0, nextTick - 2),
+      nextTick,
+      possessionKicks: currentSourceSocksBusyPlayerIds(journeyPlayers),
+      players: journeyPlayers,
+      possessionRuns: [],
+      rngSeed: match.rng.state.seed,
+      sourceDecisionPlayers: journeyPlayers,
+      supportRun: null,
+      tactics: match.tactics,
+      takerId: match.kickoff.owner?.takerId ?? null,
+      teamRates: currentTeamRates(journeyPlayers, match.clock.gameMinute),
+      visits,
+      zoneAnalogue: false,
+      zoneBallPosition: match.ball.ball.position,
+      zoneState: match.kickoff.zoning,
+    });
+    journeyPlayers = journeyPlayers.map((player, index) => (
+      retainedJourneyIds.has(player.id) ? continued[index] : player
+    ));
+  }
   const advanced = advanceRetainedRestartControlActions({
-    match: { ...match, players: contacted.players },
+    match: { ...match, players: journeyPlayers },
     motion,
     nextTick,
   });
@@ -8857,6 +9390,85 @@ function advanceSourceSocksBusyPlayers(match) {
               animationFrameStep: null,
             }
           : { resetAnimationFrame: false }),
+      },
+    };
+  });
+  return { ...match, players };
+}
+
+function applyOpenPlayFreshSocksActions({
+  match,
+  nextTick,
+  sourcePlayers,
+  visits,
+}) {
+  if (match.possession.owner === 0 || match.rng.state.seed >= SOCKS_PROBABILITY) {
+    return match;
+  }
+  const sourceById = new Map(sourcePlayers.map((player) => [player.id, player]));
+  const visitById = new Map(visits.map((visit) => [visit.playerId, visit]));
+  const busy = new Set(currentSourceSocksBusyPlayerIds(sourcePlayers));
+  const animationId = match.rng.state.seed & 1
+    ? SOCKS_LEFT_ANIMATION
+    : SOCKS_RIGHT_ANIMATION;
+  const players = match.players.map((current) => {
+    const source = sourceById.get(current.id);
+    const visit = visitById.get(current.id);
+    if (source === undefined || visit === undefined) {
+      throw new Error(`Open-play socks selection lost ${current.id}'s source visit.`);
+    }
+    const sameTeamPossession = visit.possession.owner !== 0
+      && (visit.possession.owner < 12)
+        === (source.nativePlayerNumber < 12);
+    if (
+      busy.has(source.id)
+      // Keeper stand_action is already projected inside the team journey
+      // with the seed visible at that keeper's native traversal slot. A
+      // holder later in the team can advance the final tick seed, so using
+      // that final value here would retroactively invent a keeper action.
+      || source.role === "keeper"
+      || !sameTeamPossession
+      || source.animation.id !== STAND_ANIMATION
+      || current.action.action.value !== CSSOCCER_NATIVE_ACTIONS.STAND
+      || visit.distance
+        <= CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 50
+    ) return current;
+    return {
+      ...clone(current),
+      previousFacing: clone(source.facing),
+      facing: clone(source.facing),
+      intelligence: {
+        special: 0,
+        move: GET_UP_INTELLIGENCE_MOVE,
+        count: 1 + Math.trunc(1 / SOCKS_FRAME_STEP),
+      },
+      action: createCssoccerActionState({
+        tick: nextTick,
+        playerId: current.id,
+        actionId: CSSOCCER_NATIVE_ACTIONS.STAND,
+        facingX: source.facing.x,
+        facingY: source.facing.y,
+      }),
+      animation: {
+        status: "browser-current-state",
+        kind: "socks",
+        id: animationId,
+        sourceActionId: CSSOCCER_NATIVE_ACTIONS.STAND,
+        frame: F32(0),
+        frameStep: SOCKS_FRAME_STEP,
+        pending: null,
+        tick: nextTick,
+      },
+      liveMotion: {
+        ...clone(current.liveMotion),
+        kind: "socks",
+        goCount: 0,
+        goDisplacement: { x: F32(0), y: F32(0) },
+        directionMode: 2,
+        resetAnimationFrame: true,
+        sideStepDirection: null,
+        animationId,
+        animationFrameStep: SOCKS_FRAME_STEP,
       },
     };
   });
@@ -9319,12 +9931,25 @@ function stepCurrentBoundaryKickTeamContinuation(match, sourceTaker, nextTick) {
       },
     }];
   });
+  const restoredMatch = { ...match, players: restoredPlayers };
+  const restoredTaker = restoredPlayers.find(({ id }) => id === taker.id);
+  if (restoredTaker === undefined) {
+    throw new Error("Boundary kick continuation lost its restored taker.");
+  }
+  const closeDown = currentBoundaryCloseDownState(
+    restoredMatch,
+    restoredTaker,
+    visits,
+    nextTick,
+  );
   const continuedPlayers = stepCssoccerFreePlayTeamJourneyContinuation({
     controlledPlayerId: taker.id,
+    freeBallOutOfPlay: false,
     logicCount: NATIVE_CAPTURE_LOGIC_COUNT_ROOT + Math.max(0, nextTick - 2),
     nextTick,
     possessionKicks: [
       taker.id,
+      ...closeDown.blockedPlayerIds,
       ...currentSourceSocksBusyPlayerIds(restoredPlayers),
     ],
     players: restoredPlayers,
@@ -9347,7 +9972,7 @@ function stepCurrentBoundaryKickTeamContinuation(match, sourceTaker, nextTick) {
   }
   const players = continuedPlayers.map((player, index) => (
     visitIndex.get(player.id) > takerVisitIndex
-      ? player
+      ? closeDown.players.get(player.id) ?? player
       : restoredPlayers[index]
   ));
   return { ...match, players };
@@ -9356,7 +9981,7 @@ function stepCurrentBoundaryKickTeamContinuation(match, sourceTaker, nextTick) {
 function stepCurrentBoundaryRunupSupportMotion(match, takerId, nextTick) {
   const currentRates = currentTeamRates(match.players, match.clock.gameMinute);
   const ratesById = new Map(currentRates.map((rate) => [rate.id, rate]));
-  const motion = stepCssoccerKickoffPlayerMotion(match.kickoff.motion, {
+  let motion = stepCssoccerKickoffPlayerMotion(match.kickoff.motion, {
     teamRates: match.kickoff.motion.players.map((player) => {
       const rate = ratesById.get(player.id);
       if (rate === undefined) {
@@ -9367,7 +9992,7 @@ function stepCurrentBoundaryRunupSupportMotion(match, takerId, nextTick) {
   });
   const motionById = new Map(motion.players.map((player) => [player.id, player]));
   const socksBusyIds = new Set(currentSourceSocksBusyPlayerIds(match.players));
-  const players = match.players.map((player) => {
+  let players = match.players.map((player) => {
     if (player.id === takerId || socksBusyIds.has(player.id)) return player;
     const current = motionById.get(player.id);
     if (current === undefined) {
@@ -9398,6 +10023,12 @@ function stepCurrentBoundaryRunupSupportMotion(match, takerId, nextTick) {
       ),
     };
   });
+  ({ players, motion } = applyCurrentPositioningSocksActions({
+    match,
+    motion,
+    nextTick,
+    players,
+  }));
   return {
     ...match,
     players,
@@ -9560,6 +10191,7 @@ function stepCurrentBoundaryKickActionTeamContinuation(
   const closeDown = currentBoundaryCloseDownState(match, taker, visits, nextTick);
   const continued = stepCssoccerFreePlayTeamJourneyContinuation({
     controlledPlayerId: taker.id,
+    freeBallOutOfPlay: false,
     logicCount: NATIVE_CAPTURE_LOGIC_COUNT_ROOT + Math.max(0, nextTick - 2),
     nextTick,
     possessionKicks: [
@@ -9607,8 +10239,13 @@ function stepCurrentBoundaryKickActionTeamContinuation(
       },
     );
     continuedMatch = applyOpenPlayOffsideRunbacks({
+      aiChallengePlayerIds: currentOpenPlayAiRoutePlayerIds(
+        challengeFrame.events,
+        nextTick,
+      ),
       command: challengeFrame.command,
       completedRunbackPlayerIds: [],
+      expiredInterceptPlayerIds: [],
       logicCount: NATIVE_CAPTURE_LOGIC_COUNT_ROOT + Math.max(0, nextTick - 2),
       match: continuedMatch,
       nextTick,
@@ -9757,6 +10394,9 @@ function stepCurrentCloseDownPlayer({
   if (!Number.isSafeInteger(teamRate)) {
     throw new Error(`Boundary close-down lost current rate for ${player.id}.`);
   }
+  const terminalRunClearsFreshIdea = fresh
+    && player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+    && player.liveMotion?.goCount <= 1;
   const target = {
     x: F32(ballPosition.x - player.position.x),
     y: F32(ballPosition.y - player.position.y),
@@ -9780,8 +10420,8 @@ function stepCurrentCloseDownPlayer({
     target: { x: ballPosition.x, y: ballPosition.y, z: F32(0) },
     intelligence: {
       special: 0,
-      move: CLOSE_DOWN_INTELLIGENCE_MOVE,
-      count,
+      move: terminalRunClearsFreshIdea ? 0 : CLOSE_DOWN_INTELLIGENCE_MOVE,
+      count: terminalRunClearsFreshIdea ? 0 : count,
     },
     action: createCssoccerActionState({
       tick: nextTick,
@@ -10623,16 +11263,18 @@ function stepOpenPlayLooseBallContacts(
         .map(({ id, value }) => [id, value]))
     : new Map();
   const releaseZones = releasesHeldKick
-    ? stepCssoccerZoneState(createCssoccerZoneState(), {
-        ballPosition: sourceHeldKickZoneBallPosition(
-          match.players,
-          match.possession.owner,
-        ) ?? sourceAiBall.position,
-        ballOutOfPlay: 0,
-        matchMode: 0,
-        ballInHands: match.possession.inHands === 0 ? 0 : 1,
-        possessionPlayer: match.possession.owner,
-      })
+    ? match.ball.ball.outOfPlay !== 0
+      ? match.kickoff.zoning
+      : stepCssoccerZoneState(createCssoccerZoneState(), {
+          ballPosition: sourceHeldKickZoneBallPosition(
+            match.players,
+            match.possession.owner,
+          ) ?? sourceAiBall.position,
+          ballOutOfPlay: 0,
+          matchMode: 0,
+          ballInHands: match.possession.inHands === 0 ? 0 : 1,
+          possessionPlayer: match.possession.owner,
+        })
     : null;
   const visitedNativePlayers = new Set();
   for (const nativePlayerNumber of [...firstTeam, ...secondTeam]) {
@@ -10973,12 +11615,18 @@ function stepOpenPlayLooseBallContacts(
         && verticalDistance <= contactRange
       ) {
         possession = collectPossession(possession, nativePlayerNumber);
+        const footControl = controlIntercept.actionIndex === 1;
         ball = createBallMatchState({
           ...clone(ball),
-          limbo: createBallLimbo({
-            player: nativePlayerNumber,
-            contact: F32(1 - contact.animationFrameStep),
-          }),
+          // BALLINT.CPP keeps MC_TRAPL/MC_TRAPR at the intercept cadence and
+          // does not bind foot controls to ball_limbo. Chest/down-head
+          // controls switch to their normal animation cadence and do.
+          limbo: footControl
+            ? { active: 0, player: 0, contact: F32(0) }
+            : createBallLimbo({
+                player: nativePlayerNumber,
+                contact: F32(1 - contact.animationFrameStep),
+              }),
           ball: {
             ...clone(ball.ball),
             position: clone(contact.position),
@@ -11006,6 +11654,9 @@ function stepOpenPlayLooseBallContacts(
           projection: contact,
           contactFrameStep: player.animation.frameStep,
           contactTick: ball.ball.tick,
+          frameStep: footControl
+            ? player.animation.frameStep
+            : contact.animationFrameStep,
           sourcePrediction: {
             position: clone(contact.position),
             displacement: {
@@ -11028,10 +11679,7 @@ function stepOpenPlayLooseBallContacts(
     if (
       !collectedControl
       && !justThrown
-      // ball_limbo suppresses process_ball, not the owner's BALLINT.CPP
-      // ball_interact visit. A CONTROL_ACT collector therefore continues to
-      // call hold_ball on the ticks between contact and completion.
-      && (!animationBound || possession.owner === nativePlayerNumber)
+      && !animationBound
       && !firstTimeStrikeBusy
       &&
       possession.inHands === 0
@@ -11200,6 +11848,9 @@ function stepOpenPlayLooseBallContacts(
         ball: {
           ...clone(ball.ball),
           position: clone(completion.position),
+          // control_action installs STAND before its second hold_ball call;
+          // init_stand_act has already cleared go_txdis/go_tydis.
+          displacement: { x: F32(0), y: F32(0), z: F32(0) },
         },
       });
       controlCompletions.set(player.id, {
@@ -11243,6 +11894,10 @@ function stepOpenPlayLooseBallContacts(
         lastTouch: possession.lastTouch,
         inHands: possession.inHands,
       },
+      // override/offside_rule reads the mutable global seed after this
+      // player's ball_interact slot. Symbol metadata keeps that source value
+      // beside the visit without widening the reducer's strict public frame.
+      [SOURCE_OFFSIDE_VISIT_SEED]: rng.seed,
     });
     const releasePlayer = releaseByNativePlayer.get(nativePlayerNumber);
     if (
@@ -11278,7 +11933,10 @@ function stepOpenPlayLooseBallContacts(
         teamRate,
         targetOverride: null,
         zoning: {
-          analogue: true,
+          // pitch_bounds suppresses get_ball_zone for the whole countdown.
+          // A kick released during that window retains the last in-pitch
+          // discrete zone and disables analogue interpolation.
+          analogue: match.ball.ball.outOfPlay === 0,
           ballZone: zone.ballZone,
           zoneCenter: zone.zoneCenter,
           teamInPossession: possession.lastTouch !== 0 && (
@@ -11314,7 +11972,7 @@ function stepOpenPlayLooseBallContacts(
       puntStandUpdates.set(player.id, updated);
     }
   }
-  const players = kickReleases.size === 0
+  const releasedPlayers = kickReleases.size === 0
     && controlContacts.size === 0
     && controlCompletions.size === 0
     && controlTweens.size === 0
@@ -11371,17 +12029,17 @@ function stepOpenPlayLooseBallContacts(
             ...clone(player),
             animation: {
               ...clone(player.animation),
-              frameStep: contact.animationFrameStep,
+              frameStep: controlContact.frameStep,
             },
             liveMotion: {
               ...clone(player.liveMotion),
-              animationFrameStep: contact.animationFrameStep,
+              animationFrameStep: controlContact.frameStep,
             },
             liveControlIntercept: {
               ...clone(player.liveControlIntercept),
               contactFrameStep: controlContact.contactFrameStep,
               contactTick: controlContact.contactTick,
-              frameStep: contact.animationFrameStep,
+              frameStep: controlContact.frameStep,
               sourcePrediction: clone(controlContact.sourcePrediction),
             },
           };
@@ -11419,6 +12077,20 @@ function stepOpenPlayLooseBallContacts(
             releaseBall: clone(released.ball),
           },
         };
+      });
+  const players = kickReleases.size === 0
+    ? releasedPlayers
+    : releasedPlayers.map((player) => {
+        // pass_ball, punt_ball, and shoot_ball all clear receiver_a and
+        // receiver_b before publishing any replacement pass receiver.
+        if (
+          player.passReceiverIntercept !== true
+          && player.passReleaseTick === undefined
+        ) return player;
+        const cleared = clone(player);
+        delete cleared.passReceiverIntercept;
+        delete cleared.passReleaseTick;
+        return cleared;
       });
   return {
     match: {
@@ -11535,130 +12207,126 @@ function applyOpenPlayCollectedControlHandoff({
   visits,
 }) {
   if (contacted.possession.owner === 0) return contacted;
-  const collected = visits.findLast((visit) => (
-    visit.interaction === "collect"
-    && visit.nativePlayerNumber === contacted.possession.owner
-  ));
-  if (collected === undefined) return contacted;
-  const collector = contacted.players.find(({ id }) => id === collected.playerId);
-  if (collector === undefined) {
-    throw new Error("Collected-ball control handoff lost its source player visit.");
-  }
+  const collections = visits
+    .map((visit, index) => ({ visit, index }))
+    .filter(({ visit }) => visit.interaction === "collect");
+  if (collections.length === 0) return contacted;
   let activePlayerId = contacted.control.activePlayerId;
-  if (
-    collector.nativeTeamSlot === contacted.control.nativeTeamSlot
-    && collector.role !== "keeper"
-    && collector.active
-  ) {
-    activePlayerId = collector.id;
-  } else if (collector.nativeTeamSlot !== contacted.control.nativeTeamSlot) {
-    const current = contacted.players.find(({ id }) => id === activePlayerId);
-    const currentDistance = current === undefined
-      ? Number.POSITIVE_INFINITY
-      : playerDistanceFrame?.get(current.id);
-    if (!Number.isFinite(currentDistance)) {
-      throw new Error("Collected-ball opponent reselect lost the source player distance.");
+  for (const { visit: collected, index: collectorVisitIndex } of collections) {
+    const collector = contacted.players.find(({ id }) => id === collected.playerId);
+    if (collector === undefined) {
+      throw new Error("Collected-ball control handoff lost its source player visit.");
     }
-    if (currentDistance >= NATIVE_SELECTION_CIRCLE) {
-      const collectorVisitIndex = visits.findLastIndex((visit) => (
-        visit.interaction === "collect"
-        && visit.nativePlayerNumber === contacted.possession.owner
-      ));
-      const sourceInterceptor = sourcePossession.owner === 0
-        ? sourcePlayers.find((player) => {
+    let nextActivePlayerId = activePlayerId;
+    if (
+      collector.nativeTeamSlot === contacted.control.nativeTeamSlot
+      && collector.role !== "keeper"
+      && collector.active
+    ) {
+      nextActivePlayerId = collector.id;
+    } else if (collector.nativeTeamSlot !== contacted.control.nativeTeamSlot) {
+      const current = contacted.players.find(({ id }) => id === activePlayerId);
+      const currentDistance = current === undefined
+        ? Number.POSITIVE_INFINITY
+        : playerDistanceFrame?.get(current.id);
+      if (!Number.isFinite(currentDistance)) {
+        throw new Error("Collected-ball opponent reselect lost the source player distance.");
+      }
+      if (currentDistance >= NATIVE_SELECTION_CIRCLE) {
+        const sourceInterceptor = sourcePossession.owner === 0
+          ? sourcePlayers.find((player) => {
+              if (
+                player.nativeTeamSlot !== contacted.control.nativeTeamSlot
+                || player.intelligence.move !== 1
+                || player.intelligence.count <= 0
+                || player.action.action.value === FALL_ACTION
+                || !player.active
+              ) return false;
+              const visitIndex = visits.findIndex(({ playerId }) => (
+                playerId === player.id
+              ));
+              return visitIndex > collectorVisitIndex
+                || (
+                  visitIndex >= 0
+                  && visitIndex < collectorVisitIndex
+                  && player.intelligence.count > 1
+                );
+            })
+          : undefined;
+        // USER.CPP auto_select_b/auto_select_a gives the live global
+        // interceptor slot priority over near_path. A collection can rebuild
+        // near_path while a later source-order interceptor still owns that
+        // slot, in which case the current controlled player remains selected.
+        const mainGuy = sourceInterceptor ?? selectFreeBallNearPathPlayer(
+          contacted,
+          contacted.control.nativeTeamSlot,
+          command,
+        );
+        // auto_select_b/auto_select_a does not directly select near_path. It
+        // gives that player a synthetic distance of one inside the ordinary
+        // eligible-user scan. If near_path is the keeper (excluded outside a
+        // goal kick), the scan falls back to the smallest tm_dist outfielder.
+        // Those tm_dist values were published by player_distances before this
+        // collect_ball -> reselect call.
+        let candidate = mainGuy?.role !== "keeper" && mainGuy?.active
+          ? mainGuy
+          : null;
+        if (postGoalBallCountdown) {
+          candidate = null;
+          let lowest = 2000;
+          for (const player of contacted.players
+            .filter(({ nativeTeamSlot }) => (
+              nativeTeamSlot === contacted.control.nativeTeamSlot
+            ))
+            .slice()
+            .sort((left, right) => (
+              left.nativePlayerNumber - right.nativePlayerNumber
+            ))) {
             if (
-              player.nativeTeamSlot !== contacted.control.nativeTeamSlot
-              || player.intelligence.move !== 1
-              || player.intelligence.count <= 0
+              !player.active
+              || player.role === "keeper"
               || player.action.action.value === FALL_ACTION
-              || !player.active
-            ) return false;
-            const visitIndex = visits.findIndex(({ playerId }) => (
-              playerId === player.id
-            ));
-            return visitIndex > collectorVisitIndex
-              || (
-                visitIndex >= 0
-                && visitIndex < collectorVisitIndex
-                && player.intelligence.count > 1
-              );
-          })
-        : undefined;
-      // USER.CPP auto_select_b/auto_select_a gives the live global
-      // interceptor slot priority over near_path. A collection can rebuild
-      // near_path while a later source-order interceptor still owns that
-      // slot, in which case the current controlled player remains selected.
-      const mainGuy = sourceInterceptor ?? selectFreeBallNearPathPlayer(
-        contacted,
-        contacted.control.nativeTeamSlot,
-        command,
-      );
-      // auto_select_b/auto_select_a does not directly select near_path. It
-      // gives that player a synthetic distance of one inside the ordinary
-      // eligible-user scan. If near_path is the keeper (excluded outside a
-      // goal kick), the scan falls back to the smallest tm_dist outfielder.
-      // Those tm_dist values were published by player_distances before this
-      // collect_ball -> reselect call.
-      let candidate = mainGuy?.role !== "keeper" && mainGuy?.active
-        ? mainGuy
-        : null;
-      if (postGoalBallCountdown) {
-        candidate = null;
-        let lowest = 2000;
-        for (const player of contacted.players
-          .filter(({ nativeTeamSlot }) => (
-            nativeTeamSlot === contacted.control.nativeTeamSlot
-          ))
-          .slice()
-          .sort((left, right) => (
-            left.nativePlayerNumber - right.nativePlayerNumber
-          ))) {
-          if (
-            !player.active
-            || player.role === "keeper"
-            || player.action.action.value === FALL_ACTION
-          ) continue;
-          const distance = player.id === mainGuy?.id
-            ? 1
-            : playerDistanceFrame.get(player.id);
-          if (!Number.isFinite(distance)) {
-            throw new Error("Collected-ball auto-select lost source tm_dist.");
-          }
-          if (distance < lowest) {
-            candidate = player;
-            lowest = distance;
+            ) continue;
+            const distance = player.id === mainGuy?.id
+              ? 1
+              : playerDistanceFrame.get(player.id);
+            if (!Number.isFinite(distance)) {
+              throw new Error("Collected-ball auto-select lost source tm_dist.");
+            }
+            if (distance < lowest) {
+              candidate = player;
+              lowest = distance;
+            }
           }
         }
-      }
-      if (candidate !== null) {
-        activePlayerId = candidate.id;
+        if (candidate !== null) {
+          nextActivePlayerId = candidate.id;
+        }
       }
     }
+    if (nextActivePlayerId === activePlayerId) continue;
+    const activeVisitIndex = visits.findIndex(({ playerId }) => (
+      playerId === nextActivePlayerId
+    ));
+    if (activeVisitIndex < 0) {
+      throw new Error("Collected-ball control handoff lost native traversal identity.");
+    }
+    // BALLINT.CPP collect_ball calls USER.CPP reselect before the collector's
+    // go_team visit continues. Record each source-order control change rather
+    // than only the final collector: a later second collection cannot
+    // retroactively erase an earlier handoff before the old user's visit.
+    events.push({
+      type: "ball-collected-control-handoff",
+      tick: contacted.tick,
+      previousPlayerId: activePlayerId,
+      activePlayerId: nextActivePlayerId,
+      sourceVisitIndex: collectorVisitIndex,
+      sourceUserVisit: nextActivePlayerId === collector.id
+        || activeVisitIndex > collectorVisitIndex,
+    });
+    activePlayerId = nextActivePlayerId;
   }
   if (activePlayerId === contacted.control.activePlayerId) return contacted;
-
-  const collectorVisitIndex = visits.findIndex(({ playerId }) => (
-    playerId === collector.id
-  ));
-  const activeVisitIndex = visits.findIndex(({ playerId }) => (
-    playerId === activePlayerId
-  ));
-  if (collectorVisitIndex < 0 || activeVisitIndex < 0) {
-    throw new Error("Collected-ball control handoff lost native traversal identity.");
-  }
-
-  // BALLINT.CPP collect_ball calls USER.CPP reselect before the collector's
-  // go_team visit continues. auto_select either assigns the controlled-team
-  // collector or selects that user's new near_path player. A later native
-  // visit must therefore execute as the local user during this same tick.
-  events.push({
-    type: "ball-collected-control-handoff",
-    tick: contacted.tick,
-    previousPlayerId: contacted.control.activePlayerId,
-    activePlayerId,
-    sourceUserVisit: activePlayerId === collector.id
-      || activeVisitIndex > collectorVisitIndex,
-  });
   return {
     ...contacted,
     control: { ...contacted.control, activePlayerId },
@@ -11906,11 +12574,15 @@ function sourceHeldKickZoneBallPosition(players, possessionOwner) {
 }
 
 function projectSourcePossessionDecisionPlayers({
+  command,
   extraBusyPlayerIds,
   logicCount,
   match,
+  nearPath,
   nextTick,
   postGoalBallCountdown,
+  sourceActivePlayerId,
+  sourcePlayers,
   sourcePossessionOwner,
   supportRun,
   takerId,
@@ -11946,7 +12618,12 @@ function projectSourcePossessionDecisionPlayers({
       && holder.liveMotion.kind === "run-with-ball"
     );
   });
-  if (decisionVisit === undefined) return match.players;
+  if (decisionVisit === undefined) {
+    return {
+      decisionPlayers: match.players,
+      supportPlayers: match.players,
+    };
+  }
 
   const holder = match.players.find(({ id }) => id === decisionVisit.playerId);
   if (holder === undefined) {
@@ -12005,8 +12682,9 @@ function projectSourcePossessionDecisionPlayers({
         match.players,
         sourcePossessionOwner,
       ) ?? null;
-  const projectedPlayers = stepCssoccerFreePlayTeamJourneyContinuation({
+  let projectedPlayers = stepCssoccerFreePlayTeamJourneyContinuation({
     controlledPlayerId: match.control.activePlayerId,
+    freeBallOutOfPlay: false,
     logicCount,
     nextTick,
     players: match.players,
@@ -12027,13 +12705,47 @@ function projectSourcePossessionDecisionPlayers({
     zoneBallPosition,
     zoneState: match.kickoff.zoning,
   });
+  const sourceActiveVisitIndex = sourceActivePlayerId === null
+    ? -1
+    : visits.findIndex(({ playerId }) => playerId === sourceActivePlayerId);
+  const sourceActiveVisit = sourceActiveVisitIndex < 0
+    ? undefined
+    : visits[sourceActiveVisitIndex];
+  if (
+    sourceActiveVisitIndex >= 0
+    && sourceActiveVisitIndex < holderVisitIndex
+    && sourceActiveVisit.possession.owner === 0
+  ) {
+    // Team B can visit the selected loose-ball interceptor before a later
+    // Team A collector reaches got_ball/pass_decide. The collector's
+    // get_opp_dir_tab lookup therefore sees the already-moved user, not the
+    // loop-entry position that the generic team projection intentionally
+    // leaves untouched.
+    projectedPlayers = stepActiveFreeBallJourney(
+      match,
+      projectedPlayers,
+      nextTick,
+      command,
+      visits,
+      nearPath,
+      sourcePlayers,
+      sourceActiveVisit.possession,
+      sourceActivePlayerId,
+    );
+  }
   const visitedBeforeHolder = new Set(
     visits.slice(0, holderVisitIndex).map(({ playerId }) => playerId),
   );
   const projectedById = new Map(projectedPlayers.map((player) => [player.id, player]));
-  return match.players.map((player) => (
+  const decisionPlayers = match.players.map((player) => (
     visitedBeforeHolder.has(player.id) ? projectedById.get(player.id) : player
   ));
+  const supportPlayers = match.players.map((player) => (
+    visitedBeforeHolder.has(player.id) || player.id === holder.id
+      ? projectedById.get(player.id)
+      : player
+  ));
+  return { decisionPlayers, supportPlayers };
 }
 
 function resolveOpenPlayCollectedPossession({
@@ -12592,6 +13304,11 @@ function stepReleasedPassReceiverJourney({
   ) {
     throw new TypeError("Pass receiver first-time search requires source possession in 0..22.");
   }
+  if (match.ball.ball.outOfPlay !== 0) {
+    // INTELL.CPP free_ball keeps receiver_a/receiver_b pinned, but does not
+    // enter go_to_path until BALL.CPP's out-of-play countdown reaches zero.
+    return { players: match.players, rng: match.rng.state };
+  }
   const traversal = nativeContactTraversalOrder(match.tick & 1);
   const releasedPasser = sourcePlayers.find((player) => {
     const pass = readSourceReleasedPass(player);
@@ -12642,7 +13359,7 @@ function stepReleasedPassReceiverJourney({
   if (holderVisit === undefined) {
     throw new Error("Pass receiver first-time search lost its source visit.");
   }
-  if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+  if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
     console.error("tick-1416-receiver-entry", JSON.stringify({
       releasedPasser: releasedPasser?.id ?? null,
       releaseTick: releasedPass?.release.tick ?? pinnedReceiver?.passReleaseTick,
@@ -12726,7 +13443,9 @@ function stepReleasedPassReceiverJourney({
     const exactRunCount = receiver.liveMotion
       .sourceInterceptRunCountExact === true;
     const terminalGoCount = exactRunCount ? 1 : 2;
-    const receiverStep = continued !== null
+    const receiverStep = receiver.liveControlIntercept !== undefined
+      ? continued
+      : continued !== null
       && receiver.liveMotion.goCount === terminalGoCount
       ? settleExpiredPassReceiverIntercept(continued, nextTick)
       : continued;
@@ -12763,7 +13482,11 @@ function stepReleasedPassReceiverJourney({
     userControlIndex: 1,
     userControlled: false,
   });
+  const releasedBeforeReceiverThisVisit = releasedPass?.release.tick === nextTick
+    && traversal.indexOf(releasedPasser.nativePlayerNumber)
+      < traversal.indexOf(receiver.nativePlayerNumber);
   const sourceOrderedPlanFacing = plan.player === null
+    || releasedBeforeReceiverThisVisit
     || match.possession.owner === 0
     || holderVisit.possession.owner !== 0
     ? null
@@ -12783,9 +13506,9 @@ function stepReleasedPassReceiverJourney({
     : sourceOrderedPlanFacing !== null
       ? {
           ...plan.player,
-          // This receiver's RUN_ACT already executed before a later player
-          // collected the ball. go_to_path may install the next intercept,
-          // but its new run cannot move or turn until the following visit.
+          // With no same-visit release before this slot, the receiver's
+          // RUN_ACT already executed before a later player collected the
+          // ball. The replacement route begins on the following visit.
           previousPosition: clone(sourceOrderedReceiver.previousPosition),
           previousFacing: clone(sourceOrderedReceiver.previousFacing),
           position: clone(sourceOrderedReceiver.position),
@@ -12801,7 +13524,7 @@ function stepReleasedPassReceiverJourney({
           animation: clone(sourceOrderedReceiver.animation),
         }
       : plan.player;
-  if (process.env.CSSOCCER_DEBUG_TICK === String(nextTick)) {
+  if (CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)) {
     console.error("tick-1416-receiver-plan", JSON.stringify({
       player: plan.player === null ? null : {
         position: plan.player.position,
@@ -12903,6 +13626,7 @@ function stepReleasedPassReceiverJourney({
       player: receiver,
       result: firstTimeStrike.result,
       teamRate: firstTimeStrike.teamRate,
+      visit: holderVisit,
       wantedReceiver:
         firstTimeWantPassNativePlayer === firstTimeStrike.result.targetNativePlayer,
     });
@@ -13009,6 +13733,7 @@ function stepOpponentFreeBallJourney({
   match,
   nearPath,
   nextTick,
+  sourceReleaseNativePlayer = null,
   sourcePredictionState,
   skipPlayerIds,
   sourcePlayers,
@@ -13019,7 +13744,10 @@ function stepOpponentFreeBallJourney({
   if (
     match.possession.owner !== 0
     || nearPath === null
+    || match.ball.ball.outOfPlay !== 0
   ) {
+    // free_ball suppresses every ordinary near-path/interceptor visit while
+    // BALL.CPP is still counting an out-of-play trajectory down.
     return { players: match.players, rng: match.rng.state };
   }
   const sourcePlayer = sourcePlayers.find(({ id }) => id === nearPath.id);
@@ -13031,11 +13759,13 @@ function stepOpponentFreeBallJourney({
     const currentPossessor = match.players.find(
       ({ nativePlayerNumber }) => nativePlayerNumber === sourcePossessionOwner,
     );
-    const releaseTick = currentPossessor?.livePass?.release?.tick
+    const retainedReleaseTick = currentPossessor?.livePass?.release?.tick
       ?? currentPossessor?.liveShot?.release?.tick
       ?? null;
-    const releasedBeforeSourceVisit = releaseTick === nextTick
-      && traversal.indexOf(sourcePossessionOwner)
+    const releaseNativePlayer = sourceReleaseNativePlayer
+      ?? (retainedReleaseTick === nextTick ? sourcePossessionOwner : null);
+    const releasedBeforeSourceVisit = releaseNativePlayer !== null
+      && traversal.indexOf(releaseNativePlayer)
         < traversal.indexOf(sourcePlayer.nativePlayerNumber);
     // go_team snapshots possession before visiting either team. When the
     // source holder releases during the first team visit, a later opponent
@@ -13077,11 +13807,25 @@ function stepOpponentFreeBallJourney({
         player.id !== sourcePlayer.id
         && player.nativeTeamSlot === sourcePlayer.nativeTeamSlot
         && (
-          player.liveFirstTimeIntercept !== undefined
-          || player.liveControlIntercept !== undefined
+          (
+            (
+              player.liveFirstTimeIntercept !== undefined
+              || player.liveControlIntercept !== undefined
+            )
+            && (
+              traversal.indexOf(player.nativePlayerNumber)
+                > traversal.indexOf(sourcePlayer.nativePlayerNumber)
+              || (() => {
+                const current = match.players.find(({ id }) => id === player.id);
+                return current?.liveFirstTimeIntercept !== undefined
+                  || current?.liveControlIntercept !== undefined;
+              })()
+            )
+          )
           || (
             player.intelligence.move === 1
             && player.intelligence.count > 0
+            && Number.isSafeInteger(player.sourceGlobalInterceptorTick)
             && (
               player.intelligence.count > 1
               || traversal.indexOf(player.nativePlayerNumber)
@@ -13262,6 +14006,7 @@ function stepOpponentFreeBallJourney({
       player: sourcePlayer,
       result: firstTimeStrike.result,
       teamRate: firstTimeStrike.teamRate,
+      visit: sourceVisit,
       wantedReceiver:
         firstTimeWantPassNativePlayer === firstTimeStrike.result.targetNativePlayer,
     });
@@ -13392,6 +14137,7 @@ function materializeSourceFirstTimeShot({
   player,
   result,
   teamRate,
+  visit,
   wantedReceiver = false,
 }) {
   if (kind !== "shot" && kind !== "header") {
@@ -13415,7 +14161,32 @@ function materializeSourceFirstTimeShot({
     travel: candidate.travel,
     userControlIndex: 0,
   });
-  return {
+  const firstTime = {
+    phase: "run",
+    phaseTick: nextTick,
+    kind,
+    actionIndex: candidate.actionIndex,
+    animationId: candidate.animationId,
+    contact: candidate.contact,
+    contactOffset: clone(candidate.contactOffset),
+    standardFrameStep: candidate.standardFrameStep,
+    strikeTime: candidate.strikeTime,
+    waitTicks: candidate.waitTicks,
+    mustFace: clone(candidate.travel.face),
+    mustFaceTicks: candidate.travel.mustFaceTicks,
+    ...(kind === "shot"
+      ? {
+          shotPassType: result.passType,
+          targetKeeperNativePlayer: player.nativePlayerNumber < 12 ? 12 : 1,
+        }
+      : {
+          passType: result.passType,
+          targetNativePlayer: result.targetNativePlayer,
+          wantedReceiver,
+        }),
+    ballState: match.possession.lastTouch,
+  };
+  const materialized = {
     ...planned,
     animation: {
       ...clone(planned.animation),
@@ -13432,32 +14203,25 @@ function materializeSourceFirstTimeShot({
       ...clone(planned.liveMotion),
       sourceAnimationVisitComplete: true,
     },
-    liveFirstTimeIntercept: {
-      phase: "run",
-      phaseTick: nextTick,
-      kind,
-      actionIndex: candidate.actionIndex,
-      animationId: candidate.animationId,
-      contact: candidate.contact,
-      contactOffset: clone(candidate.contactOffset),
-      standardFrameStep: candidate.standardFrameStep,
-      strikeTime: candidate.strikeTime,
-      waitTicks: candidate.waitTicks,
-      mustFace: clone(candidate.travel.face),
-      mustFaceTicks: candidate.travel.mustFaceTicks,
-      ...(kind === "shot"
-        ? {
-            shotPassType: result.passType,
-            targetKeeperNativePlayer: player.nativePlayerNumber < 12 ? 12 : 1,
-          }
-        : {
-            passType: result.passType,
-            targetNativePlayer: result.targetNativePlayer,
-            wantedReceiver,
-          }),
-      ballState: match.possession.lastTouch,
-    },
+    liveFirstTimeIntercept: firstTime,
   };
+  if (materialized.liveMotion.goCount > 0) return materialized;
+  // intercept installs the first-time RUN before this visit reaches
+  // run_action. A one-step journey therefore reaches go_cnt zero and enters
+  // must-face/wait/strike now; retaining a zero-count RUN until the next tick
+  // invents a source state that never exists.
+  return completeSourceFirstTimeRunArrival({
+    continued: materialized,
+    entryAnimation: {
+      id: materialized.animation.id,
+      frame: materialized.animation.frame,
+    },
+    firstTime,
+    match,
+    nextTick,
+    player,
+    visit,
+  });
 }
 
 function settleCancelledSourceFirstTimeChip({
@@ -14251,6 +15015,7 @@ function projectSourceFirstTeamBusyIntercepts(
   nextTick,
   visits,
   sourcePossession = match.possession,
+  controlledPlayerId = match.control.activePlayerId,
 ) {
   if (sourcePossession.inHands !== 0) {
     return { playerIds: [], players: match.players };
@@ -14281,7 +15046,7 @@ function projectSourceFirstTeamBusyIntercepts(
         || playerVisitIndex >= collectorVisitIndex
         || visit.possession.owner !== 0
         || player.nativeTeamSlot !== firstTeamSlot
-        || player.id === match.control.activePlayerId
+        || player.id === controlledPlayerId
         || player.liveFirstTimeIntercept !== undefined
         || player.intelligence.move !== 1
         || player.intelligence.count <= 1
@@ -14329,6 +15094,9 @@ function projectSourceFirstTeamBusyIntercepts(
     const scheduledIntercept = Number.isSafeInteger(
       player.liveMotion?.scheduledInterceptOwner,
     );
+    const globalIntercept = Number.isSafeInteger(
+      player.sourceGlobalInterceptorTick,
+    );
     const runningIntercept = player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
       && player.liveMotion?.kind === "run";
     const stoppedIntercept = player.action.action.value === CSSOCCER_NATIVE_ACTIONS.STOP
@@ -14338,9 +15106,10 @@ function projectSourceFirstTeamBusyIntercepts(
       || (
         player.nativeTeamSlot === sourceOwnerTeamSlot
         && !scheduledIntercept
+        && !globalIntercept
       )
       || player.nativePlayerNumber === match.possession.owner
-      || player.id === match.control.activePlayerId
+      || player.id === controlledPlayerId
       || player.liveFirstTimeIntercept !== undefined
       || player.intelligence.move !== 1
       || player.intelligence.count <= 0
@@ -14372,6 +15141,10 @@ function projectSourceFirstTeamBusyIntercepts(
         // I_INTERCEPT run_action consumes its final go_forward. Leave this
         // player available to the ordinary journey projection below.
         facing: clone(player.facing),
+        // The terminal run falls straight into find_zonal_target. There is
+        // no intervening init_stand_anim, and init_run_anim must still see an
+        // active MC_BARGE so its tm_barge guard can preserve that clip.
+        animation: clone(player.animation),
         intelligence: { special: 0, move: 0, count: 0 },
       };
     }
@@ -14638,7 +15411,7 @@ function projectSourceBusyFirstTimeChipIntercepts(match, nextTick, visits) {
           ...clone(firstTime),
           waitTicks: 0,
         },
-      }, match, nextTick);
+      }, match, nextTick, visit);
     }
     if (firstTime.phase === "must-face") {
       if (
@@ -14650,7 +15423,7 @@ function projectSourceBusyFirstTimeChipIntercepts(match, nextTick, visits) {
       }
       const goCount = player.liveMotion.goCount - 1;
       if (goCount <= 0) {
-        return beginSourceFirstTimeChipStrike(player, match, nextTick);
+        return beginSourceFirstTimeChipStrike(player, match, nextTick, visit);
       }
       const facing = turnSourceFacing({
         facing: player.facing,
@@ -14697,95 +15470,175 @@ function projectSourceBusyFirstTimeChipIntercepts(match, nextTick, visits) {
     if (!Number.isSafeInteger(teamRate)) {
       throw new Error(`First-time strike lost the current rate for ${player.id}.`);
     }
-    const continued = moveFreeBallInterceptor(player, {
-      ballState: player.ballState,
-      goCount: Math.max(0, player.liveMotion.goCount - 1),
-      intelligenceCount: player.intelligence.count - 1,
-      nextTick,
-      special: 1,
-      target: player.liveMotion.target,
-      teamRate,
-      userControlIndex: 0,
-    });
-    if (continued.liveMotion.goCount > 0) return continued;
-    if (["header", "shot"].includes(firstTime.kind)) {
-      if (firstTime.mustFaceTicks > 0) {
-        const facing = turnSourceFacing({
-          // run_action switches dir_mode from movement to must-face before
-          // this visit's process_dir, so the terminal run tick turns from the
-          // entry facing rather than first turning toward the reached target.
-          facing: player.facing,
-          target: firstTime.mustFace,
-          maxTurnRadians: projectCssoccerMotionSourceProfile(
-            CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
-            { teamRate: continued.liveMotion.teamRate },
-          ).maxTurnRadians,
-        }).facing;
-        return {
-          ...continued,
-          facing,
-          action: createCssoccerActionState({
-            tick: nextTick,
-            playerId: player.id,
-            actionId: CSSOCCER_NATIVE_ACTIONS.RUN,
-            facingX: facing.x,
-            facingY: facing.y,
-          }),
-          animation: {
-            status: "browser-current-state",
-            kind: "stand",
-            id: STAND_ANIMATION,
-            sourceActionId: CSSOCCER_NATIVE_ACTIONS.RUN,
-            frame: F32(0),
-            frameStep: STAND_FRAME_STEP,
-            pending: null,
-            tick: nextTick,
-          },
-          liveMotion: {
-            ...clone(continued.liveMotion),
-            kind: "first-time-must-face",
-            goCount: firstTime.mustFaceTicks,
-            directionMode: 6,
-            resetAnimationFrame: true,
-            animationId: STAND_ANIMATION,
-            animationFrameStep: STAND_FRAME_STEP,
-          },
-          liveFirstTimeIntercept: {
-            ...clone(firstTime),
-            phase: "must-face",
-            phaseTick: nextTick,
-          },
-        };
-      }
-      if (firstTime.waitTicks <= 0) {
-        const arrival = projectSourceFirstTimeArrival(
-          firstTime,
-          match,
-          continued.position,
-        );
-        if (arrival.freeTicks > 0) {
-          return materializeSourceFirstTimeWait(
-            player,
-            continued,
-            arrival,
-            nextTick,
-          );
-        }
-        return beginSourceFirstTimeChipStrike(continued, match, nextTick);
-      }
-      return materializeSourceFirstTimeWait(
-        player,
-        continued,
-        projectSourceFirstTimeArrival(
-          firstTime,
-          match,
-          continued.position,
-        ),
+    let continued;
+    if (player.liveMotion.goStop === true) {
+      const maxTurnRadians = projectCssoccerMotionSourceProfile(
+        CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+        { teamRate },
+      ).maxTurnRadians;
+      const startsMoving = sourceAngleCosine({
+        target: player.liveMotion.goDisplacement,
+        facing: player.facing,
+      }) >= Math.cos(maxTurnRadians);
+      const displacement = startsMoving
+        ? clone(player.liveMotion.goDisplacement)
+        : { x: F32(0), y: F32(0) };
+      const position = {
+        ...updateSourcePosition2d({
+          position: { x: player.position.x, y: player.position.y },
+          displacement,
+        }),
+        z: player.position.z,
+      };
+      const facing = turnSourceFacing({
+        facing: player.facing,
+        target: {
+          x: F32(player.liveMotion.target.x - position.x),
+          y: F32(player.liveMotion.target.y - position.y),
+        },
+        maxTurnRadians,
+      }).facing;
+      const liveMotion = {
+        ...clone(player.liveMotion),
+        kind: startsMoving ? "run" : "stand",
+        goStop: !startsMoving,
+        goCount: Math.max(0, player.liveMotion.goCount - 1),
+        resetAnimationFrame: startsMoving,
+        animationId: startsMoving ? RUN_ANIMATION : STAND_ANIMATION,
+        animationFrameStep: startsMoving ? null : STAND_FRAME_STEP,
+      };
+      // The initialization marker suppressed process_anims only on the visit
+      // that installed this route. This continuation must advance the retained
+      // stand clip, or reset RUN if go_forward clears go_stop.
+      delete liveMotion.sourceAnimationVisitComplete;
+      continued = {
+        ...clone(player),
+        previousPosition: clone(player.position),
+        previousFacing: clone(player.facing),
+        position,
+        velocity: { ...displacement, z: F32(0) },
+        facing,
+        intelligence: {
+          ...clone(player.intelligence),
+          count: player.intelligence.count - 1,
+        },
+        action: createCssoccerActionState({
+          tick: nextTick,
+          playerId: player.id,
+          actionId: CSSOCCER_NATIVE_ACTIONS.RUN,
+          facingX: facing.x,
+          facingY: facing.y,
+        }),
+        liveMotion,
+      };
+    } else {
+      continued = moveFreeBallInterceptor(player, {
+        ballState: player.ballState,
+        goCount: Math.max(0, player.liveMotion.goCount - 1),
+        intelligenceCount: player.intelligence.count - 1,
         nextTick,
-      );
+        special: 1,
+        target: player.liveMotion.target,
+        teamRate,
+        userControlIndex: 0,
+      });
+      // init_run_anim installed tm_fstep when go_to_path created this journey.
+      // run_action does not reinitialize the clip on continuation visits, so a
+      // later stamina-rate change must not alter the retained animation step.
+      continued.liveMotion.animationFrameStep = F32(player.animation.frameStep);
+    }
+    if (continued.liveMotion.goCount > 0) return continued;
+    return completeSourceFirstTimeRunArrival({
+      continued,
+      entryAnimation: {
+        id: player.animation.id,
+        frame: F32(player.animation.frame + player.animation.frameStep),
+      },
+      firstTime,
+      match,
+      nextTick,
+      player,
+      visit,
+    });
+  });
+  return { playerIds, players };
+}
+
+function completeSourceFirstTimeRunArrival({
+  continued,
+  entryAnimation,
+  firstTime,
+  match,
+  nextTick,
+  player,
+  visit,
+}) {
+  if (["header", "shot"].includes(firstTime.kind)) {
+    if (firstTime.mustFaceTicks > 0) {
+      const facing = turnSourceFacing({
+        // run_action switches dir_mode from movement to must-face before this
+        // visit's process_dir, so the terminal run tick turns from the entry
+        // facing rather than first turning toward the reached target.
+        facing: player.facing,
+        target: firstTime.mustFace,
+        maxTurnRadians: projectCssoccerMotionSourceProfile(
+          CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+          { teamRate: continued.liveMotion.teamRate },
+        ).maxTurnRadians,
+      }).facing;
+      return {
+        ...continued,
+        facing,
+        action: createCssoccerActionState({
+          tick: nextTick,
+          playerId: player.id,
+          actionId: CSSOCCER_NATIVE_ACTIONS.RUN,
+          facingX: facing.x,
+          facingY: facing.y,
+        }),
+        animation: {
+          status: "browser-current-state",
+          kind: "stand",
+          id: STAND_ANIMATION,
+          sourceActionId: CSSOCCER_NATIVE_ACTIONS.RUN,
+          frame: F32(0),
+          frameStep: STAND_FRAME_STEP,
+          pending: null,
+          tick: nextTick,
+        },
+        liveMotion: {
+          ...clone(continued.liveMotion),
+          kind: "first-time-must-face",
+          goCount: firstTime.mustFaceTicks,
+          directionMode: 6,
+          resetAnimationFrame: true,
+          animationId: STAND_ANIMATION,
+          animationFrameStep: STAND_FRAME_STEP,
+        },
+        liveFirstTimeIntercept: {
+          ...clone(firstTime),
+          phase: "must-face",
+          phaseTick: nextTick,
+        },
+      };
     }
     if (firstTime.waitTicks <= 0) {
-      return beginSourceFirstTimeChipStrike(continued, match, nextTick);
+      const arrival = projectSourceFirstTimeArrival(
+        firstTime,
+        match,
+        continued.position,
+        entryAnimation,
+      );
+      if (arrival.freeTicks > 0) {
+        return materializeSourceFirstTimeWait(
+          player,
+          continued,
+          arrival,
+          nextTick,
+          firstTime,
+        );
+      }
+      return beginSourceFirstTimeChipStrike(continued, match, nextTick, visit);
     }
     return materializeSourceFirstTimeWait(
       player,
@@ -14794,15 +15647,27 @@ function projectSourceBusyFirstTimeChipIntercepts(match, nextTick, visits) {
         firstTime,
         match,
         continued.position,
-        {
-          id: player.animation.id,
-          frame: F32(player.animation.frame + player.animation.frameStep),
-        },
+        entryAnimation,
       ),
       nextTick,
+      firstTime,
     );
-  });
-  return { playerIds, players };
+  }
+  if (firstTime.waitTicks <= 0) {
+    return beginSourceFirstTimeChipStrike(continued, match, nextTick, visit);
+  }
+  return materializeSourceFirstTimeWait(
+    player,
+    continued,
+    projectSourceFirstTimeArrival(
+      firstTime,
+      match,
+      continued.position,
+      entryAnimation,
+    ),
+    nextTick,
+    firstTime,
+  );
 }
 
 function projectSourceFirstTimeArrival(
@@ -14818,7 +15683,7 @@ function projectSourceFirstTimeArrival(
       : projectCssoccerFirstTimeShotArrival;
   return projector({
     ballState: match.ball,
-    ...(firstTime.kind === "chip"
+    ...(["chip", "shot"].includes(firstTime.kind)
       ? {
           entryAnimationFrame: entryAnimation.frame,
           entryAnimationId: entryAnimation.id,
@@ -14837,8 +15702,8 @@ function materializeSourceFirstTimeWait(
   continued,
   arrival,
   nextTick,
+  firstTime = player.liveFirstTimeIntercept,
 ) {
-  const firstTime = player.liveFirstTimeIntercept;
   const displacementMagnitude = sourceDistance2d(arrival.displacement);
   const sideStepDirection = displacementMagnitude > 0.5
     ? sourceSideStepDirection({
@@ -14924,7 +15789,7 @@ function materializeSourceFirstTimeWait(
   };
 }
 
-function beginSourceFirstTimeChipStrike(player, match, nextTick) {
+function beginSourceFirstTimeChipStrike(player, match, nextTick, visit) {
   const firstTime = player.liveFirstTimeIntercept;
   const arrival = ["chip", "header", "shot"].includes(firstTime.kind)
     ? projectSourceFirstTimeArrival(
@@ -14937,6 +15802,12 @@ function beginSourceFirstTimeChipStrike(player, match, nextTick) {
         },
       )
     : null;
+  if (arrival?.receiveValid === false) {
+    // init_first_time_act installs STRIKE_ACT provisionally, then abandons
+    // it through init_stand_act when the corrected contact point would need
+    // more than two source units per tick or misses vertically.
+    return cancelSourceFirstTimeChipIntercept(player, visit, match, nextTick);
+  }
   const animationId = arrival?.animationId ?? firstTime.animationId;
   const frameStep = arrival?.frameStep
     ?? F32(firstTime.contact / firstTime.strikeTime);
@@ -14996,6 +15867,7 @@ function beginSourceFirstTimeChipStrike(player, match, nextTick) {
 function cancelSourceFirstTimeChipIntercept(player, visit, match, nextTick) {
   const cancelled = clone(player);
   delete cancelled.liveFirstTimeIntercept;
+  delete cancelled.sourceGlobalInterceptorTick;
   const facing = turnSourceFacing({
     facing: player.facing,
     target: {
@@ -15206,6 +16078,8 @@ function projectSourceControlIntercepts(match, nextTick, { visits = null } = {})
   const visitByPlayerId = visits === null
     ? null
     : new Map(visits.map((visit) => [visit.playerId, visit]));
+  const rates = new Map(currentTeamRates(match.players, match.clock.gameMinute)
+    .map(({ id, value }) => [id, value]));
   const playerIds = [];
   const players = match.players.map((player) => {
     const control = player.liveControlIntercept;
@@ -15286,6 +16160,10 @@ function projectSourceControlIntercepts(match, nextTick, { visits = null } = {})
     if (control.phase !== "control") {
       throw new Error(`Unsupported live control phase for ${player.id}.`);
     }
+    const teamRate = rates.get(player.id);
+    if (!Number.isSafeInteger(teamRate)) {
+      throw new Error(`Control intercept lost current team rate for ${player.id}.`);
+    }
     const freeTime = Number.isFinite(control.freeTime)
       ? control.freeTime
       : control.freeTicks;
@@ -15337,7 +16215,7 @@ function projectSourceControlIntercepts(match, nextTick, { visits = null } = {})
         },
         maxTurnRadians: projectCssoccerMotionSourceProfile(
           CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
-          { teamRate: player.liveMotion.teamRate },
+          { teamRate },
         ).maxTurnRadians,
       }).facing;
       return {
@@ -15394,7 +16272,7 @@ function projectSourceControlIntercepts(match, nextTick, { visits = null } = {})
           },
           maxTurnRadians: projectCssoccerMotionSourceProfile(
             CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
-            { teamRate: player.liveMotion.teamRate },
+            { teamRate },
           ).maxTurnRadians,
         }).facing
       : clone(player.facing);
@@ -15507,32 +16385,66 @@ function beginFreeBallControlReceive(
   };
 }
 
+function sourceSupportRequestFacing(player) {
+  const offset = player.liveMotion?.wantPassOffset;
+  if (!Number.isFinite(offset?.x) || !Number.isFinite(offset?.y)) {
+    throw new Error(
+      `Busy support run lost source go_xoff/go_yoff for ${player.id}.`,
+    );
+  }
+  const distance = sourceDistance2d(offset);
+  return (
+    ((offset.x * player.facing.x) + (offset.y * player.facing.y)) / distance
+  ) > NATIVE_FACING_ANGLE;
+}
+
 function projectSourceBusySupportRuns(
   match,
   nextTick,
   sourceAiBall,
-  { resetPlayerId = null, visits = [] } = {},
+  {
+    controlledPlayerId = match.control.activePlayerId,
+    resetPlayerId = null,
+    supportRunPlayerId = null,
+    visits = [],
+  } = {},
 ) {
   const playerIds = [];
   const visitById = new Map(visits.map((visit) => [visit.playerId, visit]));
   const rates = new Map(currentTeamRates(match.players, match.clock.gameMinute)
     .map(({ id, value }) => [id, value]));
   const players = match.players.map((player) => {
-    const resetBeforeVisit = player.id === resetPlayerId;
+    const activeSupportRequest = player.intelligence.move
+      === RUN_ON_INTELLIGENCE_MOVE
+      && player.intelligence.count > 0
+      && player.liveMotion?.kind === "support-run";
+    const requestFacing = activeSupportRequest
+      ? sourceSupportRequestFacing(player)
+      : false;
+    const facingReset = activeSupportRequest
+      && player.liveMotion.wantPassFaced
+      && !requestFacing;
+    const resetBeforeVisit = player.id === resetPlayerId || facingReset;
     const residualResetSupportRun = player.intelligence.move === 0
       && player.intelligence.count === 0
       && player.liveMotion?.kind === "support-run"
       && player.liveMotion.goCount > 1;
     if (
       resetBeforeVisit
-      && match.possession.owner === player.nativePlayerNumber
+      && (
+        match.possession.owner === player.nativePlayerNumber
+        || player.id === supportRunPlayerId
+      )
     ) {
       // process_comments has already cleared I_RUN_ON. When that requester
-      // now owns the ball, got_ball replaces the stale support route in this
-      // visit; there is no old support-run step before the new dribble.
+      // now owns the ball, got_ball replaces the stale support route; when
+      // the same visit installs a new request, we_have_ball replaces it.
+      // Neither path executes an old support-run step first.
       return player;
     }
     if (
+      player.id === controlledPlayerId
+      ||
       (
         !resetBeforeVisit
         && !residualResetSupportRun
@@ -15632,6 +16544,7 @@ function projectSourceBusySupportRuns(
         )
           ? player.animation.frameStep
           : player.liveMotion.animationFrameStep,
+        wantPassFaced: player.liveMotion.wantPassFaced || requestFacing,
       },
     });
     return {
@@ -15685,8 +16598,8 @@ function projectSourceBusyFreeBallIntercepts(
   const players = match.players.map((player) => {
     const visit = visitById.get(player.id);
     if (
-      process.env.CSSOCCER_DEBUG_TICK === String(nextTick)
-      && process.env.CSSOCCER_DEBUG_PLAYER === player.id
+      CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)
+      && CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_PLAYER === player.id
     ) {
       console.error("busy-free-ball-candidate", JSON.stringify({
         finalPossessionOwner: match.possession.owner,
@@ -15812,6 +16725,10 @@ function projectSourceExpiringFreeBallIntercepts(
       || player.action.action.value !== CSSOCCER_NATIVE_ACTIONS.RUN
       || player.liveMotion?.kind !== "run"
       || (
+        visit.interaction === "collect"
+        && visit.possession.owner === player.nativePlayerNumber
+      )
+      || (
         player.liveContact !== undefined
         && player.liveContact.phase !== "barge"
       )
@@ -15857,7 +16774,19 @@ function projectSourceExpiringFreeBallIntercepts(
       // find_zonal_target then installs and executes the replacement journey.
       // process_dir turns once, toward that replacement target.
       facing: clone(player.facing),
+      // The terminal run_action does not call init_stand_act on this path:
+      // with int_cnt already reset it falls directly into find_zonal_target.
+      // Keep the entry clip so init_run_anim can apply its source rule that
+      // an active MC_BARGE/tm_barge pair is not replaced by MC_RUN.
+      animation: clone(player.animation),
       intelligence: { special: 0, move: 0, count: 0 },
+      liveMotion: {
+        ...finalInterceptStep.liveMotion,
+        // reset_ideas clamps an expiring I_INTERCEPT journey to one final
+        // run_action step. That step has now been consumed, regardless of
+        // the longer go_cnt carried by the old interception route.
+        goCount: 0,
+      },
     };
   });
   return { playerIds, replannedPlayerIds, players };
@@ -16084,15 +17013,19 @@ function projectSourceSecondTeamBusyIntercepts(
   sourcePossession = match.possession,
   visits = [],
   skipPlayerIds = [],
+  controlledPlayerId = match.control.activePlayerId,
 ) {
-  if (match.possession.owner === 0 || match.possession.inHands !== 0) {
+  if (match.possession.inHands !== 0) {
     return { playerIds: [], players: match.players };
   }
   if (sourcePossession.owner === 0 || sourcePossession.inHands !== 0) {
     return { playerIds: [], players: match.players };
   }
   const sourceOwnerTeamSlot = sourcePossession.owner < 12 ? "A" : "B";
-  const ownerTeamSlot = match.possession.owner < 12 ? "A" : "B";
+  const ownerTeamSlot = match.possession.owner === 0
+    ? null
+    : match.possession.owner < 12 ? "A" : "B";
+  const finalPossessionIsFree = ownerTeamSlot === null;
   const secondTeamSlot = match.tick % 2 === 0 ? "A" : "B";
   const visitById = new Map(visits.map((visit) => [visit.playerId, visit]));
   const skipped = new Set(skipPlayerIds);
@@ -16100,7 +17033,8 @@ function projectSourceSecondTeamBusyIntercepts(
   const players = match.players.map((player) => {
     const visit = visitById.get(player.id);
     const stoppedIntercept = player.nativeTeamSlot === secondTeamSlot
-      && player.id !== match.control.activePlayerId
+      && !finalPossessionIsFree
+      && player.id !== controlledPlayerId
       && player.nativePlayerNumber !== match.possession.owner
       && player.intelligence.move === 1
       && player.intelligence.count > 1
@@ -16117,21 +17051,35 @@ function projectSourceSecondTeamBusyIntercepts(
     const scheduledIntercept = Number.isSafeInteger(
       player.liveMotion?.scheduledInterceptOwner,
     );
+    const globalIntercept = Number.isSafeInteger(
+      player.sourceGlobalInterceptorTick,
+    );
     const sourceOpponent = player.nativeTeamSlot !== sourceOwnerTeamSlot;
-    const possessionCrossedTeams = ownerTeamSlot !== sourceOwnerTeamSlot;
+    const possessionCrossedTeams = ownerTeamSlot !== null
+      && ownerTeamSlot !== sourceOwnerTeamSlot;
     const visitOpponent = visit?.possession.owner !== 0
       && (
         (visit.possession.owner < 12 ? "A" : "B")
         !== player.nativeTeamSlot
       );
     const continueBusy = player.intelligence.count > 1 && (
-      (possessionCrossedTeams && sourceOpponent)
-      || (scheduledIntercept && player.nativeTeamSlot === secondTeamSlot)
-      // A later same-team collection must not rewrite the owner that this
-      // earlier second-team visit saw while its existing I_INTERCEPT ran.
-      || (visitOpponent && player.nativeTeamSlot === secondTeamSlot)
+      (
+        !finalPossessionIsFree
+        && (
+          (possessionCrossedTeams && sourceOpponent)
+          || (scheduledIntercept && player.nativeTeamSlot === secondTeamSlot)
+          // A later same-team collection must not rewrite the owner that this
+          // earlier second-team visit saw while its existing I_INTERCEPT ran.
+          || (visitOpponent && player.nativeTeamSlot === secondTeamSlot)
+        )
+      )
+      // A pass receiver owns this team's source-global interceptor slot.
+      // intelligence remains busy even when a later same-team player has
+      // collected or released the ball before the following process_teams pass.
+      || (globalIntercept && player.nativeTeamSlot === secondTeamSlot)
     );
     const finishExpiring = player.intelligence.count === 1
+      && !finalPossessionIsFree
       && (
         sourceOpponent
         || (scheduledIntercept && player.nativeTeamSlot === secondTeamSlot)
@@ -16139,7 +17087,7 @@ function projectSourceSecondTeamBusyIntercepts(
     if (
       skipped.has(player.id)
       ||
-      player.id === match.control.activePlayerId
+      player.id === controlledPlayerId
       || player.nativePlayerNumber === match.possession.owner
       || player.liveFirstTimeIntercept !== undefined
       || player.intelligence.move !== 1
@@ -16186,6 +17134,9 @@ function projectSourceSecondTeamBusyIntercepts(
       // Native process_dir runs only after find_zonal_target installs the
       // replacement journey, so this pre-step must not turn twice.
       facing: clone(player.facing),
+      // As on the first-team path, the replacement is installed without a
+      // transient stand animation. Preserve the entry clip for init_run_anim.
+      animation: clone(player.animation),
       intelligence: { special: 0, move: 0, count: 0 },
     };
   });
@@ -16438,7 +17389,7 @@ function initializeOpenPlayAiChallenges(
   }
   if (
     pressureWindow === "before-collection"
-    && process.env.CSSOCCER_DEBUG_TICK === String(nextTick)
+    && CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)
   ) {
     console.error("pre-collection-ai-pressure", JSON.stringify({
       pressureOwner,
@@ -16614,6 +17565,24 @@ function initializeOpenPlayAiChallenges(
       // opponent challenge during the same tick.
       continue;
     }
+    if (
+      nearest.sourcePlayer.intelligence.move === CLOSE_DOWN_INTELLIGENCE_MOVE
+      && nearest.sourcePlayer.intelligence.count > 1
+    ) {
+      // intelligence decrements a live I_CLOSE_DOWN countdown and returns
+      // busy. The earlier team-journey projection already published that
+      // visit; opp_has_ball must not restart the countdown in this pass.
+      continue;
+    }
+    if (
+      nearest.sourcePlayer.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
+      && nearest.sourcePlayer.intelligence.count > 1
+    ) {
+      // A live I_RUN_ON decrements int_cnt and returns busy before
+      // opp_has_ball. Its terminal journey may settle to STAND_ACT during
+      // do_action, but it cannot start a fresh challenge in the same visit.
+      continue;
+    }
     const inClose = nearest.distance
       < CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 13;
     const holderFacing = sourceOpponentHolderFacing(
@@ -16623,7 +17592,7 @@ function initializeOpenPlayAiChallenges(
     );
     if (
       pressureWindow === "before-collection"
-      && process.env.CSSOCCER_DEBUG_TICK === String(nextTick)
+      && CSSOCCER_DEBUG_ENV.CSSOCCER_DEBUG_TICK === String(nextTick)
     ) {
       const debugBetween = initializeOpenPlayBetweenPlayer({
         ball: sourceState.predictionBall,
@@ -16653,6 +17622,65 @@ function initializeOpenPlayAiChallenges(
       )
       || owner.intelligence.move === GET_UP_INTELLIGENCE_MOVE
     );
+    if (!inClose && nearest.rank === 1) {
+      // opp_has_ball sends the nearest defender through close_him_down.
+      // That routine first tries go_to_path against the held-ball prediction;
+      // when no intercept exists it retains I_CLOSE_DOWN and merely faces the
+      // ball during this visit.
+      const intercept = initializeOpenPlayHeldBallIntercept({
+        ballOwnerNativePlayer: owner.nativePlayerNumber,
+        ballState: sourceState.ballState,
+        nextTick,
+        ownerTackling: owner.action.action.value === TACKLE_ACTION,
+        player: nearest.sourcePlayer,
+        teamRate,
+      });
+      const terminalCloseDown = intercept === null
+        && nearest.sourcePlayer.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+        && (nearest.sourcePlayer.liveMotion?.goCount ?? 0) <= 1;
+      const challenged = intercept ?? stepCurrentCloseDownPlayer({
+        ballPosition: challengeBallPosition,
+        count: Math.trunc(nearest.sourcePlayer.gameplay.flair / 4),
+        fresh: true,
+        nextTick,
+        player: nearest.sourcePlayer,
+        teamRate,
+      });
+      const routed = terminalCloseDown
+        ? {
+            ...challenged,
+            target: clone(nearest.sourcePlayer.target),
+            intelligence: { special: 0, move: 0, count: 0 },
+            liveMotion: {
+              ...challenged.liveMotion,
+              kind: "stand",
+              target: clone(nearest.sourcePlayer.liveMotion.target),
+            },
+          }
+        : challenged;
+      // close_him_down can install I_CLOSE_DOWN immediately before a
+      // terminal run_action. With no new go_to_path journey, run_action
+      // reaches init_stand_act in the same visit and reset_ideas clears only
+      // that transient idea; other_interceptor's not-me timer and the
+      // resulting stand/process_dir visit remain observable.
+      events.push({
+        type: intercept === null
+          ? "ai-close-down-started"
+          : "ai-intercept-started",
+        tick: nextTick,
+        playerId: routed.id,
+        opponentId: owner.id,
+        distance: nearest.distance,
+        seed: challengedMatch.rng.state.seed,
+      });
+      challengedMatch = {
+        ...challengedMatch,
+        players: challengedMatch.players.map((player) => (
+          player.id === routed.id ? routed : player
+        )),
+      };
+      continue;
+    }
     const sideRoute = sourceBall.speed < 1 && (
       (challengedMatch.rng.state.seed & 4) !== 0
       || (nearest.sourcePlayer.nativePlayerNumber > 11 && challengeBallPosition.x < 640)
@@ -16673,13 +17701,15 @@ function initializeOpenPlayAiChallenges(
           player: nearest.sourcePlayer,
           teamRate,
         })
-        : initializeOpenPlayBetweenPlayer({
+        : initializeSourceOrderedOpenPlayBetweenPlayer({
           ball: refreshedPrediction
             ?? owner.livePass?.sourcePrediction
             ?? owner.liveShot?.sourcePrediction
             ?? owner.liveControlIntercept?.sourcePrediction
             ?? sourceState.predictionBall,
           ballPosition: challengeBallPosition,
+          match: challengedMatch,
+          possession: sourceState.visits[sourcePlayerVisit].possession,
           player: nearest.sourcePlayer,
           teamRate,
           nextTick,
@@ -16725,13 +17755,15 @@ function initializeOpenPlayAiChallenges(
         )
       );
       if (forceErrorGoesBetween) {
-        const routed = initializeOpenPlayBetweenPlayer({
+        const routed = initializeSourceOrderedOpenPlayBetweenPlayer({
           ball: refreshedPrediction
             ?? owner.livePass?.sourcePrediction
             ?? owner.liveShot?.sourcePrediction
             ?? owner.liveControlIntercept?.sourcePrediction
             ?? sourceState.predictionBall,
           ballPosition: challengeBallPosition,
+          match: challengedMatch,
+          possession: sourceState.visits[sourcePlayerVisit].possession,
           player: nearest.sourcePlayer,
           teamRate,
           nextTick,
@@ -16785,10 +17817,6 @@ function initializeOpenPlayAiChallenges(
         inClose
         && controlledHolderFacing === -1
         && !ownerCannotShield
-        && (
-          !controlledSideRoute
-          || nearest.sourcePlayer.action.action.value === CSSOCCER_NATIVE_ACTIONS.STAND
-        )
       ) {
         let routed = controlledSideRoute
           ? initializeOpenPlaySidePlayer({
@@ -16799,13 +17827,15 @@ function initializeOpenPlayAiChallenges(
             player: nearest.sourcePlayer,
             teamRate,
           })
-          : initializeOpenPlayBetweenPlayer({
+          : initializeSourceOrderedOpenPlayBetweenPlayer({
             ball: refreshedPrediction
               ?? owner.livePass?.sourcePrediction
               ?? owner.liveShot?.sourcePrediction
               ?? owner.liveControlIntercept?.sourcePrediction
               ?? sourceState.predictionBall,
             ballPosition: controlledBallPosition,
+            match: challengedMatch,
+            possession: sourceState.visits[sourcePlayerVisit].possession,
             player: nearest.sourcePlayer,
             teamRate,
             nextTick,
@@ -16885,8 +17915,10 @@ function initializeOpenPlayAiChallenges(
 }
 
 function applyOpenPlayOffsideRunbacks({
+  aiChallengePlayerIds = [],
   command,
   completedRunbackPlayerIds,
+  expiredInterceptPlayerIds,
   logicCount,
   match,
   nextTick,
@@ -16916,6 +17948,8 @@ function applyOpenPlayOffsideRunbacks({
   const rates = new Map(currentTeamRates(match.players, match.clock.gameMinute)
     .map(({ id, value }) => [id, value]));
   const completedRunbacks = new Set(completedRunbackPlayerIds);
+  const expiredIntercepts = new Set(expiredInterceptPlayerIds);
+  const aiChallenges = new Set(aiChallengePlayerIds);
   const currentById = new Map(match.players.map((player) => [player.id, player]));
   const visitById = new Map(visits.map((visit) => [visit.playerId, visit]));
   const players = sourcePlayers.map((sourcePlayer) => {
@@ -16928,6 +17962,7 @@ function applyOpenPlayOffsideRunbacks({
       throw new Error(`Offside run-back lost source visit for ${sourcePlayer.id}.`);
     }
     const sourcePossession = sourceVisit.possession;
+    const expiredIntercept = expiredIntercepts.has(sourcePlayer.id);
     if (completedRunbacks.has(sourcePlayer.id)) return current;
     if (
       !sourcePlayer.active
@@ -16943,7 +17978,7 @@ function applyOpenPlayOffsideRunbacks({
       )
       || sourcePlayer.livePass !== undefined
       || sourcePlayer.liveShot !== undefined
-      || sourcePlayer.intelligence.count !== 0
+      || (sourcePlayer.intelligence.count !== 0 && !expiredIntercept)
     ) return current;
     const continuing = sourcePlayer.liveMotion?.kind === "offside-runback";
     // ball_interact and a later kick can change ball_poss inside one go_team
@@ -16958,6 +17993,17 @@ function applyOpenPlayOffsideRunbacks({
         (sourcePossession.owner < 12)
         === (sourcePlayer.nativeTeamSlot === "A")
       );
+    if (
+      continuing
+      && !eligiblePossession
+      && aiChallenges.has(sourcePlayer.id)
+    ) {
+      // offside_rule clears tm_off when an opponent owns the ball. A later
+      // intelligence branch may then replace the old run_back in this same
+      // player visit; keep that route instead of resurrecting the entry
+      // journey in this post-pass.
+      return current;
+    }
     const potential = sourcePlayer.nativeTeamSlot === "A"
       ? sourcePlayer.position.x > 640
         && sourceVisit.canBeOffside === 1
@@ -16985,6 +18031,13 @@ function applyOpenPlayOffsideRunbacks({
             : F32(defenseA + (margin * 3)),
           y: sourcePlayer.position.y,
     };
+    const runbackSource = expiredIntercept
+      ? {
+          ...clone(sourcePlayer),
+          intelligence: { special: 0, move: 0, count: 0 },
+        }
+      : sourcePlayer;
+    if (expiredIntercept) delete runbackSource.sourceGlobalInterceptorTick;
     return stepOpenPlayOffsideRunback({
       // process_dir reads the ball after all earlier player visits and before
       // all later visits. This matters when a collection changes it mid-team.
@@ -16993,7 +18046,7 @@ function applyOpenPlayOffsideRunbacks({
       command,
       controlled: sourcePlayer.id === match.control.activePlayerId,
       nextTick,
-      player: sourcePlayer,
+      player: runbackSource,
       possession: sourcePossession,
       replan: replans,
       target,
@@ -17001,6 +18054,21 @@ function applyOpenPlayOffsideRunbacks({
     });
   });
   return { ...match, players };
+}
+
+function currentOpenPlayAiRoutePlayerIds(events, nextTick) {
+  return events
+    .filter(({ playerId, tick, type }) => (
+      typeof playerId === "string"
+      && tick === nextTick
+      && (
+        type === "ai-between-started"
+        || type === "ai-side-started"
+        || type === "ai-intercept-started"
+        || type === "ai-close-down-started"
+      )
+    ))
+    .map(({ playerId }) => playerId);
 }
 
 function stepOpenPlayOffsideRunback({
@@ -17598,6 +18666,115 @@ function initializeOpenPlayBetweenPlayer({
   });
 }
 
+function initializeSourceOrderedOpenPlayBetweenPlayer({
+  ball,
+  ballPosition,
+  match,
+  nextTick,
+  player,
+  possession,
+  teamRate,
+}) {
+  const routed = initializeOpenPlayBetweenPlayer({
+    ball,
+    ballPosition,
+    nextTick,
+    player,
+    teamRate,
+  });
+  const transientTarget = routed.liveMotion.target;
+  const transientDistance = sourceDistance2d({
+    x: F32(transientTarget.x - player.position.x),
+    y: F32(transientTarget.y - player.position.y),
+  });
+  const imThereDistance = projectCssoccerTravelSourceProfile(
+    CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+    { teamRate },
+  ).imThereDistance;
+  if (transientDistance >= imThereDistance) return routed;
+  const current = match.players.find(({ id }) => id === player.id);
+  if (
+    current === undefined
+    || current.liveMotion === undefined
+    || current.action.action.value > CSSOCCER_NATIVE_ACTIONS.RUN
+  ) {
+    throw new Error(
+      `Already-there between route lost ${player.id}'s zonal source visit.`,
+    );
+  }
+  const snapDisplacement = {
+    x: F32(transientTarget.x - player.position.x),
+    y: F32(transientTarget.y - player.position.y),
+  };
+  const snapped = {
+    ...clone(player),
+    previousPosition: clone(player.position),
+    previousFacing: clone(player.facing),
+    position: {
+      x: transientTarget.x,
+      y: transientTarget.y,
+      z: player.position.z,
+    },
+    velocity: { ...snapDisplacement, z: F32(0) },
+    target: { x: transientTarget.x, y: transientTarget.y, z: F32(0) },
+    intelligence: { special: 0, move: 0, count: 0 },
+    action: createCssoccerActionState({
+      tick: nextTick,
+      playerId: player.id,
+      actionId: CSSOCCER_NATIVE_ACTIONS.STAND,
+      facingX: player.facing.x,
+      facingY: player.facing.y,
+    }),
+    animation: {
+      status: "browser-current-state",
+      kind: "stand",
+      id: STAND_ANIMATION,
+      sourceActionId: CSSOCCER_NATIVE_ACTIONS.STAND,
+      frame: F32(0),
+      frameStep: STAND_FRAME_STEP,
+      pending: null,
+      tick: nextTick,
+    },
+    liveMotion: {
+      ...clone(player.liveMotion),
+      kind: "stand",
+      target: { x: transientTarget.x, y: transientTarget.y },
+      goCount: 1,
+      goDisplacement: { x: F32(0), y: F32(0) },
+      directionMode: 1,
+      resetAnimationFrame: true,
+      sideStepDirection: null,
+      animationId: null,
+      animationFrameStep: null,
+    },
+  };
+  const zone = match.kickoff.zoning?.[player.nativeTeamSlot];
+  if (zone === undefined) {
+    throw new Error(`Already-there between route lost ${player.id}'s ball zone.`);
+  }
+  const teamInPossession = possession.lastTouch !== 0 && (
+    (player.nativeTeamSlot === "A" && possession.lastTouch < 12)
+    || (player.nativeTeamSlot === "B" && possession.lastTouch > 11)
+  );
+  return projectCssoccerFreePlayZonalPlayerVisit({
+    allowSideStep: true,
+    ballPosition,
+    nextTick,
+    player: snapped,
+    possession,
+    tactics: match.tactics,
+    teamRate,
+    targetOverride: current.liveMotion.target,
+    zoning: {
+      analogue: match.kickoff.zoning.analogue
+        && match.ball.ball.outOfPlay === 0,
+      ballZone: zone.ballZone,
+      zoneCenter: clone(zone.zoneCenter),
+      teamInPossession,
+    },
+  });
+}
+
 export function initializeOpenPlayBetweenIntercept(player, {
   ballPosition,
   ballState,
@@ -17948,16 +19125,21 @@ function processLocalUser({
       playerId: selected.id,
       phase: selected.liveContact.phase,
     });
-    return {
-      ...match,
-      control: {
-        ...match.control,
-        burstTimer: 0,
-        lastCommand: clone(command),
-        passCharge: null,
-        shotCharge: null,
-      },
-    };
+    if (selected.liveContact.phase !== "barge") {
+      return {
+        ...match,
+        control: {
+          ...match.control,
+          burstTimer: 0,
+          lastCommand: clone(command),
+          passCharge: null,
+          shotCharge: null,
+        },
+      };
+    }
+    // MC_BARGE is only an animation/timer layered over RUN_ACT. A newly
+    // selected local player still executes user_run/user_stand while that
+    // timer survives; only fall/tackle/steal contact owns the physical action.
   }
   const ownsBall = match.possession.owner === selected.nativePlayerNumber
     && match.possession.inHands === 0;
@@ -18376,7 +19558,10 @@ function processLocalUser({
         kind: moving ? "run" : "stand",
         teamRate,
         target,
-        goStep: false,
+        // user_stand/user_run route a neutral command through
+        // init_run_act at the player's current position. That reaches
+        // init_stand_act, which deliberately does not clear go_step.
+        goStep: moving ? false : player.liveMotion.goStep,
         goCount: moving ? 1 : stoppingRun ? 0 : 1,
         goDisplacement: { x: velocity.x, y: velocity.y },
         directionMode: moving ? 0 : 1,
@@ -19107,6 +20292,10 @@ function createFreeBallInterceptPlan(player, match, nextTick, options) {
       : null,
     userControlIndex: options.userControlIndex,
   });
+  // INTELL.CPP can_i_intercept/go_to_path overwrites tm_ftime with the
+  // newly selected free-ball arrival time. A retained negative hold-ball
+  // tween belongs to the preceding action and must not survive this plan.
+  delete planned.sourceHeldBallTween;
   planned.sourceGlobalInterceptorTick = nextTick;
   return {
     player: scan.intercept.actionIndex === 0
@@ -19223,6 +20412,14 @@ function continueFreeBallIntercept(
   } = {},
 ) {
   const intelligenceCount = player.intelligence.count - 1;
+  if (player.action.action.value === CSSOCCER_NATIVE_ACTIONS.STOP) {
+    return continueFreeBallStopIntercept(
+      player,
+      match,
+      nextTick,
+      intelligenceCount,
+    );
+  }
   if (player.action.action.value !== CSSOCCER_NATIVE_ACTIONS.RUN) return null;
   const teamRate = currentTeamRates(match.players, match.clock.gameMinute)
     .find(({ id }) => id === player.id)?.value;
@@ -19277,6 +20474,158 @@ function continueFreeBallIntercept(
             ? { sourceInterceptRunCountExact: true }
             : {}),
         },
+  };
+}
+
+function continueFreeBallStopIntercept(
+  player,
+  match,
+  nextTick,
+  intelligenceCount,
+) {
+  const teamRate = currentTeamRates(match.players, match.clock.gameMinute)
+    .find(({ id }) => id === player.id)?.value;
+  if (!Number.isSafeInteger(teamRate)) {
+    throw new Error(`Free-ball stop continuation lost the rate for ${player.id}.`);
+  }
+  const targetOffset = {
+    x: F32(player.liveMotion.target.x - player.position.x),
+    y: F32(player.liveMotion.target.y - player.position.y),
+  };
+  const motionProfile = projectCssoccerMotionSourceProfile(
+    CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+    { teamRate },
+  );
+  const aligned = sourceAngleCosine({
+    target: targetOffset,
+    facing: player.facing,
+  }) > Math.cos(motionProfile.maxTurnRadians);
+  if (!aligned) {
+    const facing = turnSourceFacing({
+      facing: player.facing,
+      target: targetOffset,
+      maxTurnRadians: motionProfile.maxTurnRadians,
+    }).facing;
+    return {
+      ...clone(player),
+      previousPosition: clone(player.position),
+      previousFacing: clone(player.facing),
+      velocity: { x: F32(0), y: F32(0), z: F32(0) },
+      facing,
+      intelligence: {
+        ...clone(player.intelligence),
+        count: intelligenceCount,
+      },
+      action: createCssoccerActionState({
+        tick: nextTick,
+        playerId: player.id,
+        actionId: CSSOCCER_NATIVE_ACTIONS.STOP,
+        facingX: facing.x,
+        facingY: facing.y,
+      }),
+    };
+  }
+  const travelProfile = projectCssoccerTravelSourceProfile(
+    CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+    { teamRate },
+  );
+  const travel = sourceGetThereTime({
+    position: { x: player.position.x, y: player.position.y },
+    target: player.liveMotion.target,
+    facing: player.facing,
+    speed: sourceFullPlayerSpeed({
+      pitchLength: CSSOCCER_BALL_CONSTANTS.pitchLength,
+      teamRate,
+      celebrating: false,
+    }),
+    maxTurn2Radians: travelProfile.maxTurn2Radians,
+    imThereDistance: travelProfile.imThereDistance,
+    canRotateAndRun: false,
+    mustFace: null,
+  });
+  if (travel.ticks <= 0 || travel.ticks >= 2000) {
+    throw new Error(
+      `Free-ball stop continuation produced an invalid run for ${player.id}.`,
+    );
+  }
+  const goDisplacement = {
+    x: F32(targetOffset.x / travel.ticks),
+    y: F32(targetOffset.y / travel.ticks),
+  };
+  const position = {
+    ...updateSourcePosition2d({
+      position: { x: player.position.x, y: player.position.y },
+      displacement: goDisplacement,
+    }),
+    z: player.position.z,
+  };
+  const facing = turnSourceFacing({
+    facing: player.facing,
+    target: {
+      x: F32(player.liveMotion.target.x - position.x),
+      y: F32(player.liveMotion.target.y - position.y),
+    },
+    maxTurnRadians: motionProfile.maxTurnRadians,
+  }).facing;
+  const speed = actualPlayerSpeed({
+    pitchLength: CSSOCCER_BALL_CONSTANTS.pitchLength,
+    teamRate,
+    speedIntent: CSSOCCER_SPEED_INTENT.intercept,
+    intentionCount: intelligenceCount,
+    sideStep: false,
+    nativePlayer: player.nativePlayerNumber,
+    ballPossession: 0,
+    ballInHands: false,
+    keeperNativePlayers: [1, 12],
+    userControlIndex: player.liveMotion.userControlIndex ?? 1,
+    burstTimer: 0,
+  });
+  const frameStep = F32(RUN_FRAME_STEP * (speed / RUN_REFERENCE_SPEED));
+  return {
+    ...clone(player),
+    previousPosition: clone(player.position),
+    previousFacing: clone(player.facing),
+    position,
+    velocity: { ...goDisplacement, z: F32(0) },
+    facing,
+    intelligence: {
+      ...clone(player.intelligence),
+      count: intelligenceCount,
+    },
+    action: createCssoccerActionState({
+      tick: nextTick,
+      playerId: player.id,
+      actionId: CSSOCCER_NATIVE_ACTIONS.RUN,
+      facingX: facing.x,
+      facingY: facing.y,
+    }),
+    animation: {
+      status: "browser-current-state",
+      kind: "run",
+      id: RUN_ANIMATION,
+      sourceActionId: CSSOCCER_NATIVE_ACTIONS.RUN,
+      frame: F32(0),
+      frameStep,
+      pending: null,
+      tick: nextTick,
+    },
+    liveMotion: {
+      ...clone(player.liveMotion),
+      kind: "run",
+      teamRate,
+      target: clone(player.liveMotion.target),
+      goStep: false,
+      goStop: false,
+      goCount: travel.ticks,
+      goDisplacement,
+      directionMode: 0,
+      resetAnimationFrame: true,
+      sideStepDirection: null,
+      animationId: RUN_ANIMATION,
+      animationFrameStep: frameStep,
+      sourceAnimationVisitComplete: true,
+      userControlIndex: player.liveMotion.userControlIndex ?? 1,
+    },
   };
 }
 
@@ -19520,43 +20869,46 @@ function moveFreeBallInterceptor(player, {
     y: F32(target.y - player.position.y),
   };
   if (travel?.stopAndFace === true) {
+    if (special === 0) {
+      return moveOrdinaryFreeBallStopAndFaceInterceptor(player, {
+        ballState,
+        goCount,
+        intelligenceCount,
+        nextTick,
+        special,
+        speed,
+        target,
+        targetOffset,
+        teamRate,
+        userControlIndex,
+      });
+    }
     const motionProfile = projectCssoccerMotionSourceProfile(
       CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
       { teamRate },
     );
-    // A run-on whose scan sets stop_and_face enters STOP_ACT first. The same
-    // visit's stop_action can immediately call init_run_act, but get_there_time
-    // now sees STOP_ACT and therefore disables its rotate-and-run candidate.
-    // go_toward_target then consumes the fixed target/count displacement.
-    const travelProfile = projectCssoccerTravelSourceProfile(
-      CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
-      { teamRate },
-    );
-    const runTravel = sourceGetThereTime({
-      position: { x: player.position.x, y: player.position.y },
-      target: { x: target.x, y: target.y },
+    const sourceGoCount = travel.ticks - travel.mustFaceTicks;
+    const alignment = sourceAngleCosine({
+      target: targetOffset,
       facing: player.facing,
-      speed: sourceFullPlayerSpeed({
-        pitchLength: 1280,
-        teamRate,
-        celebrating: false,
-      }),
-      maxTurn2Radians: travelProfile.maxTurn2Radians,
-      imThereDistance: travelProfile.imThereDistance,
-      canRotateAndRun: false,
-      mustFace: null,
     });
-    // get_there_time's 2000 sentinel is still a valid stored go_cnt here.
-    // init_run_act writes the 2000-count displacement and stop_action then
-    // owns whether go_toward_target may consume it on this visit.
-    if (runTravel.ticks <= 0) {
+    const turnTicks = Math.trunc(
+      Math.abs(Math.acos(alignment) / motionProfile.maxTurnRadians),
+    );
+    const moveTicks = sourceGoCount - turnTicks;
+    if (
+      sourceGoCount <= 0
+      || moveTicks <= 0
+    ) {
       throw new Error(
         `Free-ball stop-and-face produced an invalid journey for ${player.id}: `
         + JSON.stringify({
           position: player.position,
           target,
           travel,
-          runTravel,
+          sourceGoCount,
+          turnTicks,
+          moveTicks,
           goCount,
           intelligenceCount,
           special,
@@ -19564,13 +20916,10 @@ function moveFreeBallInterceptor(player, {
       );
     }
     const goDisplacement = {
-      x: F32(targetOffset.x / runTravel.ticks),
-      y: F32(targetOffset.y / runTravel.ticks),
+      x: F32(targetOffset.x / moveTicks),
+      y: F32(targetOffset.y / moveTicks),
     };
-    const mayStart = sourceAngleCosine({
-      target: targetOffset,
-      facing: player.facing,
-    }) > Math.cos(motionProfile.maxTurnRadians);
+    const mayStart = alignment >= Math.cos(motionProfile.maxTurnRadians);
     const position2d = mayStart
       ? updateSourcePosition2d({
           position: { x: player.position.x, y: player.position.y },
@@ -19604,9 +20953,7 @@ function moveFreeBallInterceptor(player, {
       action: createCssoccerActionState({
         tick: nextTick,
         playerId: player.id,
-        actionId: mayStart
-          ? CSSOCCER_NATIVE_ACTIONS.RUN
-          : CSSOCCER_NATIVE_ACTIONS.STOP,
+        actionId: CSSOCCER_NATIVE_ACTIONS.RUN,
         facingX: facing.x,
         facingY: facing.y,
       }),
@@ -19614,9 +20961,7 @@ function moveFreeBallInterceptor(player, {
         status: "browser-current-state",
         kind: mayStart ? "run" : "stand",
         id: mayStart ? RUN_ANIMATION : STAND_ANIMATION,
-        sourceActionId: mayStart
-          ? CSSOCCER_NATIVE_ACTIONS.RUN
-          : CSSOCCER_NATIVE_ACTIONS.STOP,
+        sourceActionId: CSSOCCER_NATIVE_ACTIONS.RUN,
         frame: F32(0),
         frameStep: mayStart ? frameStep : STAND_FRAME_STEP,
         pending: null,
@@ -19628,7 +20973,7 @@ function moveFreeBallInterceptor(player, {
         target: { x: target.x, y: target.y },
         goStep: false,
         goStop: !mayStart,
-        goCount: mayStart ? runTravel.ticks : Math.max(1, goCount + 1),
+        goCount,
         goDisplacement,
         directionMode: 0,
         resetAnimationFrame: true,
@@ -19732,6 +21077,134 @@ function moveFreeBallInterceptor(player, {
       animationId: RUN_ANIMATION,
       animationFrameStep: frameStep,
       sourceAnimationVisitComplete: true,
+    },
+  };
+}
+
+function moveOrdinaryFreeBallStopAndFaceInterceptor(player, {
+  ballState,
+  goCount,
+  intelligenceCount,
+  nextTick,
+  special,
+  speed,
+  target,
+  targetOffset,
+  teamRate,
+  userControlIndex,
+}) {
+  const motionProfile = projectCssoccerMotionSourceProfile(
+    CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+    { teamRate },
+  );
+  // strike[0].stop enters init_stop_act. stop_action may initialize RUN in
+  // this same visit once the player faces the target; unlike first-time
+  // strike_and_control, this ordinary run-on genuinely owns STOP_ACT.
+  const travelProfile = projectCssoccerTravelSourceProfile(
+    CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+    { teamRate },
+  );
+  const runTravel = sourceGetThereTime({
+    position: { x: player.position.x, y: player.position.y },
+    target: { x: target.x, y: target.y },
+    facing: player.facing,
+    speed: sourceFullPlayerSpeed({
+      pitchLength: 1280,
+      teamRate,
+      celebrating: false,
+    }),
+    maxTurn2Radians: travelProfile.maxTurn2Radians,
+    imThereDistance: travelProfile.imThereDistance,
+    canRotateAndRun: false,
+    mustFace: null,
+  });
+  if (runTravel.ticks <= 0) {
+    throw new Error(
+      `Free-ball stop-and-face produced an invalid journey for ${player.id}: `
+      + JSON.stringify({
+        position: player.position,
+        target,
+        runTravel,
+        goCount,
+        intelligenceCount,
+        special,
+      }),
+    );
+  }
+  const goDisplacement = {
+    x: F32(targetOffset.x / runTravel.ticks),
+    y: F32(targetOffset.y / runTravel.ticks),
+  };
+  const mayStart = sourceAngleCosine({
+    target: targetOffset,
+    facing: player.facing,
+  }) > Math.cos(motionProfile.maxTurnRadians);
+  const position2d = mayStart
+    ? updateSourcePosition2d({
+        position: { x: player.position.x, y: player.position.y },
+        displacement: goDisplacement,
+      })
+    : { x: player.position.x, y: player.position.y };
+  const position = { ...position2d, z: player.position.z };
+  const facing = turnSourceFacing({
+    facing: player.facing,
+    target: {
+      x: F32(target.x - position.x),
+      y: F32(target.y - position.y),
+    },
+    maxTurnRadians: motionProfile.maxTurnRadians,
+  }).facing;
+  const frameStep = F32(RUN_FRAME_STEP * (speed / RUN_REFERENCE_SPEED));
+  return {
+    ...clone(player),
+    previousPosition: clone(player.position),
+    previousFacing: clone(player.facing),
+    position,
+    velocity: {
+      x: mayStart ? goDisplacement.x : F32(0),
+      y: mayStart ? goDisplacement.y : F32(0),
+      z: F32(0),
+    },
+    facing,
+    target: { x: target.x, y: target.y, z: F32(0) },
+    ballState,
+    intelligence: { special, move: 1, count: intelligenceCount },
+    action: createCssoccerActionState({
+      tick: nextTick,
+      playerId: player.id,
+      actionId: mayStart
+        ? CSSOCCER_NATIVE_ACTIONS.RUN
+        : CSSOCCER_NATIVE_ACTIONS.STOP,
+      facingX: facing.x,
+      facingY: facing.y,
+    }),
+    animation: {
+      status: "browser-current-state",
+      kind: mayStart ? "run" : "stand",
+      id: mayStart ? RUN_ANIMATION : STAND_ANIMATION,
+      sourceActionId: mayStart
+        ? CSSOCCER_NATIVE_ACTIONS.RUN
+        : CSSOCCER_NATIVE_ACTIONS.STOP,
+      frame: F32(0),
+      frameStep: mayStart ? frameStep : STAND_FRAME_STEP,
+      pending: null,
+      tick: nextTick,
+    },
+    liveMotion: {
+      kind: mayStart ? "run" : "stand",
+      teamRate,
+      target: { x: target.x, y: target.y },
+      goStep: false,
+      goStop: !mayStart,
+      goCount: mayStart ? runTravel.ticks : Math.max(1, goCount + 1),
+      goDisplacement,
+      directionMode: 0,
+      resetAnimationFrame: true,
+      sideStepDirection: null,
+      animationId: mayStart ? RUN_ANIMATION : STAND_ANIMATION,
+      animationFrameStep: mayStart ? frameStep : STAND_FRAME_STEP,
+      sourceAnimationVisitComplete: true,
+      userControlIndex,
     },
   };
 }
@@ -19892,6 +21365,7 @@ function processOfficials(match, {
   sourceInitialization,
 }) {
   const current = processCurrentLiveOffside(match, nextTick, events, {
+    officialDefensiveLinesFrame,
     playerTeamSourceFrame,
     playerVisitFrame,
   });
@@ -20031,6 +21505,7 @@ function captureOpenPlayDefensiveLines(players) {
 }
 
 function processCurrentLiveOffside(match, nextTick, events, {
+  officialDefensiveLinesFrame,
   playerTeamSourceFrame,
   playerVisitFrame,
 }) {
@@ -20046,25 +21521,44 @@ function processCurrentLiveOffside(match, nextTick, events, {
     && match.rules.boundary == null
     && match.rules.foulRestart == null
   ) ? null : match.kickoff.phase;
-  const resolved = resolveCssoccerLiveOffsideSnapshot(snapshot, {
-    ballPosition: {
-      x: match.ball.ball.position.x,
-      y: match.ball.ball.position.y,
-    },
-    lastTouch: match.possession.lastTouch,
-    players: currentLiveOffsidePlayers(match.players),
-    refereeStrictness: match.rules.state.config.refereeStrictness,
-    stoppage,
-  });
-  if (resolved.status === "pending") return match;
-  if (resolved.status === "clear" || resolved.status === "cancelled") {
-    if (resolved.event !== null) events.push({ tick: nextTick, ...clone(resolved.event) });
+  if (stoppage !== null) {
+    const cancelled = resolveCssoccerLiveOffsideSnapshot(snapshot, {
+      ballPosition: {
+        x: match.ball.ball.position.x,
+        y: match.ball.ball.position.y,
+      },
+      lastTouch: match.possession.lastTouch,
+      players: currentLiveOffsidePlayers(match.players),
+      refereeStrictness: match.rules.state.config.refereeStrictness,
+      stoppage,
+    });
+    if (cancelled.event !== null) {
+      events.push({ tick: nextTick, ...clone(cancelled.event) });
+    }
     return {
       ...match,
       rules: { ...match.rules, liveOffside: null },
     };
   }
-  const involvement = resolved.event;
+  const reviewed = reviewCurrentLiveOffsideSourceVisits(match, {
+    nextTick,
+    officialDefensiveLinesFrame,
+    playerTeamSourceFrame,
+    playerVisitFrame,
+    snapshot,
+  });
+  match = reviewed.match;
+  if (reviewed.status === "pending") return match;
+  if (reviewed.status === "clear" || reviewed.status === "cancelled") {
+    if (reviewed.event !== null) {
+      events.push({ tick: nextTick, ...clone(reviewed.event) });
+    }
+    return {
+      ...match,
+      rules: { ...match.rules, liveOffside: null },
+    };
+  }
+  const involvement = reviewed.event;
   const player = match.players.find(({ id }) => id === involvement.playerId);
   if (
     player === undefined
@@ -20174,6 +21668,208 @@ function processCurrentLiveOffside(match, nextTick, events, {
   });
 }
 
+function reviewCurrentLiveOffsideSourceVisits(match, {
+  nextTick,
+  officialDefensiveLinesFrame,
+  playerTeamSourceFrame,
+  playerVisitFrame,
+  snapshot,
+}) {
+  if (
+    officialDefensiveLinesFrame === null
+    || !Array.isArray(playerTeamSourceFrame)
+    || !Array.isArray(playerVisitFrame)
+  ) {
+    throw new Error("Live offside review lost its source-ordered player frame.");
+  }
+  const sourceById = new Map(playerTeamSourceFrame.map((player) => [
+    player.id,
+    player,
+  ]));
+  const visitIndexById = new Map(playerVisitFrame.map((visit, index) => [
+    visit.playerId,
+    index,
+  ]));
+  const passerVisitIndex = visitIndexById.get(snapshot.passerId);
+  if (snapshot.kickTick === nextTick && !Number.isSafeInteger(passerVisitIndex)) {
+    throw new Error("Live offside release lost the passer's source visit.");
+  }
+
+  let ballReleased = snapshot.ballReleased;
+  for (
+    let processFlagsTick = snapshot.processFlagsTick + 1;
+    processFlagsTick <= nextTick;
+    processFlagsTick += 1
+  ) {
+    // FOOTBALL.CPP::process_flags moves the signed release window one tick
+    // toward zero before process_teams. A same-tick holder_lose_ball write
+    // happens later and therefore must not be decremented here.
+    if (ballReleased > 0) ballReleased -= 1;
+    else if (ballReleased < 0) ballReleased += 1;
+  }
+
+  let offside = match.rules.state.offside;
+  for (const candidate of snapshot.candidates) {
+    offside = syncCssoccerOffsidePlayerFlag(offside, {
+      playerId: candidate.playerId,
+      nativePlayerNumber: candidate.nativePlayerNumber,
+      tmOff: candidate.tmOff,
+    });
+  }
+
+  let involvement = null;
+  const orderedCandidates = [...snapshot.candidates].sort((left, right) => (
+    visitIndexById.get(left.playerId) - visitIndexById.get(right.playerId)
+  ));
+  for (const candidate of orderedCandidates) {
+    const visitIndex = visitIndexById.get(candidate.playerId);
+    if (!Number.isSafeInteger(visitIndex)) {
+      throw new Error(`Live offside review lost ${candidate.playerId}'s source visit.`);
+    }
+    if (
+      snapshot.kickTick === nextTick
+      && visitIndex <= passerVisitIndex
+    ) {
+      continue;
+    }
+    const player = sourceById.get(candidate.playerId);
+    const visit = playerVisitFrame[visitIndex];
+    if (
+      player === undefined
+      || player.nativePlayerNumber !== candidate.nativePlayerNumber
+      || visit.nativePlayerNumber !== candidate.nativePlayerNumber
+      || !Number.isSafeInteger(visit[SOURCE_OFFSIDE_VISIT_SEED])
+    ) {
+      throw new Error(`Live offside review lost ${candidate.playerId}'s source inputs.`);
+    }
+    const linesman = match.officials.officials[
+      candidate.nativePlayerNumber < 12 ? 2 : 1
+    ];
+    if (linesman === undefined) {
+      throw new Error("Live offside review lost its source linesman.");
+    }
+    const stepped = stepCssoccerOffsidePlayer(offside, {
+      playerId: candidate.playerId,
+      nativePlayerNumber: candidate.nativePlayerNumber,
+      position: {
+        x: player.position.x,
+        y: player.position.y,
+      },
+      distanceToBall: visit.distance,
+      matchMode: match.rules.matchMode,
+      ballPossession: visit.possession.owner,
+      ballReleased,
+      lastTouch: visit.possession.lastTouch,
+      ballPosition: {
+        x: visit.ballPosition.x,
+        y: visit.ballPosition.y,
+      },
+      defenseA: officialDefensiveLinesFrame.teamA,
+      defenseB: officialDefensiveLinesFrame.teamB,
+      canBeOffside: visit.canBeOffside,
+      justScored: match.goal.justScored === 0 ? 0 : 1,
+      refereeStrictness: match.rules.state.config.refereeStrictness,
+      refereeAccuracy: match.rules.state.config.refereeAccuracy,
+      linesmanPosition: {
+        x: linesman.position.x,
+        y: linesman.position.y,
+      },
+      seed: visit[SOURCE_OFFSIDE_VISIT_SEED],
+    });
+    offside = stepped.state;
+    ballReleased = stepped.ballReleased;
+    if (stepped.event === null) continue;
+    involvement = {
+      type: "offside-involvement",
+      reason: ["collect", "hold", "rebound"].includes(visit.interaction)
+        ? "candidate-touch"
+        : "active-interference",
+      kickTick: snapshot.kickTick,
+      playerId: candidate.playerId,
+      nativePlayerNumber: candidate.nativePlayerNumber,
+      incidentPosition: {
+        x: player.position.x,
+        y: player.position.y,
+      },
+      distanceToBall: visit.distance,
+    };
+    break;
+  }
+
+  const candidates = snapshot.candidates.map((candidate) => {
+    const current = offside.players.find(({ id }) => id === candidate.playerId);
+    if (
+      current === undefined
+      || current.nativePlayerNumber !== candidate.nativePlayerNumber
+    ) {
+      throw new Error("Live offside review lost its retained candidate flag.");
+    }
+    return { ...clone(candidate), tmOff: current.tmOff };
+  });
+  const liveOffside = {
+    ...clone(snapshot),
+    ballReleased,
+    processFlagsTick: nextTick,
+    candidates,
+  };
+  const reviewedMatch = {
+    ...match,
+    rules: {
+      ...match.rules,
+      state: {
+        ...match.rules.state,
+        offside,
+      },
+      liveOffside,
+    },
+  };
+  if (involvement !== null) {
+    return {
+      status: "involved",
+      match: reviewedMatch,
+      event: involvement,
+    };
+  }
+
+  const changedTouch = match.possession.lastTouch !== 0
+    && match.possession.lastTouch !== snapshot.passerNativePlayerNumber;
+  if (changedTouch) {
+    const candidate = candidates.find(({ nativePlayerNumber }) => (
+      nativePlayerNumber === match.possession.lastTouch
+    ));
+    const toucher = match.players.find(({ nativePlayerNumber }) => (
+      nativePlayerNumber === match.possession.lastTouch
+    ));
+    const reason = toucher?.nativeTeamSlot === snapshot.defendingNativeTeam
+      ? "defender-touch"
+      : candidate === undefined
+        ? "onside-teammate-touch"
+        : "unseen-candidate-touch";
+    return {
+      status: "cancelled",
+      match: reviewedMatch,
+      event: {
+        type: "offside-cancelled",
+        reason,
+        kickTick: snapshot.kickTick,
+        passerId: snapshot.passerId,
+      },
+    };
+  }
+  if (ballReleased === 0 || candidates.every(({ tmOff }) => tmOff === 0)) {
+    return {
+      status: "clear",
+      match: reviewedMatch,
+      event: null,
+    };
+  }
+  return {
+    status: "pending",
+    match: reviewedMatch,
+    event: null,
+  };
+}
+
 function projectSourceOrderedOffsideRestartSuffix({
   accepted,
   involvement,
@@ -20221,6 +21917,15 @@ function projectSourceOrderedOffsideRestartSuffix({
     descriptor,
     CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.kickoff.besideBall.value,
   );
+  const pendingShot = sourceMatch.players.find((candidate) => (
+    ["punt-released", "shot-released"].includes(candidate.liveShot?.phase)
+    || candidate.livePendingShot !== undefined
+  ));
+  const pendingRelease = pendingShot?.liveShot ?? pendingShot?.livePendingShot;
+  const visitIndexByNative = new Map(playerVisitFrame.map((visit, index) => [
+    visit.nativePlayerNumber,
+    index,
+  ]));
   const resetPlayers = accepted.players.map(resetSourceMatchModeIdeas);
   const resetById = new Map(resetPlayers.map((player) => [player.id, player]));
   const players = resetPlayers.map((current) => {
@@ -20233,7 +21938,7 @@ function projectSourceOrderedOffsideRestartSuffix({
     const resetInterceptRun = (
       source.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
       && source.intelligence.move === 1
-      && source.liveFirstTimeIntercept !== undefined
+      && source.intelligence.count > 0
     );
     if (
       !source.active
@@ -20312,11 +22017,41 @@ function projectSourceOrderedOffsideRestartSuffix({
         teamInPossession,
       },
     });
+    const keeperWaitsForShot = source.role === "keeper"
+      && pendingShot !== undefined
+      && accepted.possession.owner === 0
+      && (
+        (
+          source.nativePlayerNumber === 1
+          && accepted.ball.ball.position.x < CSSOCCER_BALL_CONSTANTS.pitchLength / 2
+        )
+        || (
+          source.nativePlayerNumber === 12
+          && accepted.ball.ball.position.x > CSSOCCER_BALL_CONSTANTS.pitchLength / 2
+        )
+      );
+    const shotReleasedAfterKeeperVisit = keeperWaitsForShot
+      && pendingRelease?.release?.tick === nextTick
+      && visitIndexByNative.get(source.nativePlayerNumber)
+        < visitIndexByNative.get(pendingShot.nativePlayerNumber);
+    const preservesKeeperStandPhase = source.role === "keeper"
+      && source.action.action.value === CSSOCCER_NATIVE_ACTIONS.STAND
+      && projected.action.action.value === CSSOCCER_NATIVE_ACTIONS.STAND
+      && keeperWaitsForShot
+      && !shotReleasedAfterKeeperVisit;
     return {
       ...projected,
       // find_zonal_target executes one go_forward immediately, then clears
       // go_cnt before this same RUN_ACT/STAND_ACT visit reaches process_dir.
-      liveMotion: { ...projected.liveMotion, goCount: 0 },
+      liveMotion: {
+        ...projected.liveMotion,
+        goCount: 0,
+        // A keeper already standing on this target only reaches process_dir:
+        // preserve the clip that process_anims advanced at visit entry.
+        resetAnimationFrame: preservesKeeperStandPhase
+          ? false
+          : projected.liveMotion.resetAnimationFrame,
+      },
     };
   });
   return { ...accepted, players };
@@ -20381,20 +22116,29 @@ function resetSourceMatchModeIdeas(player) {
     && player.intelligence.move !== RUN_ON_INTELLIGENCE_MOVE
     && player.intelligence.special === 0
   ) return player;
-  return {
-    ...clone(player),
-    intelligence: {
-      special: 0,
-      move: player.intelligence.count !== 0
-        || player.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
-        ? 0
-        : player.intelligence.move,
-      count: player.intelligence.count !== 0
-        || player.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
-        ? 0
-        : player.intelligence.count,
-    },
+  const reset = clone(player);
+  const resetInterceptRun = (
+    player.intelligence.move === 1
+    && player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+  );
+  reset.intelligence = {
+    special: 0,
+    move: player.intelligence.count !== 0
+      || player.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
+      ? 0
+      : player.intelligence.move,
+    count: player.intelligence.count !== 0
+      || player.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
+      ? 0
+      : player.intelligence.count,
   };
+  if (resetInterceptRun && reset.liveMotion !== undefined) {
+    // reset_ideas forces a live I_INTERCEPT/RUN_ACT path to one final
+    // journey step. Players already visited before the foul consume it on
+    // the following tick before find_zonal_target installs the restart run.
+    reset.liveMotion.goCount = 1;
+  }
+  return reset;
 }
 
 function processAnimations(
@@ -20407,6 +22151,7 @@ function processAnimations(
     events,
     nearest,
     nextTick,
+    playerDistanceFrame,
     playerVisitFrame,
     sourceInitialization,
   },
@@ -20425,13 +22170,12 @@ function processAnimations(
       centrePassReceiverFrame,
       nearest,
       command,
+      playerDistanceFrame,
     );
   }
   const positioning = match.kickoff.phase === "centre-positioning"
     || match.kickoff.phase === "boundary-positioning"
     || match.kickoff.phase === "rule-positioning";
-  const retainedPostGoalJourney = match.kickoff.phase === "centre-positioning"
-    && match.kickoff.restartKind === "post-goal";
   const motionById = positioning
     ? new Map(match.kickoff.motion.players.map((player) => [player.id, player]))
     : new Map();
@@ -20444,6 +22188,11 @@ function processAnimations(
   const players = match.players.map((player) => {
     if (player.liveRestart !== undefined) {
       return stepCurrentBoundaryRestartAnimation(player, match, nextTick);
+    }
+    if (player.sourceKeeperStandTick === nextTick) {
+      const settled = clone(player);
+      delete settled.sourceKeeperStandTick;
+      return settled;
     }
     if (player.liveKeeper !== undefined) return clone(player);
     if (
@@ -20528,7 +22277,7 @@ function processAnimations(
       || player.liveMotion?.kind === "socks-wait"
     )
       ? player.liveMotion
-      : retainedPostGoalJourney && retainsPostGoalCentreAction(player)
+      : positioning && retainsPostGoalCentreJourney(player)
       ? player.liveMotion
       : positioning
       ? motionById.get(player.id)
@@ -20719,9 +22468,14 @@ function stepOpenPlayContactAnimation(player, match, nextTick) {
     // retaining MC_BARGE's cached step. init_run_anim always recomputes the
     // RUN step from actual_spd when the barge counter expires.
     recovered.liveMotion.animationFrameStep = null;
+    const teamRate = currentTeamRates(match.players, match.clock.gameMinute)
+      .find(({ id }) => id === player.id)?.value;
+    if (!Number.isSafeInteger(teamRate)) {
+      throw new Error(`Barge recovery lost the current rate for ${player.id}.`);
+    }
     return stepLocomotionAnimation(
       recovered,
-      recovered.liveMotion,
+      { ...recovered.liveMotion, teamRate },
       match.possession,
       nextTick,
     );
@@ -21309,6 +23063,19 @@ function advanceOpeningClock(match, {
   return current;
 }
 
+function completeOpeningClockPeriod(match, { events, nextTick }) {
+  const clockStep = completeCssoccerExpiredPeriod(match.clock);
+  let current = { ...match, clock: clockStep.state };
+  events.push(...clockStep.events.map(clone));
+  if (clockStep.events.some(({ type }) => type === "halftime-whistle")) {
+    current = enterCurrentHalftimeHold(current, nextTick);
+  }
+  if (clockStep.events.some(({ type }) => type === "full-time")) {
+    current = enterCurrentFullTime(current, nextTick);
+  }
+  return current;
+}
+
 function currentLifecycleClockAdvances(match) {
   if (currentLifecycleSuspendsGameplay(match)) return false;
   // RULES.CPP match_clock advances only in normal play, outside a stopped
@@ -21369,6 +23136,7 @@ function currentLifecyclePeriodReady(match) {
   if (match.kickoff.phase !== "open-play") return false;
   return !match.players.some((player) => (
     player.liveShot !== undefined
+    || player.livePendingShot !== undefined
     || player.liveRestart !== undefined
     || player.liveContact !== undefined
   ));
@@ -21489,13 +23257,17 @@ function enterCurrentSecondHalfCentre(match, nextTick) {
   };
   const setup = createCurrentCentreSetup(swapped, "A");
   // init_centre rewrites ball_zone1/2 to 68/69 after reset_ball but retains
-  // the zone centres computed from the pre-centre ball at the swap boundary.
-  const zoning = createCurrentCentreZoning({
-    ballPosition: {
-      x: match.ball.ball.position.x,
-      y: F32(CSSOCCER_KICKOFF_CONSTANTS.pitchWidth - match.ball.ball.position.y),
+  // the existing zone1/2 centres. swap_teams does not mirror or exchange
+  // those source globals.
+  const zoning = createCssoccerZoneState({
+    A: {
+      ballZone: 68,
+      zoneCenter: clone(match.kickoff.zoning.A.zoneCenter),
     },
-    nativeTeamSlot: "A",
+    B: {
+      ballZone: 69,
+      zoneCenter: clone(match.kickoff.zoning.B.zoneCenter),
+    },
   });
   const ball = currentLifecycleCentreBall(swapped, nextTick);
   const players = resetPlayersForCurrentCentre(remappedPlayers, setup.players, nextTick);
@@ -21563,10 +23335,14 @@ function enterCurrentSecondHalfCentre(match, nextTick) {
 }
 
 function enterCurrentFullTime(match, nextTick) {
+  const ball = currentLifecycleSwapEndsBall(match, nextTick);
+  const possession = currentLifecycleClearPossession(match.possession);
   const players = match.players.map((player) => currentLifecycleStandingPlayer(player, nextTick));
   return {
     ...match,
     phase: "full-time-terminal",
+    ball,
+    possession,
     players,
     result: {
       status: "final",
@@ -21663,7 +23439,9 @@ function currentLifecycleSwapEndsBall(match, nextTick) {
       inAir: 0,
       inGoal: 0,
       still: 1,
-      speed: 0,
+      // reset_ball zeros the displacement and marks the ball still, but does
+      // not rewrite the ball_speed global calculated earlier in this tick.
+      speed: match.ball.ball.speed,
       spin: {
         swerve: 0,
         count: 0,
@@ -21869,6 +23647,7 @@ function stepCentrePassAnimation(
   centrePassReceiverFrame,
   nearest,
   command,
+  playerDistanceFrame,
 ) {
   const opening = match.kickoff.action;
   if (opening === null || opening.released) {
@@ -22004,6 +23783,100 @@ function stepCentrePassAnimation(
       players = players.map((player) => (
         player.id === animated.id ? animated : player
       ));
+    }
+    const opponentNearPath = selectFreeBallNearPathPlayer(
+      {
+        ...match,
+        players: centrePassPlayerFrame,
+        ball,
+        possession,
+      },
+      taker.nativeTeamSlot === "A" ? "B" : "A",
+      command,
+      ball,
+    );
+    if (opponentNearPath !== null) {
+      if (!(playerDistanceFrame instanceof Map)) {
+        throw new Error("Centre-pass release lost the source player-distance frame.");
+      }
+      const releaseVisitIndex = traversal.indexOf(taker.nativePlayerNumber);
+      const sourceByNativePlayer = new Map(centrePassPlayerFrame.map((player) => [
+        player.nativePlayerNumber,
+        player,
+      ]));
+      const visits = traversal.flatMap((nativePlayerNumber, visitIndex) => {
+        const player = sourceByNativePlayer.get(nativePlayerNumber);
+        if (player === undefined) {
+          throw new Error(
+            `Centre-pass release lost native player ${nativePlayerNumber}.`,
+          );
+        }
+        if (!player.active) return [];
+        const distance = playerDistanceFrame.get(player.id);
+        if (!Number.isFinite(distance)) {
+          throw new Error(
+            `Centre-pass release lost source distance for ${player.id}.`,
+          );
+        }
+        const afterRelease = visitIndex >= releaseVisitIndex;
+        return [{
+          playerId: player.id,
+          nativePlayerNumber,
+          ballPosition: clone(
+            afterRelease ? ball.ball.position : centrePassContactFrame.ballPosition,
+          ),
+          canBeOffside: match.rules.canBeOffside,
+          distance,
+          interaction: "none",
+          possession: clone(afterRelease ? possession : match.possession),
+        }];
+      });
+      const opponentJourney = stepOpponentFreeBallJourney({
+        command,
+        frozenKeeperPrediction: null,
+        match: {
+          ...match,
+          players,
+          ball,
+          possession,
+          rng,
+          control,
+        },
+        nearPath: opponentNearPath,
+        nextTick,
+        sourceReleaseNativePlayer: taker.nativePlayerNumber,
+        sourcePredictionState: null,
+        skipPlayerIds: new Set(),
+        sourcePlayers: centrePassPlayerFrame,
+        sourcePossessionOwner: match.possession.owner,
+        visits,
+        wantPassNativePlayer: supportIntent.holderWantPassNativePlayer,
+      });
+      const plannedOpponent = opponentJourney.players.find(
+        ({ id }) => id === opponentNearPath.id,
+      );
+      const currentOpponent = players.find(
+        ({ id }) => id === opponentNearPath.id,
+      );
+      if (plannedOpponent === undefined || currentOpponent === undefined) {
+        throw new Error("Centre-pass release lost its opponent near-path player.");
+      }
+      if (plannedOpponent !== currentOpponent) {
+        const animatedOpponent = (
+          plannedOpponent.liveFirstTimeIntercept?.phaseTick === nextTick
+        )
+          ? plannedOpponent
+          : stepLocomotionAnimation(
+              plannedOpponent,
+              plannedOpponent.liveMotion,
+              possession,
+              nextTick,
+            );
+        players = opponentJourney.players.map((player) => (
+          player.id === animatedOpponent.id ? animatedOpponent : player
+        ));
+      }
+      rng = { ...rng, state: opponentJourney.rng };
     }
     phase = "open-play";
     kickoff = {
@@ -22370,7 +24243,10 @@ function projectCentrePassContact(match) {
 
 function stepLocomotionAnimation(player, motion, possession, nextTick) {
   const action = player.action.action.value;
-  const running = action === CSSOCCER_NATIVE_ACTIONS.RUN;
+  // init_run_act retains RUN_ACT while stop_and_face turns in place with the
+  // standing clip. go_forward installs MC_RUN only when alignment clears.
+  const running = action === CSSOCCER_NATIVE_ACTIONS.RUN
+    && motion?.goStop !== true;
   const sideStep = running && (
     motion?.kind === "side-step"
     || motion?.goStep === true
@@ -22435,8 +24311,19 @@ function stepLocomotionAnimation(player, motion, possession, nextTick) {
     : resetsFromSourceMotion || (changed && !preservesTrotPhase)
     ? F32(0)
     : F32(player.animation.frame + player.animation.frameStep);
+  const advanced = clone(player);
+  if (advanced.liveMotion?.sourceAnimationVisitComplete === true) {
+    // This marker suppresses only the process_anims slot in the visit that
+    // initialized the clip. The following source tick advances normally.
+    delete advanced.liveMotion.sourceAnimationVisitComplete;
+  }
+  if (advanced.liveMotion?.resetAnimationFrame === true) {
+    // init_*_anim consumes this reset once; it is not persistent motion
+    // state and must not pin the new clip to frame zero on later visits.
+    advanced.liveMotion.resetAnimationFrame = false;
+  }
   return {
-    ...clone(player),
+    ...advanced,
     animation: {
       status: "browser-current-state",
       kind,
@@ -22519,6 +24406,8 @@ function deriveKickoffReadiness(match) {
   ));
   const halftimePositioning = match.kickoff?.restartKind === "halftime"
     && match.kickoff.phase === "centre-positioning";
+  const postGoalPositioning = match.kickoff?.restartKind === "post-goal"
+    && match.kickoff.phase === "centre-positioning";
   const observedPosition = halftimePositioning
     ? taker.previousPosition ?? taker.position
     : taker.position;
@@ -22541,10 +24430,13 @@ function deriveKickoffReadiness(match) {
   let setPieceWaitTicks = match.kickoff?.readiness?.setPieceWaitTicks
     ?? CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.kickoff.setPieceWaitTicks.value;
   let forcedStanding = false;
-  // RULES.CPP does not revisit all_standing on the await_swap tick. Every
-  // later centre-positioning visit pre-decrements MAX_SETP_WAIT; at zero it
-  // stores one and forces readiness on every subsequent visit.
-  if (halftimePositioning && match.kickoff.phaseTick > 1) {
+  // RULES.CPP does not revisit all_standing on the await_swap or init_centre
+  // entry tick. Every later centre-positioning visit pre-decrements
+  // MAX_SETP_WAIT; at zero it stores one and forces readiness forever.
+  if (
+    (halftimePositioning || postGoalPositioning)
+    && match.kickoff.phaseTick > 1
+  ) {
     setPieceWaitTicks -= 1;
     if (setPieceWaitTicks === 0) {
       setPieceWaitTicks = 1;

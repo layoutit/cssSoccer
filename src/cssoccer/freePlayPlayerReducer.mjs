@@ -45,6 +45,7 @@ const SOCKS_RIGHT_ANIMATION = 62;
 const SOCKS_LEFT_ANIMATION = 63;
 const SOCKS_FRAME_STEP = F32(1 / (20 * 68 / 40));
 const DRIBBLE_INTELLIGENCE_MOVE = 2;
+const CLOSE_DOWN_INTELLIGENCE_MOVE = 3;
 const MIN_HELP_CHANCE = 2;
 const CALL_DISTANCE = F32(CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 60);
 const DANGER_DISTANCE = F32(CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 8);
@@ -276,6 +277,11 @@ export function stepCssoccerFreePlayOpeningTeamTransition(input = {}) {
         ...planned.liveMotion,
         kind: "support-run",
         wantPassStat: supportRun.wantPassStat,
+        wantPassOffset: {
+          x: F32(supportRun.target.x - player.position.x),
+          y: F32(supportRun.target.y - player.position.y),
+        },
+        wantPassFaced: false,
       },
     };
   });
@@ -404,11 +410,16 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
           move: RUN_ON_INTELLIGENCE_MOVE,
           count: planned.liveMotion.goCount + 1,
         },
-        liveMotion: {
-          ...planned.liveMotion,
-          kind: "support-run",
-          wantPassStat: supportRun.wantPassStat,
+      liveMotion: {
+        ...planned.liveMotion,
+        kind: "support-run",
+        wantPassStat: supportRun.wantPassStat,
+        wantPassOffset: {
+          x: F32(supportRun.target.x - player.position.x),
+          y: F32(supportRun.target.y - player.position.y),
         },
+        wantPassFaced: false,
+      },
       };
     }
     if (!continuingSupportRun) return planned;
@@ -423,6 +434,8 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
         ...planned.liveMotion,
         kind: "support-run",
         wantPassStat: player.liveMotion.wantPassStat,
+        wantPassOffset: clone(player.liveMotion.wantPassOffset),
+        wantPassFaced: player.liveMotion.wantPassFaced,
       },
     };
   });
@@ -433,6 +446,7 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
   requirePlainObject(input, "free-play team journey continuation");
   requireExactKeys(input, [
     "controlledPlayerId",
+    "freeBallOutOfPlay",
     "logicCount",
     "nextTick",
     "possessionKicks",
@@ -463,6 +477,9 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
   }
   if (!Number.isSafeInteger(input.logicCount) || input.logicCount < 0) {
     throw new TypeError("Team journey logicCount must be a non-negative integer.");
+  }
+  if (typeof input.freeBallOutOfPlay !== "boolean") {
+    throw new TypeError("Team journey freeBallOutOfPlay must be boolean.");
   }
   const tactics = currentTacticsState(input.tactics);
   const rates = currentRateMap(input.teamRates, input.players);
@@ -523,11 +540,15 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
     // 22-slot state entry, but do not invent a traversal visit or team action
     // for a player whose dismissal has completed.
     if (!originalPlayer.active) return clone(originalPlayer);
-    const expiredRunOn = originalPlayer.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
-      && originalPlayer.intelligence.count <= 1;
-    const player = expiredRunOn
+    const expiredOrdinaryIdea = (
+      originalPlayer.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
+      || originalPlayer.intelligence.move === CLOSE_DOWN_INTELLIGENCE_MOVE
+    ) && originalPlayer.intelligence.count <= 1;
+    const player = expiredOrdinaryIdea
       ? {
           ...originalPlayer,
+          // intelligence decrements the final int_cnt, reset_ideas clears the
+          // idea, and this same visit falls through to ordinary team work.
           intelligence: { special: 0, move: 0, count: 0 },
         }
       : originalPlayer;
@@ -612,12 +633,20 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
         || !Object.is(keeperPosition.target.y, player.position.y)
         || player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
       ) {
+        // INTELL.CPP find_zonal_target stores the keeper destination as
+        // tx/ty relative to the current px/py, then passes tx+px/ty+py into
+        // init_run_act. Preserve both float stores instead of carrying the
+        // ideal close_angle result directly into process_dir.
+        const sourceKeeperTarget = {
+          x: F32(F32(keeperPosition.target.x - player.position.x) + player.position.x),
+          y: F32(F32(keeperPosition.target.y - player.position.y) + player.position.y),
+        };
         const positioned = planZonalPlayer(current, {
           ballPosition: visit.ballPosition,
           nextTick: input.nextTick,
           possession: visit.possession,
           tactics,
-          targetOverride: keeperPosition.target,
+          targetOverride: sourceKeeperTarget,
           zoning: null,
         });
         return {
@@ -645,6 +674,7 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
     const continuingResetSupportRun = player.intelligence.move === 0
       && player.intelligence.count === 0
       && player.liveMotion.kind === "support-run"
+      && supportRun?.playerId !== player.id
       && visit.possession.owner !== player.nativePlayerNumber
       && (
         finalPossession.owner === 0
@@ -797,6 +827,64 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
           ...continued.liveMotion,
           kind: "support-run",
           wantPassStat: player.liveMotion.wantPassStat,
+          wantPassOffset: clone(player.liveMotion.wantPassOffset),
+          wantPassFaced: player.liveMotion.wantPassFaced,
+        },
+      };
+    }
+    if (
+      input.freeBallOutOfPlay
+      && visit.possession.owner === 0
+      && player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+      && player.liveMotion.goCount > 0
+    ) {
+      // INTELL.CPP free_ball suppresses all new loose-ball intelligence while
+      // ball_out_of_play is non-zero. ACTIONS.CPP still executes run_action,
+      // so an already-installed journey must finish before stand_action may
+      // select the non-analogue restart-zone target.
+      const continued = continueSourceSupportJourney(current, {
+        ballPosition: visit.ballPosition,
+        nextTick: input.nextTick,
+        possession: visit.possession,
+        processDirection: player.liveMotion.goCount > 1,
+      });
+      if (player.liveMotion.goCount > 1) {
+        return {
+          ...continued,
+          intelligence: clone(player.intelligence),
+          liveMotion: {
+            ...continued.liveMotion,
+            kind: player.liveMotion.kind,
+          },
+        };
+      }
+      const planned = planZonalPlayer({
+        player: continued,
+        motion: continued.liveMotion,
+        teamRate: rates.get(player.id),
+      }, {
+        ballPosition: visit.ballPosition,
+        nextTick: input.nextTick,
+        possession: visit.possession,
+        tactics,
+        targetOverride: null,
+        zoning: liveZoning(continued, zones, visit.possession, input.zoneAnalogue),
+      });
+      return {
+        ...planned,
+        previousPosition: clone(player.position),
+        previousFacing: clone(player.facing),
+        velocity: {
+          x: F32(planned.position.x - player.position.x),
+          y: F32(planned.position.y - player.position.y),
+          z: F32(planned.position.z - player.position.z),
+        },
+        intelligence: clone(player.intelligence),
+        liveMotion: {
+          ...planned.liveMotion,
+          // run_action consumes the last installed step, then the resulting
+          // find_zonal_target journey is executed and cleared this visit.
+          goCount: 0,
         },
       };
     }
@@ -821,6 +909,11 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
           ...planned.liveMotion,
           kind: "support-run",
           wantPassStat: supportRun.wantPassStat,
+          wantPassOffset: {
+            x: F32(supportRun.target.x - player.position.x),
+            y: F32(supportRun.target.y - player.position.y),
+          },
+          wantPassFaced: false,
         },
       };
     }
@@ -835,14 +928,28 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
         && player.intelligence.move === DRIBBLE_INTELLIGENCE_MOVE
         && player.intelligence.count > 1
         && player.liveMotion.kind === "run-with-ball";
-      const dribble = continuing
-        ? {
-            target: clone(player.liveMotion.target),
-            intelligenceCount: player.intelligence.count - 1,
-            goCount: Math.max(0, player.liveMotion.goCount - 1),
+      if (continuing) {
+        const continued = continueSourceSupportJourney(current, {
+          ballPosition: visit.ballPosition,
+          nextTick: input.nextTick,
+          possession: visit.possession,
+          processDirection: player.liveMotion.goCount > 1,
+        });
+        return {
+          ...continued,
+          intelligence: {
+            special: 0,
+            move: DRIBBLE_INTELLIGENCE_MOVE,
+            count: player.intelligence.count - 1,
+          },
+          liveMotion: {
+            ...continued.liveMotion,
+            kind: "run-with-ball",
             mustPass: player.liveMotion.mustPass === true,
-          }
-        : selectCssoccerDribbleRun({
+          },
+        };
+      }
+      const dribble = selectCssoccerDribbleRun({
             ball: {
               x: visit.ballPosition.x,
               y: visit.ballPosition.y,
@@ -862,14 +969,15 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
             players: dribblePlayers,
             seed: input.rngSeed,
           });
-      const planned = planZonalPlayer(current, {
+      const route = planSourceDribblePlayer(current, {
         ballPosition: visit.ballPosition,
+        dribble,
         nextTick: input.nextTick,
         possession: visit.possession,
         tactics,
-        targetOverride: dribble.target,
         zoning: liveZoning(player, zones, visit.possession, input.zoneAnalogue),
       });
+      const planned = route.player;
       return {
         ...planned,
         intelligence: {
@@ -881,14 +989,12 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
           ...planned.liveMotion,
           kind: "run-with-ball",
           mustPass: dribble.mustPass,
-          goCount: continuing
-            ? dribble.goCount
+          goCount: route.boundaryFallback
+            ? planned.liveMotion.goCount
             : Math.max(0, dribble.goCount - 1),
           // Busy I_DRIBBLE keeps the installed fstep. Contact recovery is the
           // exception: process_anims reinstalls locomotion after the team visit.
-          animationFrameStep: continuing && player.liveContact === undefined
-            ? player.animation.frameStep
-            : planned.liveMotion.animationFrameStep,
+          animationFrameStep: planned.liveMotion.animationFrameStep,
         },
       };
     }
@@ -1398,18 +1504,19 @@ function sourceHolderFacingAtRequesterVisit({
           })),
           seed: rngSeed,
         });
-    return planZonalPlayer({
+    const route = planSourceDribblePlayer({
       player: holder,
       motion: holder.liveMotion,
       teamRate: holder.liveMotion.teamRate,
     }, {
       ballPosition: holderVisit.ballPosition,
+      dribble,
       nextTick: 1,
       possession: holderVisit.possession,
       tactics: null,
-      targetOverride: dribble.target,
       zoning: null,
-    }).facing;
+    });
+    return route.player.facing;
   }
 
   // process_teams calls process_dir at the end of every earlier player visit.
@@ -1855,6 +1962,71 @@ function planZonalPlayer(
       animationFrameStep: null,
     },
   });
+}
+
+/**
+ * INTELL.CPP make_run checks the short intention's predicted endpoint after
+ * go_dribble has initialized it. If that endpoint leaves the pitch,
+ * avoid_boundary replaces the route before run_action executes this visit.
+ */
+function planSourceDribblePlayer(current, {
+  ballPosition,
+  dribble,
+  nextTick,
+  possession,
+  tactics,
+  zoning,
+}) {
+  const initial = planZonalPlayer(current, {
+    ballPosition,
+    nextTick,
+    possession,
+    tactics,
+    targetOverride: dribble.target,
+    zoning,
+  });
+  const initialTargetOffset = {
+    x: F32(dribble.target.x - current.player.position.x),
+    y: F32(dribble.target.y - current.player.position.y),
+  };
+  const initialGoDisplacement = initial.liveMotion.resetAnimationFrame
+    ? initial.liveMotion.goDisplacement
+    : {
+        // init_run_act stores target offset / its full journey count.
+        // run_action later replaces this with the current-facing step, but
+        // make_run performs its boundary check before that action executes.
+        x: F32(initialTargetOffset.x / (initial.liveMotion.goCount + 1)),
+        y: F32(initialTargetOffset.y / (initial.liveMotion.goCount + 1)),
+      };
+  const predicted = {
+    x: F32(
+      current.player.position.x
+        + initialGoDisplacement.x * dribble.goCount,
+    ),
+    y: F32(
+      current.player.position.y
+        + initialGoDisplacement.y * dribble.goCount,
+    ),
+  };
+  const boundaryFallback = predicted.x > PITCH_LENGTH
+    || predicted.x < 0
+    || predicted.y < 0
+    || predicted.y > PITCH_WIDTH;
+  if (!boundaryFallback) return { player: initial, boundaryFallback: false };
+  return {
+    player: planZonalPlayer(current, {
+      ballPosition,
+      nextTick,
+      possession,
+      tactics,
+      targetOverride: {
+        x: F32(current.player.nativePlayerNumber < 12 ? PITCH_LENGTH : 0),
+        y: F32(PITCH_WIDTH / 2),
+      },
+      zoning,
+    }),
+    boundaryFallback: true,
+  };
 }
 
 function updatePlayer(player, { nextTick, position, facing, actionId, liveMotion }) {

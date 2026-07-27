@@ -58,13 +58,17 @@ const PLAYER_NUMBER_FINAL_NATIVE_TEXTURE_SLOT = 578;
 const PLAYER_NUMBER_SOURCE_BANDS = deepFreeze([
   {
     team: "spain",
-    selector: 1936,
+    rendererTeamSlot: 0,
+    symbol: "BM_NUMBERS1",
+    selector: 872,
     y: 62,
     height: 27,
   },
   {
     team: "argentina",
-    selector: 1944,
+    rendererTeamSlot: 1,
+    symbol: "BM_NUMBERS4",
+    selector: 896,
     y: 89,
     height: 54,
   },
@@ -103,6 +107,11 @@ const PITCH_SURFACE_PATH = "assets/textures/spain-argentina-pitch.png";
 const PITCH_SURFACE_URL = cssoccerPublicUrl(PITCH_SURFACE_PATH);
 const HUD_GLYPH_ATLAS_PATH = "assets/textures/spain-argentina-hud-glyphs.png";
 const HUD_GLYPH_ATLAS_URL = cssoccerPublicUrl(HUD_GLYPH_ATLAS_PATH);
+const HALFTIME_MENU_SPRITE_ATLAS_PATH =
+  "assets/textures/spain-argentina-halftime-menu-sprites.png";
+const HALFTIME_MENU_SPRITE_ATLAS_URL = cssoccerPublicUrl(
+  HALFTIME_MENU_SPRITE_ATLAS_PATH,
+);
 const STADIUM_ATLAS_PATH = "assets/textures/spain-argentina-stadium.png";
 const STADIUM_ATLAS_URL = cssoccerPublicUrl(STADIUM_ATLAS_PATH);
 const SKY_BACKDROP_PATH = "assets/textures/spain-argentina-sky.png";
@@ -151,11 +160,11 @@ const MEDIUM_PITCH_TILE = deepFreeze({
 });
 const VISUAL_PITCH_SOURCE = deepFreeze({
   sourceArchive: "EUROREND.DAT",
-  pitchBitmap: "BM_PC",
-  pitchSelector: 920,
+  pitchBitmap: "BM_PB",
+  pitchSelector: 912,
   pitchPalette: "COL_P5",
   pitchPaletteSelector: 544,
-  selection: "retained-native-frame-50-visual-binding",
+  selection: "compiled-native-stadlist-0-runtime-binding",
 });
 const VISUAL_SKY_SOURCE = deepFreeze({
   selection: "retained-native-frame-50-visual-binding",
@@ -177,21 +186,21 @@ const PINNED_FOOTY_PALETTE = Object.freeze({
 });
 const HUD_FONT = deepFreeze({
   sourceFile: "FGFX.C",
-  fontNo: 1,
+  fontNo: 2,
   page: 0,
   sourceX: 96,
-  sourceY: 143,
-  sourcePitchRow: 27,
-  columns: 9,
-  cellWidth: 8,
-  cellHeight: 7,
+  sourceY: 191,
+  sourcePitchRow: 11,
+  columns: 10,
+  cellWidth: 16,
+  cellHeight: 13,
   rows: 5,
-  offset: 0,
+  offset: 7,
   asciiBase: 48,
   widths: [
-    7, 6, 7, 7, 7, 7, 7, 7, 7, 7, 3, 4, 6, 7, 6, 4,
-    3, 7, 7, 7, 7, 7, 7, 7, 7, 6, 7, 7, 7, 7, 7, 7,
-    7, 7, 7, 7, 6, 7, 7, 7, 7, 7, 7,
+    11, 8, 11, 11, 11, 10, 11, 11, 11, 11, 5, 9, 11, 11, 11, 7,
+    5, 14, 11, 12, 12, 9, 9, 14, 12, 5, 8, 13, 9, 16, 13, 14,
+    11, 14, 12, 10, 11, 12, 13, 16, 14, 11, 13,
   ],
 });
 const HUD_GLYPH_ATLAS_WIDTH = HUD_FONT.columns * HUD_FONT.cellWidth;
@@ -212,17 +221,57 @@ const HUD_COLOR_BANDS = deepFreeze([
   {
     id: "team-b",
     outputColorIndex: 56,
-    paletteSelector: 360,
+    paletteSelector: 416,
     paletteTargetIndex: 56,
+  },
+  {
+    id: "heading",
+    outputColorIndex: 207,
+    paletteSelector: 0,
+    paletteTargetIndex: 0,
+  },
+  {
+    id: "scorer",
+    outputColorIndex: 157,
+    paletteSelector: 0,
+    paletteTargetIndex: 0,
   },
 ]);
 const HUD_GLYPH_ATLAS_HEIGHT = HUD_GLYPH_BAND_HEIGHT * HUD_COLOR_BANDS.length;
 const HUD_NATIVE_LAYOUT = deepFreeze({
-  viewport: [320, 200],
-  clock: { x: 160, y: 1, justification: "center" },
-  teamA: { x: 140, y: 192, justification: "right" },
-  score: { x: 160, y: 192, justification: "center", separator: "=" },
-  teamB: { x: 180, y: 192, justification: "left" },
+  viewport: [640, 400],
+  clock: { x: 320, y: 1, justification: "center" },
+  teamA: { x: 280, y: 386, justification: "right" },
+  score: { x: 320, y: 386, justification: "center", separator: "=" },
+  teamB: { x: 360, y: 386, justification: "left" },
+});
+const HALFTIME_MENU_SOURCE = deepFreeze({
+  basePage: {
+    symbol: "BM_EXTRA3",
+    selector: 296,
+    bytes: PAGE_SIZE * PAGE_SIZE,
+  },
+  teamA: {
+    rendererTeamSlot: 0,
+    symbol: "BM_KGRID1",
+    selector: 800,
+    sourceRect: { x: 1, y: 2, width: 69, height: 79 },
+    target: { x: 0, y: 0 },
+  },
+  teamB: {
+    rendererTeamSlot: 1,
+    symbol: "BM_KGRID1",
+    selector: 800,
+    sourceRect: { x: 71, y: 2, width: 69, height: 79 },
+    target: { x: 69, y: 0 },
+  },
+  sprites: {
+    teamA: { sourceSprite: 19, x: 0, y: 0, width: 69, height: 79 },
+    teamB: { sourceSprite: 20, x: 69, y: 0, width: 69, height: 79 },
+    corner: { sourceSprite: 21, x: 138, y: 0, width: 21, height: 22 },
+    horizontalEdge: { sourceSprite: 22, x: 191, y: 0, width: 32, height: 9 },
+    verticalEdge: { sourceSprite: 23, x: 171, y: 0, width: 9, height: 32 },
+  },
 });
 
 const PINNED_ARCHIVE = Object.freeze({
@@ -278,9 +327,9 @@ const PINNED_NATIVE_ARCHIVE = Object.freeze({
     sha256: "96e6cea4bb91667cd204faa928696006048cf35a4e0baabefe83eca5d06dcb87",
   }),
   glyphPage: Object.freeze({
-    selector: 920,
-    symbol: "BM_PC",
-    bytes: 16_384,
+    selector: 968,
+    symbol: "BM_EXTRA2",
+    bytes: 19_456,
   }),
 });
 
@@ -291,23 +340,23 @@ const PINNED_STADIUM_ENGINE_OBJECT = Object.freeze({
 
 const STADIUM_PALETTE_OVERRIDES = deepFreeze([
   {
-    id: "spain-pitch",
+    id: "renderer-slot-0-pitch",
     symbol: "COL_P5",
     selector: 544,
     firstEntry: 128,
     entries: 16,
   },
   {
-    id: "spain-home-highlight",
-    symbol: "COL_HR",
-    selector: 608,
+    id: "renderer-slot-0-home-highlight",
+    symbol: "COL_HB",
+    selector: 584,
     firstEntry: 224,
     entries: 8,
   },
   {
-    id: "argentina-away-highlight",
-    symbol: "COL_AB",
-    selector: 632,
+    id: "renderer-slot-1-away-highlight",
+    symbol: "COL_AW",
+    selector: 664,
     firstEntry: 232,
     entries: 8,
   },
@@ -327,15 +376,26 @@ const NATIVE_PLAYER_SELECTORS = deepFreeze({
   palette: 0,
   matchTextureTable: 8,
   playerTextureTable: 16,
-  spainHead: 48,
-  spainTorso: 160,
-  spainLimbs: 232,
+  teamAHead: 32,
+  teamBHead: 32,
+  teamATorso: 64,
+  teamBTorso: 136,
+  teamALimbs: 232,
+  teamBLimbs: 240,
   sharedFeet: 272,
   keeperTorso: 280,
-  spainKitPalette: 440,
-  spainSkinPalette: 480,
-  spainPitchPalette: 544,
+  extraPage: 288,
+  assistantLimbs: 312,
+  teamAKitPalette: 344,
+  teamBKitPalette: 416,
+  teamASkinPalette: 480,
+  teamBSkinPalette: 480,
+  pitchPalette: 544,
+  teamAHomeHighlightPalette: 584,
+  teamBAwayHighlightPalette: 664,
   keeperLimbs: 864,
+  teamANumbers: 872,
+  teamBNumbers: 896,
 });
 const RETAIL_PLAYER_SELECTORS = deepFreeze({
   textureTable: 8,
@@ -360,30 +420,37 @@ const EXPECTED_NATIVE_PLAYER_RECORD_BYTES = new Map([
   [NATIVE_PLAYER_SELECTORS.palette, 768],
   [NATIVE_PLAYER_SELECTORS.matchTextureTable, 32_192],
   [NATIVE_PLAYER_SELECTORS.playerTextureTable, 18_336],
-  [NATIVE_PLAYER_SELECTORS.spainHead, 32_768],
-  [NATIVE_PLAYER_SELECTORS.spainTorso, 65_536],
-  [NATIVE_PLAYER_SELECTORS.spainLimbs, 19_968],
+  [NATIVE_PLAYER_SELECTORS.teamAHead, 32_768],
+  [NATIVE_PLAYER_SELECTORS.teamATorso, 65_536],
+  [NATIVE_PLAYER_SELECTORS.teamBTorso, 65_536],
+  [NATIVE_PLAYER_SELECTORS.teamALimbs, 19_968],
+  [NATIVE_PLAYER_SELECTORS.teamBLimbs, 19_968],
   [NATIVE_PLAYER_SELECTORS.sharedFeet, 17_152],
   [NATIVE_PLAYER_SELECTORS.keeperTorso, 65_536],
-  [NATIVE_PLAYER_SELECTORS.spainKitPalette, 72],
-  [NATIVE_PLAYER_SELECTORS.spainSkinPalette, 24],
-  [NATIVE_PLAYER_SELECTORS.spainPitchPalette, 48],
+  [NATIVE_PLAYER_SELECTORS.extraPage, 15_872],
+  [NATIVE_PLAYER_SELECTORS.assistantLimbs, 65_536],
+  [NATIVE_PLAYER_SELECTORS.teamAKitPalette, 72],
+  [NATIVE_PLAYER_SELECTORS.teamBKitPalette, 72],
+  [NATIVE_PLAYER_SELECTORS.teamASkinPalette, 24],
+  [NATIVE_PLAYER_SELECTORS.pitchPalette, 48],
   [NATIVE_PLAYER_SELECTORS.keeperLimbs, 65_536],
+  [NATIVE_PLAYER_SELECTORS.teamANumbers, 13_824],
+  [NATIVE_PLAYER_SELECTORS.teamBNumbers, 13_824],
 ]);
 const EXACT_PLAYER_PAGE_THREE_SHA256 =
-  "be65b4dc2f665dbf1f572ddab0cc03730612725bdebabc42e08c925b585a2ece";
+  "aa6cd8cdad96619191813918780a2917cf344c8f67dfa17c365adba14dd04993";
 const EXACT_PLAYER_SOURCE_AUDIT = deepFreeze([
   {
-    role: "spain-lower-leg",
+    role: "renderer-slot-0-lower-leg",
     nativeTextureSlot: 244,
-    sourceRect: { x: 0, y: 0, width: 15, height: 61 },
+    sourceRect: { x: 0, y: 0, width: 15, height: 62 },
     textureRecordSha256:
-      "1a1178ba120873b9e875af69bc352102f338de6cebcafaf26bd1271f006c17f5",
+      "cd46dbc60d6e79078a93d31b36530d83ecafbe6bd349b612dc20a841acd33967",
     indexedTexelSha256:
-      "086fffef5c3f07e9ce3f96d47ee3206fa358736e06b8b423a6466aaa6d0814e3",
+      "3ee90399006c82b7fed08c87b11d6b7bee01c7efd0695bddb66a850cd35d8121",
   },
   {
-    role: "spain-shorts",
+    role: "renderer-slot-0-shorts",
     nativeTextureSlot: 258,
     sourceRect: { x: 126, y: 0, width: 19, height: 62 },
     textureRecordSha256:
@@ -530,10 +597,31 @@ export function prepareCssoccerSourceTextureAtlas({
     archive: nativeArchive,
   });
   if (
+    stadiumSelectors.pitch.bitmapSymbol !== VISUAL_PITCH_SOURCE.pitchBitmap
+    || stadiumSelectors.pitch.bitmapSelector !== VISUAL_PITCH_SOURCE.pitchSelector
+    || stadiumSelectors.pitch.paletteSymbol !== VISUAL_PITCH_SOURCE.pitchPalette
+    || stadiumSelectors.pitch.paletteSelector
+      !== VISUAL_PITCH_SOURCE.pitchPaletteSelector
+  ) {
+    throw new Error("Prepared pitch source diverged from compiled native stadlist[0].");
+  }
+  if (
     nativeArchive.recordInfo(PINNED_NATIVE_ARCHIVE.glyphPage.selector).size
       !== PINNED_NATIVE_ARCHIVE.glyphPage.bytes
   ) {
-    throw new Error("EUROREND BM_PC no longer contains the native 256 by 64 pitch/font page.");
+    throw new Error("EUROREND BM_EXTRA2 no longer contains the native high-resolution font page.");
+  }
+  for (const source of [
+    HALFTIME_MENU_SOURCE.basePage,
+    HALFTIME_MENU_SOURCE.teamA,
+    HALFTIME_MENU_SOURCE.teamB,
+  ]) {
+    const expectedBytes = source.bytes ?? PAGE_SIZE * PAGE_SIZE;
+    if (nativeArchive.recordInfo(source.selector).size !== expectedBytes) {
+      throw new Error(
+        `EUROREND ${source.symbol} no longer contains its native halftime-menu page.`,
+      );
+    }
   }
   for (const [selector, expectedBytes] of EXPECTED_RECORD_BYTES) {
     const actual = archive.recordInfo(selector);
@@ -558,34 +646,29 @@ export function prepareCssoccerSourceTextureAtlas({
     }
   }
 
-  const palette = preparePalette(archive, retailArchive, nativeArchive);
+  const palette = preparePalette(nativeArchive);
   const pitchSurface = preparePitchSurfaceFromArchive(nativeArchive);
   const skyBackdrop = prepareSkyBackdrop(
     nativeArchive,
     requirePinnedBytes(footyPalBytes, "FOOTY.PAL", PINNED_FOOTY_PALETTE),
   );
   const paletteIndexZero = browserPaletteEntry(palette, 0);
-  const textureTableBytes = preparePlayerTextureTableBytes(
-    nativeArchive,
-    retailArchive,
-  );
+  const textureTableBytes = preparePlayerTextureTableBytes(nativeArchive);
   if (textureTableBytes.length % 32 !== 0) {
     throw new Error("TMD_TEXDATA is not a complete array of 32-byte four-point texture records.");
   }
   const textureRecords = decodeTextureRecords(textureTableBytes);
   const playerPages = preparePlayerPages(
-    archive,
-    retailArchive,
     nativeArchive,
     textureRecords,
   );
   const playerSourceAudit = preparePlayerSourceAudit(playerPages, textureRecords);
-  const officialSourceAtlas = prepareOfficialSourceAtlas(retailArchive, palette);
-  const playerHighlightSourceRecord = retailArchive.recordBytes(
-    RETAIL_PLAYER_SELECTORS.playerHighlightPage,
+  const officialSourceAtlas = prepareOfficialSourceAtlas(nativeArchive, palette);
+  const playerHighlightSourceRecord = nativeArchive.recordBytes(
+    NATIVE_PLAYER_SELECTORS.extraPage,
   );
   if (sha256(playerHighlightSourceRecord) !== PLAYER_HIGHLIGHT_SOURCE_RECORD_SHA256) {
-    throw new Error("Retail ACTREND player-highlight bitmap changed.");
+    throw new Error("EUROREND player-highlight bitmap changed.");
   }
   const pitchPixels = archive.recordBytes(SELECTORS.pitch);
   const indexedPages = [...playerPages, paddedPitchPage(pitchPixels)];
@@ -605,6 +688,7 @@ export function prepareCssoccerSourceTextureAtlas({
   const markingPixelPngBytes = encodeRgbaPng(1, 1, markingPixelRgba);
   const markingPixelSha256 = sha256(markingPixelPngBytes);
   const hudGlyphAtlas = prepareHudGlyphAtlas(nativeArchive);
+  const halftimeMenuSpriteAtlas = prepareHalftimeMenuSpriteAtlas(nativeArchive, palette);
   const stadiumAtlas = prepareStadiumAtlas(nativeArchive, stadiumSelectors, palette);
   const pageMaterials = Array.from({ length: PLAYER_PAGE_COUNT }, (_, page) => (
     createAtlasMaterial({ page, assetSha256, height: PAGE_SIZE })
@@ -683,7 +767,7 @@ export function prepareCssoccerSourceTextureAtlas({
         index: { file: "EUROREND.OFF", ...PINNED_NATIVE_ARCHIVE.index },
         selectors: NATIVE_PLAYER_SELECTORS,
         usage:
-          "Spain pages and palette, shared boot texels, goalkeeper pages, and player slots 1 through 532",
+          "compiled renderer slots 0 and 1, shared boot texels, goalkeeper and official pages, and the complete match texture table",
         publication: "prepare-derived browser assets only; source records remain ignored local input",
       },
       nativeCornerFlagSupplement: {
@@ -708,7 +792,7 @@ export function prepareCssoccerSourceTextureAtlas({
       textureRecords: textureRecords.length,
       nativePlayerPages: PLAYER_PAGE_COUNT,
       browserAtlasPlacements: placements.length,
-      generatedFiles: 6,
+      generatedFiles: 7,
       unaccountedArchiveBytes: data.length - archivePayloadBytes - archive.gapByteCount,
     },
     archiveAccounting: {
@@ -731,58 +815,58 @@ export function prepareCssoccerSourceTextureAtlas({
       sha256: sha256(palette),
       indexZero: paletteIndexZero,
       skinPalette: {
-        status: "exact-fixture-source-palette-selection",
-        spainSymbol: "COL_XCAUCASA",
-        spainSelector: NATIVE_PLAYER_SELECTORS.spainSkinPalette,
-        argentinaSymbol: "COL_XLATINO",
-        argentinaSelector: SELECTORS.paletteOverrides.argentinaSkin,
+        status: "exact-compiled-renderer-slot-palette-selection",
+        teamASymbol: "COL_XCAUCASA",
+        teamASelector: NATIVE_PLAYER_SELECTORS.teamASkinPalette,
+        teamBSymbol: "COL_XCAUCASA",
+        teamBSelector: NATIVE_PLAYER_SELECTORS.teamBSkinPalette,
       },
       overrides: [
         {
-          id: "spain-kit",
-          selector: NATIVE_PLAYER_SELECTORS.spainKitPalette,
+          id: "renderer-slot-0-kit",
+          selector: NATIVE_PLAYER_SELECTORS.teamAKitPalette,
           firstEntry: 32,
           entries: 24,
           sourceArchive: "retained-native-renderer",
         },
         {
-          id: "argentina-kit",
-          selector: RETAIL_PLAYER_SELECTORS.argentinaKitPalette,
+          id: "renderer-slot-1-kit",
+          selector: NATIVE_PLAYER_SELECTORS.teamBKitPalette,
           firstEntry: 56,
           entries: 24,
-          sourceArchive: "retail-player-supplement",
+          sourceArchive: "retained-native-renderer",
         },
         {
-          id: "spain-skin",
-          selector: NATIVE_PLAYER_SELECTORS.spainSkinPalette,
+          id: "renderer-slot-0-skin",
+          selector: NATIVE_PLAYER_SELECTORS.teamASkinPalette,
           firstEntry: 80,
           entries: 8,
           sourceArchive: "retained-native-renderer",
         },
         {
-          id: "argentina-skin",
-          selector: SELECTORS.paletteOverrides.argentinaSkin,
+          id: "renderer-slot-1-skin",
+          selector: NATIVE_PLAYER_SELECTORS.teamBSkinPalette,
           firstEntry: 88,
           entries: 8,
-          sourceArchive: "playable-demo",
+          sourceArchive: "retained-native-renderer",
         },
         {
-          id: "spain-pitch",
-          selector: NATIVE_PLAYER_SELECTORS.spainPitchPalette,
+          id: "renderer-slot-0-pitch",
+          selector: NATIVE_PLAYER_SELECTORS.pitchPalette,
           firstEntry: 128,
           entries: 16,
           sourceArchive: "retained-native-renderer",
         },
         {
-          id: "spain-home-highlight",
-          selector: 608,
+          id: "renderer-slot-0-home-highlight",
+          selector: NATIVE_PLAYER_SELECTORS.teamAHomeHighlightPalette,
           firstEntry: 224,
           entries: 8,
           sourceArchive: "retained-native-renderer",
         },
         {
-          id: "argentina-away-highlight",
-          selector: 632,
+          id: "renderer-slot-1-away-highlight",
+          selector: NATIVE_PLAYER_SELECTORS.teamBAwayHighlightPalette,
           firstEntry: 232,
           entries: 8,
           sourceArchive: "retained-native-renderer",
@@ -802,9 +886,9 @@ export function prepareCssoccerSourceTextureAtlas({
       sha256: sha256(textureTableBytes),
       composition: {
         base: "retained native match table",
-        nativePlayerFoundation: "EUROREND TMD_MANDATA slots 1 through 532",
+        nativePlayerFoundation: "EUROREND TMD_TEXDATA slots 1 through 532",
         nativePlayerHighlights: "EUROREND TMD_TEXDATA slots 533 through 548",
-        retailPlayerSupplement: "retail TMD_TEXDATA slots 549 through 1006",
+        nativePlayerNumbersAndWorld: "EUROREND TMD_TEXDATA slots 549 through 1006",
       },
     },
     playerSourceAudit,
@@ -812,9 +896,9 @@ export function prepareCssoccerSourceTextureAtlas({
     playerHighlightPrebake: {
       schema: "cssoccer-prepared-player-highlight-textures@1",
       status: "ready-source-backed-prebaked-highlight-alpha",
-      sourceArchive: "retail-player-supplement",
+      sourceArchive: "retained-native-renderer",
       sourcePage: PLAYER_HIGHLIGHT_PAGE_INDEX,
-      sourceSelector: RETAIL_PLAYER_SELECTORS.playerHighlightPage,
+      sourceSelector: NATIVE_PLAYER_SELECTORS.extraPage,
       sourceRecordSha256: PLAYER_HIGHLIGHT_SOURCE_RECORD_SHA256,
       sourceBand: { y: 0, height: PLAYER_HIGHLIGHT_SOURCE_HEIGHT },
       transparentPaletteIndex: PLAYER_HIGHLIGHT_TRANSPARENT_PALETTE_INDEX,
@@ -985,6 +1069,38 @@ export function prepareCssoccerSourceTextureAtlas({
       imageRendering: "pixelated",
       runtimeConstruction: false,
     },
+    halftimeMenuSpriteAtlas: {
+      schema: "cssoccer-prepared-native-halftime-menu-sprites@1",
+      path: HALFTIME_MENU_SPRITE_ATLAS_PATH,
+      url: HALFTIME_MENU_SPRITE_ATLAS_URL,
+      mediaType: "image/png",
+      width: PAGE_SIZE,
+      height: PAGE_SIZE,
+      bytes: halftimeMenuSpriteAtlas.pngBytes.length,
+      sha256: halftimeMenuSpriteAtlas.sha256,
+      rgbaSha256: sha256(halftimeMenuSpriteAtlas.rgba),
+      source: {
+        data: { file: "EUROREND.DAT", ...PINNED_NATIVE_ARCHIVE.data },
+        index: { file: "EUROREND.OFF", ...PINNED_NATIVE_ARCHIVE.index },
+        ...HALFTIME_MENU_SOURCE,
+      },
+      sourceDrawContract: {
+        file: "3DENG.C",
+        functions: [
+          "draw_menu_box",
+          "halftime_menu",
+          "draw_sprite",
+          "draw_sprite_hf",
+          "draw_sprite_vf",
+          "draw_sprite_vhf",
+        ],
+        zero: "transparent",
+        one: "replace with draw_sprite colour index zero",
+        greaterThanOne: "decrement source palette index by one",
+      },
+      imageRendering: "pixelated",
+      runtimeConstruction: false,
+    },
     stadiumAtlas: {
       schema: "cssoccer-prepared-native-stadium-atlas@1",
       path: STADIUM_ATLAS_PATH,
@@ -1098,12 +1214,13 @@ export function prepareCssoccerSourceTextureAtlas({
       "BM_PA selector 1920 after three demo-omitted late KGRID records",
       "BM_PA occupies the 64-row native extra-map pitch region",
       "full-detail pitch sampling repeats the leading 64 by 64 texels via pan mask 0x3f3f",
-      "retained native EUROREND selector 920 supplies the frame-50 BM_PC pitch bitmap",
-      "retained native EUROREND selector 544 supplies the frame-50 COL_P5 pitch palette",
+      "compiled stadlist[0] selects retained EUROREND BM_PB selector 912",
+      "compiled stadlist[0] selects retained EUROREND COL_P5 selector 544",
       "medium-detail pitch sampling repeats the 32 by 32 tile at row 32 column 64 via pan mask 0x1f1f",
       "BM_XARGENTI selector 96 supplies the complete 256 by 256 Argentina kit page",
       "retail TMD_TEXDATA slots 549 through 578 supply all fifteen Spain and Argentina shirt-number records",
-      "COL_XCAUCASA selector 1536 supplies the user-validated eight-entry skin palette",
+      "COL_XCAUCASA selector 480 supplies Spain's retained native eight-entry skin palette",
+      "COL_XLATINO selector 1536 supplies Argentina's playable-demo eight-entry skin palette",
     ],
   });
 
@@ -1133,6 +1250,12 @@ export function prepareCssoccerSourceTextureAtlas({
       mediaType: "image/png",
       bytes: hudGlyphAtlas.pngBytes,
       expectedSha256: hudGlyphAtlas.sha256,
+    }),
+    halftimeMenuSpriteAssetFile: Object.freeze({
+      path: HALFTIME_MENU_SPRITE_ATLAS_PATH,
+      mediaType: "image/png",
+      bytes: halftimeMenuSpriteAtlas.pngBytes,
+      expectedSha256: halftimeMenuSpriteAtlas.sha256,
     }),
     stadiumAssetFile: Object.freeze({
       path: STADIUM_ATLAS_PATH,
@@ -1877,6 +2000,41 @@ function prepareHudGlyphAtlas(nativeArchive) {
   };
 }
 
+function prepareHalftimeMenuSpriteAtlas(nativeArchive, palette) {
+  const indexed = Buffer.from(
+    nativeArchive.recordBytes(HALFTIME_MENU_SOURCE.basePage.selector),
+  );
+  for (const team of [HALFTIME_MENU_SOURCE.teamA, HALFTIME_MENU_SOURCE.teamB]) {
+    const source = nativeArchive.recordBytes(team.selector);
+    const { x, y, width, height } = team.sourceRect;
+    for (let row = 0; row < height; row += 1) {
+      source.copy(
+        indexed,
+        (team.target.y + row) * PAGE_SIZE + team.target.x,
+        (y + row) * PAGE_SIZE + x,
+        (y + row) * PAGE_SIZE + x + width,
+      );
+    }
+  }
+  const rgba = Buffer.alloc(PAGE_SIZE * PAGE_SIZE * 4);
+  for (let index = 0; index < indexed.length; index += 1) {
+    const sourceIndex = indexed[index];
+    if (sourceIndex === 0) continue;
+    const paletteIndex = sourceIndex === 1 ? 0 : sourceIndex - 1;
+    const target = index * 4;
+    rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
+    rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
+    rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
+    rgba[target + 3] = 255;
+  }
+  const pngBytes = encodeRgbaPng(PAGE_SIZE, PAGE_SIZE, rgba);
+  return {
+    rgba,
+    pngBytes,
+    sha256: sha256(pngBytes),
+  };
+}
+
 export function bindCssoccerStadiumTexture(preparation, sourceColorCode) {
   if (
     !preparation
@@ -1984,38 +2142,38 @@ export function bindCssoccerGoalNetTexture(preparation, sourceColorCode) {
 }
 
 
-function preparePalette(archive, retailArchive, nativeArchive) {
+function preparePalette(nativeArchive) {
   const palette = Buffer.from(
     nativeArchive.recordBytes(NATIVE_PLAYER_SELECTORS.palette),
   );
   copyPalette(
     nativeArchive,
     palette,
-    NATIVE_PLAYER_SELECTORS.spainKitPalette,
+    NATIVE_PLAYER_SELECTORS.teamAKitPalette,
     32,
   );
   copyPalette(
-    retailArchive,
+    nativeArchive,
     palette,
-    RETAIL_PLAYER_SELECTORS.argentinaKitPalette,
+    NATIVE_PLAYER_SELECTORS.teamBKitPalette,
     56,
   );
   copyPalette(
     nativeArchive,
     palette,
-    NATIVE_PLAYER_SELECTORS.spainSkinPalette,
+    NATIVE_PLAYER_SELECTORS.teamASkinPalette,
     80,
   );
   copyPalette(
-    archive,
+    nativeArchive,
     palette,
-    SELECTORS.paletteOverrides.argentinaSkin,
+    NATIVE_PLAYER_SELECTORS.teamBSkinPalette,
     88,
   );
   copyPalette(
     nativeArchive,
     palette,
-    NATIVE_PLAYER_SELECTORS.spainPitchPalette,
+    NATIVE_PLAYER_SELECTORS.pitchPalette,
     128,
   );
   for (const override of STADIUM_PALETTE_OVERRIDES.filter(({ firstEntry }) => (
@@ -2053,55 +2211,41 @@ function copyPalette(archive, palette, selector, firstEntry) {
   payload.copy(palette, offset);
 }
 
-function preparePlayerTextureTableBytes(nativeArchive, retailArchive) {
-  const matchBytes = nativeArchive.recordBytes(
-    NATIVE_PLAYER_SELECTORS.matchTextureTable,
+function preparePlayerTextureTableBytes(nativeArchive) {
+  return Buffer.from(
+    nativeArchive.recordBytes(NATIVE_PLAYER_SELECTORS.matchTextureTable),
   );
-  const playerBytes = nativeArchive.recordBytes(
-    NATIVE_PLAYER_SELECTORS.playerTextureTable,
-  );
-  const retailBytes = retailArchive.recordBytes(RETAIL_PLAYER_SELECTORS.textureTable);
-  const firstHighlightByte = (
-    PLAYER_HIGHLIGHT_FIRST_NATIVE_TEXTURE_SLOT - 1
-  ) * 32;
-  const firstNumberByte = (PLAYER_NUMBER_FIRST_NATIVE_TEXTURE_SLOT - 1) * 32;
-  if (
-    matchBytes.length !== retailBytes.length
-    || playerBytes.length < firstHighlightByte
-    || firstNumberByte !== PLAYER_HIGHLIGHT_FINAL_NATIVE_TEXTURE_SLOT * 32
-  ) throw new Error("Exact fixture player texture-table composition changed.");
-  const output = Buffer.from(matchBytes);
-  playerBytes.copy(output, 0, 0, firstHighlightByte);
-  retailBytes.copy(output, firstNumberByte, firstNumberByte, output.length);
-  return output;
 }
 
 function preparePlayerPages(
-  archive,
-  retailArchive,
   nativeArchive,
   textureRecords,
 ) {
   const pages = Array.from({ length: PLAYER_PAGE_COUNT }, () => Buffer.alloc(PAGE_SIZE * PAGE_SIZE));
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.spainHead, pages[0], 0);
-  copyIntoPage(archive, SELECTORS.player.argentinaHead, pages[0], 128 * PAGE_SIZE);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.spainTorso, pages[1], 0);
-  copyIntoPage(retailArchive, RETAIL_PLAYER_SELECTORS.argentinaTorso, pages[2], 0);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.spainLimbs, pages[3], 0);
-  copyIntoPage(archive, SELECTORS.player.argentinaLimbs, pages[3], 80 * PAGE_SIZE);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamAHead, pages[0], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamBHead, pages[0], 128 * PAGE_SIZE);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamATorso, pages[1], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamBTorso, pages[2], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamALimbs, pages[3], 0);
+  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamBLimbs, pages[3], 80 * PAGE_SIZE);
   copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.sharedFeet, pages[3], 158 * PAGE_SIZE);
   copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.keeperTorso, pages[4], 0);
   copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.keeperLimbs, pages[5], 0);
   copyIntoPage(
-    retailArchive,
-    RETAIL_PLAYER_SELECTORS.playerHighlightPage,
+    nativeArchive,
+    NATIVE_PLAYER_SELECTORS.extraPage,
     pages[PLAYER_HIGHLIGHT_PAGE_INDEX],
     0,
   );
-  copyIntoPage(retailArchive, RETAIL_PLAYER_SELECTORS.spainNumbers, pages[6], 62 * PAGE_SIZE);
   copyIntoPage(
-    retailArchive,
-    RETAIL_PLAYER_SELECTORS.argentinaNumbers,
+    nativeArchive,
+    NATIVE_PLAYER_SELECTORS.teamANumbers,
+    pages[6],
+    62 * PAGE_SIZE,
+  );
+  copyIntoPage(
+    nativeArchive,
+    NATIVE_PLAYER_SELECTORS.teamBNumbers,
     pages[6],
     89 * PAGE_SIZE,
   );
@@ -2165,16 +2309,16 @@ function preparePlayerSourceAudit(pages, textureRecords) {
     pageSha256: EXACT_PLAYER_PAGE_THREE_SHA256,
     sourceRecords: [
       {
-        id: "exact-spain-limbs",
+        id: "renderer-slot-0-limbs",
         archive: "EUROREND.DAT",
-        selector: NATIVE_PLAYER_SELECTORS.spainLimbs,
+        selector: NATIVE_PLAYER_SELECTORS.teamALimbs,
         y: 0,
         bytes: 19_968,
       },
       {
-        id: "argentina-limbs",
-        archive: "demo ACTREND.DAT",
-        selector: SELECTORS.player.argentinaLimbs,
+        id: "renderer-slot-1-limbs",
+        archive: "EUROREND.DAT",
+        selector: NATIVE_PLAYER_SELECTORS.teamBLimbs,
         y: 80,
         bytes: 19_968,
       },
@@ -2208,12 +2352,12 @@ function prepareOfficialSourceAtlas(archive, palette) {
     {
       nativePage: 13,
       symbol: "BM_XRFKPLIM",
-      selector: RETAIL_PLAYER_SELECTORS.assistantLimbs,
+      selector: NATIVE_PLAYER_SELECTORS.assistantLimbs,
     },
     {
       nativePage: 14,
       symbol: "BM_REFKPTOR",
-      selector: RETAIL_PLAYER_SELECTORS.refereeTorso,
+      selector: NATIVE_PLAYER_SELECTORS.keeperTorso,
     },
   ];
   const pages = bindings.map(({ selector, symbol }) => {

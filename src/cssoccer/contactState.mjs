@@ -344,9 +344,9 @@ export function resolveCssoccerLooseBallControl({
     f32(currentBall.position.x - player.position.x),
     f32(currentBall.position.y - player.position.y),
   );
-  const contact = distance <= touchBallBox
+  const insideOuterContactBox = distance <= touchBallBox
     && currentBall.position.z < playerHeight;
-  if (!contact) {
+  if (!insideOuterContactBox) {
     return deepFreeze({ contact: false, controlAccepted: null, difficulty: null, distance });
   }
 
@@ -355,6 +355,13 @@ export function resolveCssoccerLooseBallControl({
     && currentBall.position.z - currentBall.displacement.z
       < player.position.z + (playerHeight / 2)
   );
+  const atBody = currentBall.position.z
+    < player.position.z + playerHeight - 3;
+  if (!atFeet && !atBody) {
+    // BALLINT.CPP's outer PLAYER_HEIGHT box only opens the branch. A normal
+    // outfielder still cannot rebound the top three units above the body.
+    return deepFreeze({ contact: false, controlAccepted: null, difficulty: null, distance });
+  }
   const difficulty = controlDifficulty({
     player: { ...player, actionKind },
     ball: currentBall,

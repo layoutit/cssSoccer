@@ -31,7 +31,7 @@ async function main() {
   );
   const adaptive = assertAdaptiveReport(await runAdaptiveFreePlayBrowser({
     port: 5212,
-    timeoutMs: 210_000,
+    timeoutMs: 330_000,
     inputMode: "keyboard",
     captureRoot: runRoot,
     controlCountry: options.country,

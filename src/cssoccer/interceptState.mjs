@@ -890,11 +890,17 @@ export function projectCssoccerFirstTimeShotArrival(input = {}) {
   requirePlainObject(input, "first-time shot arrival input");
   requireExactKeys(input, [
     "ballState",
+    "entryAnimationFrame",
+    "entryAnimationId",
     "face",
     "freeTicks",
     "playerPosition",
     "strikeTime",
   ], "first-time shot arrival input");
+  if (!Number.isSafeInteger(input.entryAnimationId)) {
+    throw new TypeError("first-time shot arrival entryAnimationId must be a safe integer.");
+  }
+  requireF32(input.entryAnimationFrame, "first-time shot arrival entryAnimationFrame");
   requireF32Vector2(input.face, "first-time shot arrival face");
   requireF32Vector3(input.playerPosition, "first-time shot arrival playerPosition");
   requirePositiveF32(input.strikeTime, "first-time shot arrival strikeTime");
@@ -908,8 +914,23 @@ export function projectCssoccerFirstTimeShotArrival(input = {}) {
     prediction = stepCssoccerInterceptPrediction(prediction);
     predictions.push(prediction);
   }
+  // ACTIONS.CPP init_kick_anim chooses MC_SHOOTR from the fractional
+  // RUN/JOG/BARGE phase, but defaults to MC_SHOOTL from every other clip.
+  const sourcePhase = input.entryAnimationId === 72
+    ? input.entryAnimationFrame
+    : input.entryAnimationId === 73 || input.entryAnimationId === 74
+      ? F32(input.entryAnimationFrame + 0.5)
+      : null;
+  const fractionalPhase = sourcePhase === null
+    ? null
+    : sourcePhase - Math.trunc(sourcePhase);
+  const animationId = fractionalPhase !== null
+    && fractionalPhase >= 0.25
+    && fractionalPhase < 0.75
+    ? 34
+    : CSSOCCER_FIRST_TIME_SHOT_PROFILE.animationId;
   const contactOffset = rotateSourceOffset(
-    CSSOCCER_FIRST_TIME_SHOT_PROFILE.localOffsets[0],
+    CSSOCCER_FIRST_TIME_SHOT_PROFILE.localOffsets[animationId === 34 ? 1 : 0],
     input.face,
   );
   const oldRt = F32(input.strikeTime + input.freeTicks);
@@ -962,7 +983,7 @@ export function projectCssoccerFirstTimeShotArrival(input = {}) {
   );
   return deepFreeze({
     actionIndex: CSSOCCER_FIRST_TIME_SHOT_PROFILE.actionIndex,
-    animationId: CSSOCCER_FIRST_TIME_SHOT_PROFILE.animationId,
+    animationId,
     contact: CSSOCCER_FIRST_TIME_SHOT_PROFILE.contact,
     contactOffset,
     displacement,

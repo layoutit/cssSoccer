@@ -950,11 +950,13 @@ function followPlay(referee, frame) {
   const touchOffset = F32(prat * (frame.lastTouch < 12 ? 10 : -10));
   let tx = F32(
     centreX.value
-      + (F32(frame.ball.x - centreX.value) * 0.5)
+      // Watcom retains the subtraction through the 0.5 multiply, then stores
+      // the completed expression into the float tx local.
+      + ((frame.ball.x - centreX.value) * 0.5)
       + touchOffset,
   );
   let ty = F32(
-    centreY.value + (F32(frame.ball.y - centreY.value) * 0.5),
+    centreY.value + ((frame.ball.y - centreY.value) * 0.5),
   );
   tx = F32(tx - next.position.x);
   ty = F32(ty - next.position.y);

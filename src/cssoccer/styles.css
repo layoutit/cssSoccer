@@ -100,6 +100,12 @@ button {
 }
 
 #scene [data-cssoccer-kind="static"][data-cssoccer-root-id^="stadium-stand-"] > :is(b, i, s, u) {
+  -webkit-backface-visibility: hidden !important;
+  backface-visibility: hidden !important;
+}
+
+#scene [data-cssoccer-kind="static"][data-cssoccer-root-id^="stadium-stand-"]
+  > .cssoccer-two-sided-face {
   -webkit-backface-visibility: visible !important;
   backface-visibility: visible !important;
 }
@@ -195,7 +201,7 @@ button {
 }
 
 #match-hud {
-  --native-hud-pixel: min(0.3125vw, 0.5vh);
+  --native-hud-pixel: min(0.15625vw, 0.25vh);
   position: fixed;
   inset: 0;
   z-index: 2147483647;
@@ -209,41 +215,134 @@ button {
   pointer-events: none;
 }
 
-#hud-clock {
+#hud-clock,
+#hud-team-a,
+#hud-score,
+#hud-team-b,
+#hud-halftime-menu [data-native-hud-slot-count] {
   position: absolute;
-  top: 1em;
-  left: 50%;
   display: flex;
-  height: 7em;
+  height: 13em;
   margin: 0;
   padding: 0;
   border: 0;
+  background: transparent;
+  color: transparent;
   font-size: var(--native-hud-pixel);
   line-height: 0;
-  transform: translateX(calc(-50% + (var(--native-hud-pixel) / 2)));
 }
 
 [data-native-hud-glyph-slot] {
   display: block;
-  flex: 0 0 auto;
-  height: 7em;
+  flex: 0 0 var(--native-hud-glyph-width);
+  width: var(--native-hud-glyph-width);
+  height: 13em;
   background-image: url("/cssoccer/assets/textures/spain-argentina-hud-glyphs.png");
+  background-position: var(--native-hud-glyph-x) var(--native-hud-glyph-y);
   background-repeat: no-repeat;
-  background-size: 72em 105em;
+  background-size: 160em 325em;
   image-rendering: pixelated;
 }
 
-[data-native-hud-glyph-slot][data-glyph="0"] { width: 8em; background-position: 0 0; }
-[data-native-hud-glyph-slot][data-glyph="1"] { width: 7em; background-position: -8em 0; }
-[data-native-hud-glyph-slot][data-glyph="2"] { width: 8em; background-position: -16em 0; }
-[data-native-hud-glyph-slot][data-glyph="3"] { width: 8em; background-position: -24em 0; }
-[data-native-hud-glyph-slot][data-glyph="4"] { width: 8em; background-position: -32em 0; }
-[data-native-hud-glyph-slot][data-glyph="5"] { width: 8em; background-position: -40em 0; }
-[data-native-hud-glyph-slot][data-glyph="6"] { width: 8em; background-position: -48em 0; }
-[data-native-hud-glyph-slot][data-glyph="7"] { width: 8em; background-position: -56em 0; }
-[data-native-hud-glyph-slot][data-glyph="8"] { width: 8em; background-position: -64em 0; }
-[data-native-hud-glyph-slot][data-glyph="9"] { width: 8em; background-position: 0 -7em; }
-[data-native-hud-glyph-slot][data-glyph=":"] { width: 4em; background-position: -8em -7em; }
+#hud-halftime-menu {
+  position: absolute;
+  width: 576em;
+  height: var(--native-menu-height);
+  overflow: hidden;
+  font-size: var(--native-hud-pixel);
+  pointer-events: none;
+}
+
+#hud-halftime-filter {
+  position: absolute;
+  top: 51em;
+  left: 20em;
+  width: 536em;
+  height: var(--native-menu-filter-height);
+  background: rgb(0 0 0 / 50%);
+}
+
+.hud-menu-sprite {
+  position: absolute;
+  display: block;
+  background-image: url("/cssoccer/assets/textures/spain-argentina-halftime-menu-sprites.png");
+  background-repeat: no-repeat;
+  background-size: 256em 256em;
+  image-rendering: pixelated;
+}
+
+.hud-menu-shirt-a {
+  top: 24em;
+  left: 20em;
+  width: 69em;
+  height: 79em;
+  background-position: 0 0;
+}
+
+.hud-menu-shirt-b {
+  top: 24em;
+  left: 486em;
+  width: 69em;
+  height: 79em;
+  background-position: -69em 0;
+}
+
+.hud-menu-corner {
+  width: 21em;
+  height: 22em;
+  background-position: -138em 0;
+}
+
+.hud-menu-corner-tl { top: 42em; left: 11em; }
+.hud-menu-corner-tr { top: 42em; left: 544em; transform: scaleX(-1); }
+.hud-menu-corner-br {
+  top: var(--native-menu-bottom-corner-y);
+  left: 544em;
+  transform: scale(-1);
+}
+.hud-menu-corner-bl {
+  top: var(--native-menu-bottom-corner-y);
+  left: 11em;
+  transform: scaleY(-1);
+}
+
+.hud-menu-edge-row {
+  position: absolute;
+  left: 32em;
+  display: flex;
+  width: 512em;
+  height: 9em;
+}
+
+.hud-menu-edge-top { top: 42em; }
+.hud-menu-edge-bottom { top: var(--native-menu-bottom-edge-y); }
+
+.hud-menu-horizontal-edge {
+  position: relative;
+  flex: 0 0 32em;
+  width: 32em;
+  height: 9em;
+  background-position: -191em 0;
+}
+
+.hud-menu-edge-column {
+  position: absolute;
+  top: 64em;
+  display: flex;
+  flex-direction: column;
+  width: 9em;
+}
+
+.hud-menu-edge-left { left: 11em; }
+.hud-menu-edge-right { left: 556em; }
+
+.hud-menu-vertical-edge {
+  position: relative;
+  flex: 0 0 32em;
+  width: 9em;
+  height: 32em;
+  background-position: -171em 0;
+}
 
 [data-cssoccer-control]:focus-visible {
   outline: 3px solid #ffffff;

@@ -366,6 +366,12 @@ export function extractNativeVisualStadiumSelectors({ engineObject, archive } = 
     schema: "cssoccer-native-visual-stadium-selectors@1",
     entryIndex: NATIVE_VISUAL_STADIUM_ENTRY_INDEX,
     bindingAuthority: "3DENG.OBJ compiled stadlist[0] layout and selectors plus FILES.C symbolic slot order",
+    pitch: Object.freeze({
+      bitmapSymbol: "BM_PB",
+      bitmapSelector: entry.readInt32LE(0),
+      paletteSymbol: "COL_P5",
+      paletteSelector: entry.readInt32LE(4),
+    }),
     layout: Object.freeze({
       dimensions: Object.freeze({
         st_w: entry.readInt32LE(104),

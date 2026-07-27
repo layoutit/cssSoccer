@@ -194,6 +194,69 @@ export function stepBallMatchState(
 }
 
 /**
+ * BALL.CPP pitch_bounds after the possessed ball_trajectory prepass.
+ * ball_trajectory deliberately does not move an owned ball, but pitch_bounds
+ * still tests the position published by the previous hold_ball visit.
+ */
+export function qualifyCssoccerPossessedBallBoundary(state) {
+  const current = createBallMatchState(state);
+  if (
+    current.limbo.active !== 0
+    || current.outcome !== null
+    || current.ball.outOfPlay !== 0
+    || current.ball.inGoal !== 0
+  ) {
+    throw new Error("Possessed pitch-bounds qualification requires one live in-play ball.");
+  }
+  const position = current.ball.position;
+  let axis = null;
+  let boundary = null;
+  let line = null;
+  if (position.x < 0) {
+    axis = "x";
+    boundary = "minimum";
+    line = 0;
+  } else if (position.x >= CSSOCCER_BALL_CONSTANTS.pitchLength) {
+    axis = "x";
+    boundary = "maximum";
+    line = CSSOCCER_BALL_CONSTANTS.pitchLength;
+  } else if (position.y < 0) {
+    axis = "y";
+    boundary = "minimum";
+    line = 0;
+  } else if (position.y >= CSSOCCER_BALL_CONSTANTS.pitchWidth) {
+    axis = "y";
+    boundary = "maximum";
+    line = CSSOCCER_BALL_CONSTANTS.pitchWidth;
+  }
+  if (axis === null) {
+    return matchResult(current.ball, current.limbo, null, []);
+  }
+  const ball = createBallState({
+    ...current.ball,
+    outPosition: position,
+    outOfPlay: CSSOCCER_BALL_CONSTANTS.outOfPlayTicks,
+  });
+  const outcome = createOutcome({
+    kind: "boundary",
+    status: "countdown",
+    axis,
+    boundary,
+    line,
+    position,
+  }, ball);
+  return matchResult(ball, current.limbo, outcome, [
+    {
+      type: "ball-boundary-outcome",
+      axis,
+      boundary,
+      line,
+      requiresBoundsRule: true,
+    },
+  ]);
+}
+
+/**
  * Complete BALL.CPP's final boundary countdown visit. The ordinary reducer
  * publishes ball_out_of_play=1 as a seam for match_rules; on the following
  * source tick process_ball still advances the trajectory once, decrements to
