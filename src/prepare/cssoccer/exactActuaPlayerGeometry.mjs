@@ -8,11 +8,46 @@ export const CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_SCHEMA =
 
 export const CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_ID =
   "actua-player-28p-13f-one-basis";
+export const CSSOCCER_EXACT_ACTUA_GOALKEEPER_GEOMETRY_ID =
+  "actua-goalkeeper-28p-13f-one-basis";
 
-const MODEL_IDS = Object.freeze(["player_f1", "player_f2"]);
+const MODEL_IDS = Object.freeze([
+  "player_f1",
+  "player_f2",
+  "player_fg1",
+  "player_fg2",
+]);
+const GEOMETRY_VARIANTS = Object.freeze({
+  outfield: Object.freeze({
+    id: CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_ID,
+    modelIds: Object.freeze(["player_f1", "player_f2"]),
+  }),
+  goalkeeper: Object.freeze({
+    id: CSSOCCER_EXACT_ACTUA_GOALKEEPER_GEOMETRY_ID,
+    modelIds: Object.freeze(["player_fg1", "player_fg2"]),
+  }),
+});
 const MATERIAL_PROFILE_BY_MODEL = Object.freeze({
-  player_f1: Object.freeze({ id: "spain-player-material", country: "spain" }),
-  player_f2: Object.freeze({ id: "argentina-player-material", country: "argentina" }),
+  player_f1: Object.freeze({
+    id: "spain-player-material",
+    country: "spain",
+    geometryVariant: "outfield",
+  }),
+  player_f2: Object.freeze({
+    id: "argentina-player-material",
+    country: "argentina",
+    geometryVariant: "outfield",
+  }),
+  player_fg1: Object.freeze({
+    id: "spain-goalkeeper-material",
+    country: "spain",
+    geometryVariant: "goalkeeper",
+  }),
+  player_fg2: Object.freeze({
+    id: "argentina-goalkeeper-material",
+    country: "argentina",
+    geometryVariant: "goalkeeper",
+  }),
 });
 const FACE_ROLES = Object.freeze([
   "head",
@@ -31,45 +66,41 @@ const FACE_ROLES = Object.freeze([
 ]);
 
 /**
- * Prove that player_f1/player_f2 are material profiles over one ordered source
- * geometry. The returned contract deliberately contains one geometry table.
+ * Prove the native outfield and goalkeeper geometry/material pairs. Each team
+ * shares its role geometry with the opponent but keeps its own source colors.
  */
 export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
   assertModels(models);
-  const canonicalModel = models.player_f1;
-  const geometryFaces = canonicalModel.topology.faces.map((face, faceIndex) => (
-    normalizeGeometryFace(face, faceIndex)
-  ));
-  const topologyCore = {
-    geometryId: CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_ID,
-    pointCount: canonicalModel.topology.pointCount,
-    faceCount: geometryFaces.length,
-    faceOrder: geometryFaces.map(({ faceIndex }) => faceIndex),
-    faces: geometryFaces,
-    leafBasis: {
-      tagName: "s",
-      stableLeafCount: geometryFaces.length,
-      stableLeafOrder: "source face index 0..12",
-      canonicalCoordinates: [[0, 0], [1, 0], [1, 1], [0, 1]],
-      transformOrigin: "0 0",
-      runtimeNodeCreation: false,
-      runtimeGeometryConstruction: false,
-    },
-  };
-  const topologySha256 = sha256(Buffer.from(canonicalJson(topologyCore)));
-
-  for (const modelId of MODEL_IDS) {
-    const candidate = models[modelId];
-    const candidateFaces = candidate.topology.faces.map((face, faceIndex) => (
-      normalizeGeometryFace(face, faceIndex)
-    ));
-    if (canonicalJson(candidateFaces) !== canonicalJson(geometryFaces)) {
-      throw new Error(`${modelId} introduces a second exact player geometry table.`);
-    }
+  const geometryVariants = Object.fromEntries(
+    Object.entries(GEOMETRY_VARIANTS).map(([variantId, variant]) => {
+      const canonicalModel = models[variant.modelIds[0]];
+      const topology = prepareGeometryVariant({
+        geometryId: variant.id,
+        canonicalModel,
+      });
+      for (const modelId of variant.modelIds) {
+        const candidateFaces = models[modelId].topology.faces.map(
+          (face, faceIndex) => normalizeGeometryFace(face, faceIndex),
+        );
+        if (canonicalJson(candidateFaces) !== canonicalJson(topology.faces)) {
+          throw new Error(
+            `${modelId} does not share the exact ${variantId} geometry table.`,
+          );
+        }
+      }
+      return [variantId, topology];
+    }),
+  );
+  if (
+    geometryVariants.outfield.topologySha256
+    === geometryVariants.goalkeeper.topologySha256
+  ) {
+    throw new Error("Native outfield and goalkeeper geometry unexpectedly collapsed.");
   }
 
   const materialProfiles = Object.fromEntries(MODEL_IDS.map((modelId) => {
     const profile = MATERIAL_PROFILE_BY_MODEL[modelId];
+    const topology = geometryVariants[profile.geometryVariant];
     const bindings = models[modelId].topology.faces.map((face, faceIndex) => ({
       faceIndex,
       semanticRole: FACE_ROLES[faceIndex],
@@ -81,36 +112,41 @@ export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
     return [profile.id, {
       ...profile,
       sourceModelSymbol: modelId,
-      geometryId: CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_ID,
-      topologySha256,
+      geometryId: topology.geometryId,
+      topologySha256: topology.topologySha256,
       bindings,
     }];
   }));
-  const differingMaterialFaceIndices = geometryFaces
-    .map(({ faceIndex }) => faceIndex)
-    .filter((faceIndex) => (
-      models.player_f1.topology.faces[faceIndex].sourceColorCode
-      !== models.player_f2.topology.faces[faceIndex].sourceColorCode
-    ));
+  const differingMaterialFaceIndicesByVariant = Object.fromEntries(
+    Object.entries(GEOMETRY_VARIANTS).map(([variantId, variant]) => {
+      const [leftModelId, rightModelId] = variant.modelIds;
+      return [
+        variantId,
+        geometryVariants[variantId].faces
+          .map(({ faceIndex }) => faceIndex)
+          .filter((faceIndex) => (
+            models[leftModelId].topology.faces[faceIndex].sourceColorCode
+            !== models[rightModelId].topology.faces[faceIndex].sourceColorCode
+          )),
+      ];
+    }),
+  );
+  const canonicalModel = models.player_f1;
   const core = {
     schema: CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_SCHEMA,
-    status: "ready-one-geometry-two-material-profiles",
-    geometry: {
-      ...topologyCore,
-      topologySha256,
-      stateAddress: {
-        fields: ["preparedPoseIndex", "yawIndex"],
-        yawCount: 24,
-        yawStepDegrees: 15,
-        excludedFields: ["team", "country", "modelId", "shirtNumber", "materialProfileId"],
-      },
-    },
+    status: "ready-two-native-geometries-four-material-profiles",
+    // Keep the existing outfield field as the package compatibility surface
+    // while variant-aware consumers move to geometryVariants.
+    geometry: geometryVariants.outfield,
+    geometryVariants,
     materialProfiles,
-    materialProfileBySourceModel: {
-      player_f1: MATERIAL_PROFILE_BY_MODEL.player_f1.id,
-      player_f2: MATERIAL_PROFILE_BY_MODEL.player_f2.id,
-    },
-    differingMaterialFaceIndices,
+    materialProfileBySourceModel: Object.fromEntries(MODEL_IDS.map((modelId) => [
+      modelId,
+      MATERIAL_PROFILE_BY_MODEL[modelId].id,
+    ])),
+    differingMaterialFaceIndices:
+      differingMaterialFaceIndicesByVariant.outfield,
+    differingMaterialFaceIndicesByVariant,
     lineage: {
       sourceRevision: canonicalModel.lineage.sourceRevision,
       dataObjectSha256: canonicalModel.lineage.dataObject.sha256,
@@ -119,13 +155,52 @@ export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
         modelId,
         models[modelId].topology.sourceBytesSha256,
       ])),
-      proof: "primitive, dispatch, point indexes, primitive parameters, and face order are identical; source color codes are material bindings",
+      proof:
+        "outfield opponents share one topology; goalkeeper opponents share a second wider native topology; source color codes remain material bindings",
     },
   };
   return deepFreeze({
     ...core,
     contractSha256: sha256(Buffer.from(canonicalJson(core))),
   });
+}
+
+function prepareGeometryVariant({ geometryId, canonicalModel }) {
+  const faces = canonicalModel.topology.faces.map((face, faceIndex) => (
+    normalizeGeometryFace(face, faceIndex)
+  ));
+  const core = {
+    geometryId,
+    pointCount: canonicalModel.topology.pointCount,
+    faceCount: faces.length,
+    faceOrder: faces.map(({ faceIndex }) => faceIndex),
+    faces,
+    stateAddress: {
+      fields: ["preparedPoseIndex", "yawIndex"],
+      yawCount: 24,
+      yawStepDegrees: 15,
+      excludedFields: [
+        "team",
+        "country",
+        "modelId",
+        "shirtNumber",
+        "materialProfileId",
+      ],
+    },
+    leafBasis: {
+      tagName: "s",
+      stableLeafCount: faces.length,
+      stableLeafOrder: "source face index 0..12",
+      canonicalCoordinates: [[0, 0], [1, 0], [1, 1], [0, 1]],
+      transformOrigin: "0 0",
+      runtimeNodeCreation: false,
+      runtimeGeometryConstruction: false,
+    },
+  };
+  return {
+    ...core,
+    topologySha256: sha256(Buffer.from(canonicalJson(core))),
+  };
 }
 
 export function exactActuaPlayerGeometryStateKey({ preparedPoseIndex, yawIndex } = {}) {
@@ -161,11 +236,15 @@ function normalizeGeometryFace(face, faceIndex) {
 
 function assertModels(models) {
   if (!models || typeof models !== "object" || Array.isArray(models)) {
-    throw new TypeError("Exact Actua geometry preparation requires player_f1 and player_f2 models.");
+    throw new TypeError(
+      "Exact Actua geometry preparation requires outfield and goalkeeper models.",
+    );
   }
   const keys = Object.keys(models).sort();
   if (keys.join(",") !== [...MODEL_IDS].sort().join(",")) {
-    throw new Error("Exact Actua geometry preparation accepts exactly player_f1 and player_f2.");
+    throw new Error(
+      "Exact Actua geometry preparation accepts exactly f1/f2/fg1/fg2.",
+    );
   }
   for (const modelId of MODEL_IDS) {
     const model = models[modelId];

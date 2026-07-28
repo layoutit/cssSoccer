@@ -184,10 +184,17 @@ function projectPlayers(output, state) {
     // A newly installed fall changes tm_xdis/tm_ydis after this visit's
     // process_dir slot. Native therefore retains the previous discrete
     // face_dir for the publication tick and catches up on the next tick.
-    const faceDirection = player.liveContact?.phase === "fall"
-      && player.liveContact.startTick === state.tick
-      ? sourceFacingDirection(player.previousFacing)
-      : sourceFacingDirection(player.facing);
+    // The setup sample retains ANDYDEFS.H match_player.face_dir's zero-filled
+    // bucket even though tm_xdis/tm_ydis already contain the opening vectors.
+    // process_dir owns the first computed eight-way bucket on the next tick.
+    // The mounted command harness publishes that setup sample as product tick
+    // one; product tick two is the first process_dir result.
+    const faceDirection = state.tick <= 1
+      ? 0
+      : player.liveContact?.phase === "fall"
+        && player.liveContact.startTick === state.tick
+        ? sourceFacingDirection(player.previousFacing)
+        : sourceFacingDirection(player.facing);
     set(output, `${prefix}face_direction`, faceDirection);
     set(output, `${prefix}native_player`, player.nativePlayerNumber);
     set(output, `${prefix}on`, player.active ? 1 : 0);

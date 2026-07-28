@@ -41,6 +41,8 @@ const RETAINED_STATE_ARTIFACT_SHA256 =
 const PLAYER_MODEL_SYMBOLS = Object.freeze([
   "player_f1",
   "player_f2",
+  "player_fg1",
+  "player_fg2",
   "player_fr",
   "player_fl",
 ]);
@@ -77,6 +79,36 @@ const PLAYER_TEXTURE_BLOCKS = deepFreeze([
   { sourceLabel: "Upper Arm Keeper", firstSlot: 512, endSlotExclusive: 519, authoredSlot: 515 },
   { sourceLabel: "Upper Leg Keeper", firstSlot: 519, endSlotExclusive: 526, authoredSlot: 522 },
   { sourceLabel: "Lower Arm Keeper", firstSlot: 526, endSlotExclusive: 533, authoredSlot: 529 },
+  {
+    sourceLabel: "Alternate Lower Leg Keeper B",
+    firstSlot: 849,
+    endSlotExclusive: 856,
+    authoredSlot: 852,
+  },
+  {
+    sourceLabel: "Alternate Upper Arm Keeper B",
+    firstSlot: 856,
+    endSlotExclusive: 863,
+    authoredSlot: 859,
+  },
+  {
+    sourceLabel: "Alternate Upper Leg Keeper B",
+    firstSlot: 863,
+    endSlotExclusive: 870,
+    authoredSlot: 866,
+  },
+  {
+    sourceLabel: "Alternate Lower Arm Keeper B",
+    firstSlot: 870,
+    endSlotExclusive: 877,
+    authoredSlot: 873,
+  },
+  {
+    sourceLabel: "Alternate Torso Keeper B",
+    firstSlot: 937,
+    endSlotExclusive: 997,
+    authoredSlot: 949,
+  },
 ]);
 const PLAYER_NUMBER_FACE_INDEX = 12;
 const EXTRA_TEXTURE_SLOT_OFFSET = 533;
@@ -183,7 +215,11 @@ export function parseCssoccerActors({
       ) {
         throw new Error("Player actor " + sourceActor.id + " changed its native indices.");
       }
-      const modelId = team.nativeTeamSlot === "A" ? "player_f1" : "player_f2";
+      const goalkeeper = sourceActor.nativeRuntimeIndex === 0
+        || sourceActor.nativeRuntimeIndex === 11;
+      const modelId = team.nativeTeamSlot === "A"
+        ? goalkeeper ? "player_fg1" : "player_f1"
+        : goalkeeper ? "player_fg2" : "player_f2";
       return {
         id: sourceActor.id,
         kind: "player",
@@ -473,7 +509,10 @@ function prepareSourcePlayerModel(symbol, faceList) {
     topologySignatureSha256,
     framePolygonCount: sourcePrimitives.length,
     productRendering: {
-      status: symbol === "player_f1" || symbol === "player_f2"
+      status: symbol === "player_f1"
+          || symbol === "player_f2"
+          || symbol === "player_fg1"
+          || symbol === "player_fg2"
         ? "rendered-by-exact-actua-one-basis"
         : "rendered-by-exact-actua-official-one-basis",
       runtimeGeometryConstructionAllowed: false,
@@ -733,7 +772,11 @@ function playerFaceSourceBinding(modelId, faceIndex, primitive, sourceColorCode)
   const textureBlock = PLAYER_TEXTURE_BLOCKS.find(({ firstSlot, endSlotExclusive }) => (
     authoredNativeTextureSlot >= firstSlot && authoredNativeTextureSlot < endSlotExclusive
   ));
-  if (!textureBlock && (modelId === "player_f1" || modelId === "player_f2")) {
+  if (
+    !textureBlock
+    && new Set(["player_f1", "player_f2", "player_fg1", "player_fg2"])
+      .has(modelId)
+  ) {
     throw new Error(
       `${modelId} face ${faceIndex} texture slot ${authoredNativeTextureSlot} is outside the source player texture blocks.`,
     );
@@ -748,9 +791,9 @@ function playerFaceSourceBinding(modelId, faceIndex, primitive, sourceColorCode)
   if (nativeDispatch === null) {
     throw new Error(`${modelId} face ${faceIndex} has no source renderer dispatch.`);
   }
-  const teamNumberOffset = modelId === "player_f1"
+  const teamNumberOffset = modelId === "player_f1" || modelId === "player_fg1"
     ? 0
-    : modelId === "player_f2"
+    : modelId === "player_f2" || modelId === "player_fg2"
       ? 15
       : null;
   const runtimeOverride = faceIndex === PLAYER_NUMBER_FACE_INDEX && teamNumberOffset !== null
@@ -1010,7 +1053,7 @@ function modelBinding(model, modelId, renderAssetId = renderAssetIdForModel(mode
 }
 
 function renderAssetIdForModel(modelId) {
-  if (modelId === "player_f1" || modelId === "player_f2") {
+  if (new Set(["player_f1", "player_f2", "player_fg1", "player_fg2"]).has(modelId)) {
     throw new Error(`Obsolete player render asset ${modelId} is forbidden.`);
   }
   return modelId === "ball" ? "actor-ball" : "actor-" + modelId.replaceAll("_", "-");

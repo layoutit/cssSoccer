@@ -17,9 +17,9 @@ const MANIFEST_URL = "/cssoccer/manifest.json";
 
 /**
  * Install a test-only bound command scenario around the already-mounted
- * product. Neutral movement and retained fire-1 pulses enter through real
- * KeyboardEvents, and the product's deterministic visual-capture clock owns
- * every simulation, render, HUD, and exact-asset publication.
+ * product. The retained command stream enters through the product's bound
+ * visual-capture command port, while the mounted engine still owns every
+ * simulation, render, HUD, and exact-asset publication.
  */
 export async function installCssoccerFreePlayParityCapture({
   candidateIdentity,
@@ -51,7 +51,7 @@ export async function installCssoccerFreePlayParityCapture({
     || initialProduct.engine?.tick !== 0
     || initialProduct.mount?.rootCount !== 37
     || typeof debug.beginVisualCapture !== "function"
-    || typeof debug.advanceVisualCaptureToTick !== "function"
+    || typeof debug.stepVisualCaptureCommand !== "function"
   ) {
     throw new Error("Mounted browser parity requires the ready canonical product at tick zero.");
   }
@@ -103,17 +103,6 @@ export async function installCssoccerFreePlayParityCapture({
   if (commandSha256 !== scenario.bindings.commandSha256) {
     throw new Error("Mounted browser parity command stream failed its SHA-256 binding.");
   }
-  if (
-    scenario.commands.some(({ moveX, moveY, buttons }) => (
-      moveX !== 0
-      || moveY !== 0
-      || (buttons !== 0 && buttons !== 1)
-    ))
-  ) {
-    throw new Error(
-      "Mounted browser parity currently requires neutral movement and retained fire-1 pulses.",
-    );
-  }
 
   debug.beginVisualCapture();
   let cursor = 0;
@@ -128,7 +117,7 @@ export async function installCssoccerFreePlayParityCapture({
       commandCount: scenario.commands.length,
       phase: "post_tick",
       fieldCount: CSSOCCER_NATIVE_FIELDS.length,
-      driver: "mounted-keyboard-events-and-product-visual-capture-clock",
+      driver: "mounted-bound-commands-and-product-visual-capture-clock",
       engineIndependence,
     });
   }
@@ -155,8 +144,7 @@ export async function installCssoccerFreePlayParityCapture({
           }),
       );
     }
-    setFire1((command.buttons & 1) !== 0);
-    const advanced = await debug.advanceVisualCaptureToTick(command.tick + 1);
+    const advanced = await debug.stepVisualCaptureCommand(command);
     const after = debug.inspect();
     const actualCommand = after.input?.lastCommand;
     if (
@@ -210,21 +198,6 @@ export async function installCssoccerFreePlayParityCapture({
     });
   }
 
-  function setFire1(pressed) {
-    const before = debug.inspect().input.keyboardCodes.includes("KeyJ");
-    if (before === pressed) return;
-    target.dispatchEvent(new target.KeyboardEvent(pressed ? "keydown" : "keyup", {
-      bubbles: true,
-      cancelable: true,
-      code: "KeyJ",
-      key: "j",
-    }));
-    const after = debug.inspect().input.keyboardCodes.includes("KeyJ");
-    if (after !== pressed) {
-      throw new Error("Mounted browser parity could not publish the fire-1 key state.");
-    }
-  }
-
   const api = Object.freeze({
     ready: true,
     status: "ready",
@@ -237,7 +210,7 @@ export async function installCssoccerFreePlayParityCapture({
       const product = debug.inspect();
       return Object.freeze({
         ...product,
-        scenarioKind: "mounted-product-keyboard-command-scenario",
+        scenarioKind: "mounted-product-bound-command-scenario",
         harnessPreparedRequests: Object.freeze([...requests]),
         freePlayEngine: Object.freeze({
           schema: product.engine?.schema ?? null,
@@ -245,6 +218,7 @@ export async function installCssoccerFreePlayParityCapture({
           nextCommandTick: cursor,
           complete: cursor === scenario.commands.length,
         }),
+        exactPlayerAssets: debug.exactPlayerAssetStats?.() ?? null,
         scenario: scenarioStatus(),
       });
     },

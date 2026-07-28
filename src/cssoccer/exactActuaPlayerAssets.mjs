@@ -4,12 +4,15 @@ export const CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA =
 const INDEX_SCHEMA = "cssoccer-exact-actua-player-animation-index@1";
 const CHUNK_SCHEMA = "cssoccer-exact-actua-player-animation-chunk@1";
 const MATERIALS_SCHEMA = "cssoccer-exact-actua-player-materials@1";
+const RASTER_SCHEMA = "cssoccer-exact-actua-player-raster-atlas@1";
 const OFFICIAL_INDEX_SCHEMA = "cssoccer-exact-actua-official-animation-index@1";
 const OFFICIAL_CHUNK_SCHEMA = "cssoccer-exact-actua-official-animation-chunk@1";
 const OFFICIAL_MATERIALS_SCHEMA = "cssoccer-exact-actua-official-materials@1";
 const OFFICIAL_RUNTIME_SCHEMA = "cssoccer-exact-actua-official-asset-runtime@1";
 const YAW_COUNT = 24;
 const FACE_COUNT = 13;
+const PLAYER_COORDINATE_COUNT = 28 * 3;
+const RASTER_ENTRY_WORDS = 6;
 const HIDDEN_SELECTOR = -128;
 const PRELOAD_CONCURRENCY = 6;
 const CACHE_LIMIT = 24;
@@ -52,6 +55,8 @@ export function createCssoccerExactActuaPlayerAssetRuntime({
     decodedChunkCount: 0,
     decodedBytes: 0,
     sampleApplyCount: 0,
+    rasterSampleApplyCount: 0,
+    rasterUnavailableCount: 0,
     unavailableStateCount: 0,
     fallbackStateCount: 0,
   };
@@ -99,6 +104,7 @@ export function createCssoccerExactActuaPlayerAssetRuntime({
         address,
         request.localFrameIndex,
         request.yawIndex,
+        request.geometryVariant ?? "outfield",
         applyFace,
       );
     },
@@ -108,7 +114,85 @@ export function createCssoccerExactActuaPlayerAssetRuntime({
         throw new TypeError("Exact Actua sample application requires a face callback.");
       }
       const address = resolveAddressFields(sequenceBySlot, slotId, localFrameIndex);
-      return applyResolvedSample(address, localFrameIndex, yawIndex, applyFace);
+      return applyResolvedSample(
+        address,
+        localFrameIndex,
+        yawIndex,
+        "outfield",
+        applyFace,
+      );
+    },
+    applyVariantSampleFields(
+      slotId,
+      localFrameIndex,
+      yawIndex,
+      geometryVariant,
+      applyFace,
+    ) {
+      requireAlive();
+      if (typeof applyFace !== "function") {
+        throw new TypeError("Exact Actua sample application requires a face callback.");
+      }
+      const address = resolveAddressFields(sequenceBySlot, slotId, localFrameIndex);
+      return applyResolvedSample(
+        address,
+        localFrameIndex,
+        yawIndex,
+        geometryVariant,
+        applyFace,
+      );
+    },
+    applyRasterSampleFields(
+      slotId,
+      localFrameIndex,
+      yawIndex,
+      materialProfileId,
+      shirtNumber,
+      applySprite,
+    ) {
+      requireAlive();
+      if (typeof applySprite !== "function") {
+        throw new TypeError("Exact Actua raster sample application requires a sprite callback.");
+      }
+      const address = resolveAddressFields(sequenceBySlot, slotId, localFrameIndex);
+      const decoded = resident(address.descriptor.path, true);
+      if (!decoded) {
+        counters.unavailableStateCount += 1;
+        throw new CssoccerExactPlayerAssetNotReadyError(
+          address.sequence.slotId,
+          localFrameIndex,
+        );
+      }
+      if (decoded.rasterAtlas === null) {
+        counters.rasterUnavailableCount += 1;
+        return false;
+      }
+      decoded.rasterAtlas.applySample(
+        localFrameIndex,
+        requireYawIndex(yawIndex),
+        materialProfileId,
+        shirtNumber,
+        applySprite,
+      );
+      counters.rasterSampleApplyCount += 1;
+      return true;
+    },
+    poseCoordinatesFields(slotId, localFrameIndex) {
+      requireAlive();
+      if (configuration.runtimeSchema !== CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA) {
+        throw new Error("Exact Actua official assets do not publish player pose coordinates.");
+      }
+      const address = resolveAddressFields(sequenceBySlot, slotId, localFrameIndex);
+      const decoded = resident(address.descriptor.path, true);
+      if (!decoded) {
+        counters.unavailableStateCount += 1;
+        throw new CssoccerExactPlayerAssetNotReadyError(
+          address.sequence.slotId,
+          localFrameIndex,
+        );
+      }
+      const offset = (localFrameIndex - decoded.frameStart) * PLAYER_COORDINATE_COUNT;
+      return decoded.poseCoordinates.subarray(offset, offset + PLAYER_COORDINATE_COUNT);
     },
     sample(request) {
       const faces = [];
@@ -148,7 +232,13 @@ export function createCssoccerExactActuaPlayerAssetRuntime({
   };
   return Object.freeze(runtime);
 
-  function applyResolvedSample(address, localFrameIndex, yawValue, applyFace) {
+  function applyResolvedSample(
+    address,
+    localFrameIndex,
+    yawValue,
+    geometryVariant,
+    applyFace,
+  ) {
       const decoded = resident(address.descriptor.path, true);
       if (!decoded) {
         counters.unavailableStateCount += 1;
@@ -158,18 +248,24 @@ export function createCssoccerExactActuaPlayerAssetRuntime({
         );
       }
       const yawIndex = requireYawIndex(yawValue);
+      const variant = decoded.geometryVariants[geometryVariant];
+      if (!variant) {
+        throw new Error(
+          `Exact Actua geometry variant ${String(geometryVariant)} is unavailable.`,
+        );
+      }
       const sampleOffset = ((localFrameIndex - decoded.frameStart) * YAW_COUNT + yawIndex)
         * configuration.faceCount;
       for (let faceIndex = 0; faceIndex < configuration.faceCount; faceIndex += 1) {
         const offset = sampleOffset + faceIndex;
-        const transformIndex = decoded.transformIndices[offset];
+        const transformIndex = variant.transformIndices[offset];
         const visible = transformIndex !== 0;
         applyFace(
           faceIndex,
-          decoded.transformDictionary[transformIndex],
+          variant.transformDictionary[transformIndex],
           visible,
-          visible && decoded.selectors[offset] !== HIDDEN_SELECTOR
-            ? decoded.selectors[offset]
+          visible && variant.selectors[offset] !== HIDDEN_SELECTOR
+            ? variant.selectors[offset]
             : null,
         );
       }
@@ -292,7 +388,11 @@ function assertIndexAndMaterials(index, materials) {
     || index.counts?.poseOccurrences !== 5_857
     || index.counts?.yawBins !== YAW_COUNT
     || index.counts?.samples !== 140_568
+    || index.counts?.geometryVariants !== 2
+    || index.counts?.variantSamples !== 281_136
     || index.counts?.faceStates !== 1_827_384
+    || index.counts?.variantFaceStates !== 3_654_768
+    || index.counts?.poseCoordinates !== 491_988
     || index.counts?.chunks !== 426
     || index.lookup?.scanning !== false
     || index.cache?.policy !== "bounded-lru-transactional-frame-residency"
@@ -306,12 +406,18 @@ function assertIndexAndMaterials(index, materials) {
   ) throw new Error("Exact Actua player animation index is incomplete.");
   if (
     materials?.schema !== MATERIALS_SCHEMA
-    || materials.status !== "ready-complete-two-profile-normalized-atlas"
+    || materials.status
+      !== "ready-complete-four-profile-two-geometry-normalized-atlas"
     || materials.geometryId !== index.geometryId
     || materials.topologySha256 !== index.topologySha256
-    || materials.counts?.profiles !== 2
+    || materials.counts?.profiles !== 4
+    || materials.counts?.geometryVariants !== 2
     || materials.counts?.fixturePlayers !== 22
-    || materials.counts?.textureEntries !== 386
+    || materials.counts?.textureEntries !== 562
+    || materials.geometryVariants?.outfield?.geometryId !== index.geometryId
+    || materials.geometryVariants.outfield.topologySha256 !== index.topologySha256
+    || materials.geometryVariants?.goalkeeper?.geometryId
+      !== "actua-goalkeeper-28p-13f-one-basis"
     || materials.atlas?.requestCount !== 1
     || materials.runtime?.geometryMutation !== false
     || materials.runtime?.matrixMutationByMaterial !== false
@@ -428,15 +534,94 @@ function decodeChunk(chunk, descriptor, index, configuration) {
     || chunk.transformIndex?.widthBits !== descriptor.transformIndexWidthBits
     || chunk.transformIndex?.count !== descriptor.faceStateCount
     || chunk.materialSelectorOffset?.count !== descriptor.faceStateCount
+    || (
+      configuration.runtimeSchema === CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA
+      && (
+        descriptor.poseCoordinateCount !== descriptor.frameCount * PLAYER_COORDINATE_COUNT
+        || chunk.poseCoordinates?.encoding !== "base64-float32le"
+        || chunk.poseCoordinates?.pointCount !== 28
+        || chunk.poseCoordinates?.coordinateCountPerFrame !== PLAYER_COORDINATE_COUNT
+        || chunk.poseCoordinates?.frameCount !== descriptor.frameCount
+        || chunk.poseCoordinates?.count !== descriptor.poseCoordinateCount
+      )
+    )
   ) throw new Error(`Exact Actua player chunk ${descriptor.path} failed validation.`);
-  const indexBytes = decodeBase64(chunk.transformIndex.data);
-  const expectedIndexBytes = descriptor.faceStateCount * (chunk.transformIndex.widthBits / 8);
-  const selectorBytes = decodeBase64(chunk.materialSelectorOffset.data);
-  if (indexBytes.byteLength !== expectedIndexBytes
-      || selectorBytes.byteLength !== descriptor.faceStateCount) {
-    throw new Error(`Exact Actua player chunk ${descriptor.path} byte count changed.`);
+  const outfield = decodeChunkGeometryVariant({
+    transformDictionary: chunk.transformDictionary,
+    transformIndex: chunk.transformIndex,
+    materialSelectorOffset: chunk.materialSelectorOffset,
+  }, descriptor.faceStateCount, descriptor.path);
+  const geometryVariants = { outfield };
+  if (configuration.runtimeSchema === CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA) {
+    if (
+      chunk.geometryVariantCount !== 2
+      || chunk.geometryVariants?.outfield?.storage !== "top-level"
+      || chunk.geometryVariants.outfield.geometryId !== chunk.geometryId
+      || chunk.geometryVariants.outfield.topologySha256 !== chunk.topologySha256
+      || chunk.geometryVariants?.goalkeeper?.storage !== "inline"
+      || chunk.geometryVariants.goalkeeper.geometryId
+        !== "actua-goalkeeper-28p-13f-one-basis"
+    ) {
+      throw new Error(
+        `Exact Actua player chunk ${descriptor.path} lost its geometry variants.`,
+      );
+    }
+    geometryVariants.goalkeeper = decodeChunkGeometryVariant(
+      chunk.geometryVariants.goalkeeper,
+      descriptor.faceStateCount,
+      descriptor.path,
+    );
   }
-  const transformIndices = chunk.transformIndex.widthBits === 16
+  const rasterAtlas = decodeRasterAtlas(
+    chunk.rasterAtlas ?? null,
+    descriptor.rasterAtlas ?? null,
+    descriptor,
+    configuration,
+  );
+  const poseCoordinates = configuration.runtimeSchema
+    === CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA
+    ? float32LittleEndian(decodeBase64(chunk.poseCoordinates.data))
+    : null;
+  if (
+    poseCoordinates !== null
+    && poseCoordinates.length !== descriptor.poseCoordinateCount
+  ) {
+    throw new Error(`Exact Actua player chunk ${descriptor.path} pose byte count changed.`);
+  }
+  return Object.freeze({
+    path: descriptor.path,
+    frameStart: descriptor.frameStart,
+    frameEnd: descriptor.frameEnd,
+    geometryVariants: Object.freeze(geometryVariants),
+    poseCoordinates,
+    rasterAtlas,
+    decodedBytes: descriptor.bytes
+      + Object.values(geometryVariants).reduce(
+        (sum, variant) => sum + variant.decodedBytes,
+        0,
+      )
+      + (poseCoordinates?.byteLength ?? 0)
+      + (rasterAtlas?.decodedBytes ?? 0),
+  });
+}
+
+function decodeChunkGeometryVariant(value, expectedCount, chunkPath) {
+  if (
+    !Array.isArray(value?.transformDictionary)
+    || value.transformDictionary[0]
+      !== "matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,-10000,1)"
+    || !new Set([16, 32]).has(value.transformIndex?.widthBits)
+    || value.transformIndex.count !== expectedCount
+    || value.materialSelectorOffset?.count !== expectedCount
+  ) throw new Error(`Exact Actua player chunk ${chunkPath} variant is invalid.`);
+  const indexBytes = decodeBase64(value.transformIndex.data);
+  const expectedIndexBytes = expectedCount * (value.transformIndex.widthBits / 8);
+  const selectorBytes = decodeBase64(value.materialSelectorOffset.data);
+  if (
+    indexBytes.byteLength !== expectedIndexBytes
+    || selectorBytes.byteLength !== expectedCount
+  ) throw new Error(`Exact Actua player chunk ${chunkPath} byte count changed.`);
+  const transformIndices = value.transformIndex.widthBits === 16
     ? uint16LittleEndian(indexBytes)
     : uint32LittleEndian(indexBytes);
   const selectors = new Int8Array(
@@ -445,19 +630,140 @@ function decodeChunk(chunk, descriptor, index, configuration) {
     selectorBytes.byteLength,
   );
   for (const transformIndex of transformIndices) {
-    if (transformIndex >= chunk.transformDictionary.length) {
-      throw new Error(`Exact Actua player chunk ${descriptor.path} has an invalid transform index.`);
+    if (transformIndex >= value.transformDictionary.length) {
+      throw new Error(
+        `Exact Actua player chunk ${chunkPath} has an invalid transform index.`,
+      );
     }
   }
   return Object.freeze({
-    path: descriptor.path,
-    frameStart: descriptor.frameStart,
-    frameEnd: descriptor.frameEnd,
-    transformDictionary: Object.freeze([...chunk.transformDictionary]),
+    transformDictionary: Object.freeze([...value.transformDictionary]),
     transformIndices,
     selectors,
-    decodedBytes: descriptor.bytes + indexBytes.byteLength + selectorBytes.byteLength,
+    decodedBytes: indexBytes.byteLength + selectorBytes.byteLength,
   });
+}
+
+function decodeRasterAtlas(value, descriptor, chunkDescriptor, configuration) {
+  if (value === null && descriptor === null) return null;
+  if (
+    configuration.runtimeSchema !== CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA
+    || value?.schema !== RASTER_SCHEMA
+    || value.status !== "ready-whole-player-indexed-raster"
+    || descriptor?.status !== value.status
+    || value.viewport?.width !== 640
+    || value.viewport?.height !== 400
+    || value.sampleCount !== chunkDescriptor.frameCount * YAW_COUNT
+    || !Array.isArray(value.profileIds)
+    || value.profileIds.length !== 4
+    || new Set(value.profileIds).size !== value.profileIds.length
+    || !Array.isArray(value.shirtNumbers)
+    || value.shirtNumbers.length !== 11
+    || value.shirtNumbers.some((number, index) => number !== index + 1)
+    || value.baseNumber !== null
+    || value.referenceNumber !== 10
+    || value.runtime?.leavesPerPlayer !== 2
+    || value.runtime?.canvas !== false
+    || value.runtime?.webgl !== false
+    || value.runtime?.geometryConstruction !== false
+  ) {
+    throw new Error(`Exact Actua player chunk ${chunkDescriptor.path} raster atlas is invalid.`);
+  }
+  const base = decodeRasterLayer(value.base, descriptor.base, {
+    count: value.profileIds.length * value.sampleCount,
+    label: "base",
+    chunkPath: chunkDescriptor.path,
+  });
+  const numberDelta = decodeRasterLayer(value.numberDelta, descriptor.numberDelta, {
+    count: value.profileIds.length * value.sampleCount * value.shirtNumbers.length,
+    label: "number delta",
+    chunkPath: chunkDescriptor.path,
+  });
+  const profileIndexById = new Map(
+    value.profileIds.map((profileId, index) => [profileId, index]),
+  );
+  const numberIndexByValue = new Map(
+    value.shirtNumbers.map((number, index) => [number, index]),
+  );
+  return Object.freeze({
+    decodedBytes: base.entries.byteLength + numberDelta.entries.byteLength,
+    applySample(
+      localFrameIndex,
+      yawIndex,
+      materialProfileId,
+      shirtNumber,
+      applySprite,
+    ) {
+      const profileIndex = profileIndexById.get(materialProfileId);
+      const numberIndex = numberIndexByValue.get(shirtNumber);
+      if (profileIndex === undefined || numberIndex === undefined) {
+        throw new Error(
+          `Exact Actua raster binding ${String(materialProfileId)}:${String(shirtNumber)} is invalid.`,
+        );
+      }
+      const sampleIndex = (
+        (localFrameIndex - chunkDescriptor.frameStart) * YAW_COUNT + yawIndex
+      );
+      const baseOffset = (
+        profileIndex * value.sampleCount + sampleIndex
+      ) * RASTER_ENTRY_WORDS;
+      const deltaOffset = (
+        (
+          profileIndex * value.sampleCount * value.shirtNumbers.length
+          + sampleIndex * value.shirtNumbers.length
+          + numberIndex
+        ) * RASTER_ENTRY_WORDS
+      );
+      applyRasterLayer("base", base, baseOffset, applySprite);
+      applyRasterLayer("numberDelta", numberDelta, deltaOffset, applySprite);
+    },
+  });
+}
+
+function decodeRasterLayer(value, descriptor, { count, label, chunkPath }) {
+  if (
+    !value?.asset
+    || value.asset.path !== descriptor?.path
+    || value.asset.sha256 !== descriptor?.sha256
+    || value.asset.width !== descriptor?.width
+    || value.asset.height !== descriptor?.height
+    || value.asset.url !== descriptor?.url
+    || !Number.isSafeInteger(value.asset.width)
+    || value.asset.width <= 0
+    || !Number.isSafeInteger(value.asset.height)
+    || value.asset.height <= 0
+    || value.entries?.encoding !== "base64-uint16le"
+    || value.entries.entryWords !== RASTER_ENTRY_WORDS
+    || value.entries.count !== count
+  ) {
+    throw new Error(`Exact Actua ${label} raster ${chunkPath} is invalid.`);
+  }
+  const bytes = decodeBase64(value.entries.data);
+  if (bytes.byteLength !== count * RASTER_ENTRY_WORDS * 2) {
+    throw new Error(`Exact Actua ${label} raster ${chunkPath} byte count changed.`);
+  }
+  return Object.freeze({
+    asset: Object.freeze({ ...value.asset }),
+    entries: uint16LittleEndian(bytes),
+  });
+}
+
+function applyRasterLayer(kind, layer, offset, applySprite) {
+  const entries = layer.entries;
+  const width = entries[offset + 2];
+  const height = entries[offset + 3];
+  applySprite(
+    kind,
+    layer.asset.url,
+    layer.asset.width,
+    layer.asset.height,
+    entries[offset],
+    entries[offset + 1],
+    width,
+    height,
+    entries[offset + 4],
+    entries[offset + 5],
+  );
 }
 
 function decodeBase64(value) {
@@ -482,6 +788,18 @@ function uint32LittleEndian(bytes) {
   const output = new Uint32Array(bytes.byteLength / 4);
   for (let index = 0; index < output.length; index += 1) {
     output[index] = view.getUint32(index * 4, true);
+  }
+  return output;
+}
+
+function float32LittleEndian(bytes) {
+  if (bytes.byteLength % 4 !== 0) {
+    throw new Error("Exact Actua player pose byte count is not float32-aligned.");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const output = new Float32Array(bytes.byteLength / 4);
+  for (let index = 0; index < output.length; index += 1) {
+    output[index] = view.getFloat32(index * 4, true);
   }
   return output;
 }

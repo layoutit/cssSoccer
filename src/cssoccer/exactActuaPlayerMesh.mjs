@@ -7,15 +7,32 @@ export function mountExactActuaPlayerMesh({
   materialProfileId,
   shirtNumber,
   initialState,
+  viewportWidth = 640,
+  viewportHeight = 400,
+  splitNumberPanel = false,
 } = {}) {
   assertRoot(root);
   assertAssetRuntime(assetRuntime);
   const profile = assetRuntime.materials.materialProfiles?.[materialProfileId];
+  const geometryVariant = profile?.geometryVariant ?? "outfield";
+  const geometry = assetRuntime.materials.geometryVariants?.[geometryVariant]
+    ?? {
+      geometryId: assetRuntime.index.geometryId,
+      topologySha256: assetRuntime.index.topologySha256,
+    };
   const faceCount = assetRuntime.index.counts.facesPerSample;
   if (
+    !Number.isSafeInteger(viewportWidth)
+    || viewportWidth <= 0
+    || !Number.isSafeInteger(viewportHeight)
+    || viewportHeight <= 0
+  ) {
+    throw new RangeError("Exact Actua player viewport must use positive integer dimensions.");
+  }
+  if (
     !profile
-    || profile.geometryId !== assetRuntime.index.geometryId
-    || profile.topologySha256 !== assetRuntime.index.topologySha256
+    || profile.geometryId !== geometry.geometryId
+    || profile.topologySha256 !== geometry.topologySha256
     || profile.faces?.length !== faceCount
   ) throw new Error(`Exact Actua material profile ${String(materialProfileId)} is invalid.`);
   let numberBinding = null;
@@ -47,6 +64,7 @@ export function mountExactActuaPlayerMesh({
     visibilityWrites: 0,
     redundantStateSkips: 0,
     unchangedPropertySkips: 0,
+    liveProjectionUpdates: 0,
     nodeCreations: 0,
     domInsertions: 0,
     domRemovals: 0,
@@ -54,17 +72,45 @@ export function mountExactActuaPlayerMesh({
     runtimeConstruction: 0,
   };
   root.style.position = "relative";
-  root.style.width = "640px";
-  root.style.height = "400px";
+  root.style.width = `${viewportWidth}px`;
+  root.style.height = `${viewportHeight}px`;
   root.style.transform = "scaleY(-1)";
   root.style.transformOrigin = "50% 50%";
   root.style.transformStyle = "preserve-3d";
   const invariant = profile.invariantLeafStyle;
-  const leaves = Array.from({ length: faceCount }, (_, faceIndex) => {
+  const primaryLeaves = Array.from({ length: faceCount }, (_, faceIndex) => (
+    createLeaf(faceIndex, "primary")
+  ));
+  const numberFaceIndex = profile.shirtNumbers?.faceIndex ?? null;
+  const numberSecondaryLeaf = splitNumberPanel && numberFaceIndex !== null
+    ? createLeaf(numberFaceIndex, "secondary")
+    : null;
+  if (splitNumberPanel && numberSecondaryLeaf === null) {
+    throw new Error("Exact Actua split number panel requires a shirt-number profile.");
+  }
+  if (numberSecondaryLeaf) {
+    setMountStyle(
+      primaryLeaves[numberFaceIndex],
+      "clipPath",
+      "polygon(0 0, 100% 0, 100% 100%)",
+    );
+    setMountStyle(
+      numberSecondaryLeaf,
+      "clipPath",
+      "polygon(0 0, 100% 100%, 0 100%)",
+    );
+  }
+  const leaves = [
+    ...primaryLeaves,
+    ...(numberSecondaryLeaf ? [numberSecondaryLeaf] : []),
+  ];
+
+  function createLeaf(faceIndex, part) {
     const leaf = root.ownerDocument.createElement("s");
     counters.mountNodeCreations += 1;
     leaf.dataset.cssoccerExactFaceIndex = String(faceIndex);
-    leaf.dataset.cssoccerExactGeometryId = assetRuntime.index.geometryId;
+    leaf.dataset.cssoccerExactGeometryId = geometry.geometryId;
+    leaf.dataset.cssoccerExactFacePart = part;
     setMountStyle(leaf, "display", "block");
     setMountStyle(leaf, "position", "absolute");
     setMountStyle(leaf, "left", "0px");
@@ -80,9 +126,9 @@ export function mountExactActuaPlayerMesh({
     root.append(leaf);
     counters.mountDomInsertions += 1;
     return leaf;
-  });
+  }
   const identities = Object.freeze([...leaves]);
-  const cache = Array.from({ length: faceCount }, () => Object.create(null));
+  const cache = Array.from({ length: leaves.length }, () => Object.create(null));
   let appliedStateKey = null;
   let currentMounting = false;
   let removed = false;
@@ -90,8 +136,9 @@ export function mountExactActuaPlayerMesh({
 
   return Object.freeze({
     schema: CSSOCCER_EXACT_ACTUA_PLAYER_MESH_RUNTIME_SCHEMA,
-    geometryId: assetRuntime.index.geometryId,
-    topologySha256: assetRuntime.index.topologySha256,
+    geometryId: geometry.geometryId,
+    topologySha256: geometry.topologySha256,
+    geometryVariant,
     materialProfileId,
     shirtNumber,
     leaves: identities,
@@ -100,6 +147,20 @@ export function mountExactActuaPlayerMesh({
     },
     updateStateFields(slotId, localFrameIndex, yawIndex) {
       return applyStateFields(slotId, localFrameIndex, yawIndex, false);
+    },
+    applyLiveProjection(stateKey, project) {
+      if (typeof stateKey !== "string" || stateKey.length === 0) {
+        throw new TypeError("Exact Actua live projection state key is invalid.");
+      }
+      if (typeof project !== "function") {
+        throw new TypeError("Exact Actua live projection requires a projector.");
+      }
+      currentMounting = false;
+      project(applyFace);
+      appliedStateKey = stateKey;
+      counters.updates += 1;
+      counters.liveProjectionUpdates += 1;
+      return true;
     },
     stats() {
       return Object.freeze({
@@ -135,13 +196,30 @@ export function mountExactActuaPlayerMesh({
       return false;
     }
     currentMounting = mounting;
-    assetRuntime.applySampleFields(slotId, localFrameIndex, yawIndex, applyFace);
+    if (typeof assetRuntime.applyVariantSampleFields === "function") {
+      assetRuntime.applyVariantSampleFields(
+        slotId,
+        localFrameIndex,
+        yawIndex,
+        geometryVariant,
+        applyFace,
+      );
+    } else {
+      assetRuntime.applySampleFields(slotId, localFrameIndex, yawIndex, applyFace);
+    }
     appliedStateKey = stateKey;
     if (!mounting) counters.updates += 1;
     return true;
   }
 
-  function applyFace(faceIndex, transform, visible, materialSelectorOffset) {
+  function applyFace(
+    faceIndex,
+    transform,
+    visible,
+    materialSelectorOffset,
+    _depth = null,
+    secondaryTransform = null,
+  ) {
     const material = profile.shirtNumbers !== null
       && faceIndex === profile.shirtNumbers.faceIndex
       ? numberBinding
@@ -151,16 +229,37 @@ export function mountExactActuaPlayerMesh({
         `${materialProfileId} face ${faceIndex} lacks selector ${materialSelectorOffset}.`,
       );
     }
-    const leaf = leaves[faceIndex];
+    const leaf = primaryLeaves[faceIndex];
     const faceCache = cache[faceIndex];
-    writeRuntimeProperty(
+    applyLeaf(
       leaf,
       faceCache,
-      "transform",
       transform,
-      "transformWrites",
-      currentMounting,
+      visible,
+      material,
     );
+    if (faceIndex === numberFaceIndex && numberSecondaryLeaf) {
+      applyLeaf(
+        numberSecondaryLeaf,
+        cache[faceCount],
+        secondaryTransform,
+        visible && secondaryTransform !== null,
+        material,
+      );
+    }
+  }
+
+  function applyLeaf(leaf, faceCache, transform, visible, material) {
+    if (visible && transform !== null) {
+      writeRuntimeProperty(
+        leaf,
+        faceCache,
+        "transform",
+        transform,
+        "transformWrites",
+        currentMounting,
+      );
+    }
     writeRuntimeProperty(
       leaf,
       faceCache,
@@ -240,6 +339,9 @@ function assertAssetRuntime(value) {
   const player = value?.schema === "cssoccer-exact-actua-player-asset-runtime@1"
     && value.index?.counts?.facesPerSample === 13
     && value.index?.counts?.faceStates === 1_827_384
+    && value.index?.counts?.geometryVariants === 2
+    && value.index?.counts?.variantFaceStates === 3_654_768
+    && value.index?.counts?.poseCoordinates === 491_988
     && value.materials?.counts?.fixturePlayers === 22;
   const official = value?.schema === "cssoccer-exact-actua-official-asset-runtime@1"
     && value.index?.counts?.facesPerSample === 12

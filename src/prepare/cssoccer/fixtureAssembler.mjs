@@ -303,6 +303,33 @@ export async function assembleCssoccerPreparedFixture(request) {
     referenceFor(exactPlayerMaterialTextureFile),
     referenceFor(exactOfficialMaterialTextureFile),
   ];
+  const exactPlayerRasterFiles = actorDomain.exactPlayerPreparation.chunks.flatMap((chunk) => (
+    chunk.rasterFiles.map((file) => preparedBinaryFile({
+      ...file,
+      sourceIds: [
+        "source:DATA.OBJ",
+        "source:EUROREND.DAT",
+        "source:EUROREND.OFF",
+        "source:ACTREND.DAT",
+        "source:ACTREND.OFF",
+        "source:RETAIL_ACTREND.DAT",
+        "source:RETAIL_ACTREND.OFF",
+      ],
+      lineage: {
+        kind: file.kind,
+        sourceRevision: contracts.plan.source.revision,
+        geometryId: actorDomain.exactPlayerPreparation.geometry.geometry.geometryId,
+        slotId: chunk.metadata.slotId,
+        frameStart: chunk.metadata.frameStart,
+        frameEnd: chunk.metadata.frameEnd,
+        prepareTimeSoftwareRaster: true,
+        runtimeConstruction: false,
+      },
+    }))
+  ));
+  const exactPlayerRasterFileByPath = new Map(
+    exactPlayerRasterFiles.map((file) => [file.path, file]),
+  );
   const exactPlayerChunkFiles = actorDomain.exactPlayerPreparation.chunks.map((chunk) => (
     preparedBinaryFile({
       path: chunk.metadata.path,
@@ -319,8 +346,12 @@ export async function assembleCssoccerPreparedFixture(request) {
         frameEnd: chunk.metadata.frameEnd,
         yawCount: 24,
         stableLeavesPerPlayer: 13,
+        wholePlayerRasterLeavesPerPlayer: chunk.rasterFiles.length > 0 ? 2 : null,
         runtimeConstruction: false,
       },
+      references: chunk.rasterFiles.map(({ path }) => (
+        referenceFor(exactPlayerRasterFileByPath.get(path))
+      )),
     })
   ));
   const exactPlayerIndexFile = preparedJsonFile({
@@ -516,6 +547,7 @@ export async function assembleCssoccerPreparedFixture(request) {
       skyBackdropFile,
       exactPlayerMaterialTextureFile,
       exactOfficialMaterialTextureFile,
+      ...exactPlayerRasterFiles,
       ...exactPlayerChunkFiles,
       ...exactOfficialChunkFiles,
       ...frameStyleFiles,
@@ -756,7 +788,12 @@ async function prepareActorDomain(contracts) {
     euroRendDatBytes: sourceBytes.get("EUROREND.DAT"),
     euroRendOffBytes: sourceBytes.get("EUROREND.OFF"),
   };
-  const exactModels = Object.fromEntries(["player_f1", "player_f2"].map((modelId) => [
+  const exactModels = Object.fromEntries([
+    "player_f1",
+    "player_f2",
+    "player_fg1",
+    "player_fg2",
+  ].map((modelId) => [
     modelId,
     prepareExactActuaPlayerModel({ ...exactModelInputs, modelId }),
   ]));
@@ -772,6 +809,7 @@ async function prepareActorDomain(contracts) {
     retailActRendDatBytes,
     retailActRendOffBytes,
     sourceAtlasPngBytes: texturePreparation.assetFile.bytes,
+    alternateSourceAtlas: texturePreparation.officialSourceAtlas,
   });
   const exactPlayerChunks = [];
   const exactPlayerPackaging = prepareCssoccerExactActuaPlayerPackaging({
@@ -907,14 +945,23 @@ function validateActorDomain({
     || textureAtlas?.fixtureId !== contracts.plan.id
     || textureAtlas?.matchAtlas?.status !== "ready-source-decoded-browser-atlas"
     || textureAtlas?.counts?.browserAtlasPlacements !== 9
-    || exactPlayerPreparation?.geometry?.status !== "ready-one-geometry-two-material-profiles"
+    || exactPlayerPreparation?.geometry?.status
+      !== "ready-two-native-geometries-four-material-profiles"
     || exactPlayerPreparation.geometry.geometry?.faceCount !== 13
+    || exactPlayerPreparation.geometry.geometryVariants?.goalkeeper?.faceCount !== 13
     || exactPlayerPreparation.materials?.publication?.status
-      !== "ready-complete-two-profile-normalized-atlas"
+      !== "ready-complete-four-profile-two-geometry-normalized-atlas"
     || exactPlayerPreparation.materials.publication.counts?.fixturePlayers !== 22
     || exactPlayerPreparation.packaging?.index?.counts?.samples !== 140_568
     || exactPlayerPreparation.packaging.index.counts.faceStates !== 1_827_384
+    || exactPlayerPreparation.packaging.index.counts.geometryVariants !== 2
+    || exactPlayerPreparation.packaging.index.counts.variantFaceStates !== 3_654_768
+    || exactPlayerPreparation.packaging.index.counts.poseCoordinates !== 491_988
     || exactPlayerPreparation.chunks?.length !== 426
+    || exactPlayerPreparation.chunks.some(({ rasterFiles }) => rasterFiles.length !== 0)
+    || exactPlayerPreparation.packaging.index.sequences.some(({ chunks }) => (
+      chunks.some((chunk) => chunk.rasterAtlas !== undefined)
+    ))
     || exactOfficialPreparation?.source?.status !== "ready-exact-referee-and-two-assistants"
     || exactOfficialPreparation.source.geometry?.faceCount !== 12
     || exactOfficialPreparation.materials?.publication?.status

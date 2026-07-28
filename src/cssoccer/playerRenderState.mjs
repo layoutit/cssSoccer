@@ -1007,7 +1007,10 @@ function requirePreparedPlayerActor(actor, index, kitBindings) {
   const rosterNumber = (index % 11) + 1;
   const expectedId = `${country}-player-${String(rosterNumber).padStart(2, "0")}`;
   const sourceTeamSlot = country === "spain" ? "A" : "B";
-  const expectedModelId = country === "spain" ? "player_f1" : "player_f2";
+  const goalkeeper = index === 0 || index === 11;
+  const expectedModelId = country === "spain"
+    ? goalkeeper ? "player_fg1" : "player_f1"
+    : goalkeeper ? "player_fg2" : "player_f2";
   const expectedRenderTypes = country === "spain"
     ? { even: 1, odd: 2 }
     : { even: 2, odd: 1 };
@@ -1151,6 +1154,7 @@ function requirePreparedPlayerPublication(
     || exactPlayerAssets.index?.counts?.poseOccurrences !== PREPARED_FRAME_COUNT
     || exactPlayerAssets.index?.counts?.yawBins !== 24
     || exactPlayerAssets.index?.counts?.faceStates !== 1_827_384
+    || exactPlayerAssets.index?.counts?.poseCoordinates !== 491_988
     || !SHA256.test(exactPlayerAssets.index?.contractSha256 ?? "")
     || exactPlayerAssets.materials?.geometryId !== exactPlayerAssets.index?.geometryId
     || exactPlayerAssets.materials?.topologySha256 !== exactPlayerAssets.index?.topologySha256
@@ -1368,7 +1372,10 @@ function validateCompactPlayerBindings(contract, frameSetIds) {
     requireExactKeys(binding, PLAYER_BINDING_KEYS, `cssoccer player render binding ${index}`);
     const country = index < 11 ? "spain" : "argentina";
     const expectedRoot = `${country}-player-${String((index % 11) + 1).padStart(2, "0")}`;
-    const expectedModel = country === "spain" ? "player_f1" : "player_f2";
+    const goalkeeper = index === 0 || index === 11;
+    const expectedModel = country === "spain"
+      ? goalkeeper ? "player_fg1" : "player_f1"
+      : goalkeeper ? "player_fg2" : "player_f2";
     const expectedTypes = country === "spain" ? { even: 1, odd: 2 } : { even: 2, odd: 1 };
     if (
       binding.rootId !== expectedRoot

@@ -95,6 +95,9 @@ export function installCssoccerDebugApi(
     advanceVisualCaptureToTick(targetTick) {
       return visualCaptureRuntime.advanceToTick(targetTick);
     },
+    stepVisualCaptureCommand(command) {
+      return visualCaptureRuntime.stepCommand(command);
+    },
     endVisualCapture() {
       return visualCaptureRuntime.end();
     },
@@ -103,6 +106,9 @@ export function installCssoccerDebugApi(
     },
     auditExactPlayerCoverage() {
       return auditExactPlayerCoverage(state);
+    },
+    exactPlayerAssetStats() {
+      return state.exactPlayerAssets?.stats?.() ?? null;
     },
     async setExactPlayerEvidenceState(rootId, exactState) {
       if (!state.mount || !state.exactPlayerAssets) {

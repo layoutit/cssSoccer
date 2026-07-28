@@ -24,6 +24,9 @@ import {
   CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
 } from "./nativeGameplayProfile.mjs";
 import {
+  cssoccerNativeOpeningPlayerAnimation,
+} from "./nativeOpeningPlayerAnimation.mjs";
+import {
   CSSOCCER_OFFICIAL_CONSTANTS,
   assertCssoccerOfficialState,
   createCssoccerOfficialState,
@@ -718,6 +721,7 @@ function createPlayers({ teams, tactics, playerRootIds }) {
     const sourceFacing = team.nativeTeamSlot === "A"
       ? { x: F32(1), y: F32(0) }
       : { x: F32(-1), y: F32(0) };
+    const openingAnimation = cssoccerNativeOpeningPlayerAnimation(id);
     return {
       id,
       country: team.country,
@@ -753,9 +757,9 @@ function createPlayers({ teams, tactics, playerRootIds }) {
       animation: {
         status: "source-initialized",
         kind: "stand",
-        id: 78,
+        id: openingAnimation.slotId,
         sourceActionId: CSSOCCER_NATIVE_ACTIONS.STAND,
-        frame: F32(0),
+        frame: openingAnimation.frame,
         frameStep: F32(1 / (20 * 39 / 40)),
         pending: null,
         tick: 0,
@@ -1125,6 +1129,7 @@ function requirePlayers(players, teams) {
     throw new Error("Free-play players changed stable identity or order.");
   }
   for (const [index, player] of players.entries()) {
+    const openingAnimation = cssoccerNativeOpeningPlayerAnimation(player.id);
     const expectedPosition = openingLinePosition(index, player.nativeTeamSlot);
     const expectedFacing = player.nativeTeamSlot === "A"
       ? { x: F32(1), y: F32(0) }
@@ -1142,8 +1147,8 @@ function requirePlayers(players, teams) {
       || player.velocity.y !== 0
       || player.velocity.z !== 0
       || player.animation?.status !== "source-initialized"
-      || player.animation?.id !== 78
-      || player.animation?.frame !== 0
+      || player.animation?.id !== openingAnimation.slotId
+      || player.animation?.frame !== openingAnimation.frame
       || player.animation?.sourceActionId !== CSSOCCER_NATIVE_ACTIONS.STAND
       || !sameValue(player.gameplay, createGameplayAttributes(player.identity?.attributes))
       || !sameValue(player.intelligence, { special: 0, move: 0, count: 0 })

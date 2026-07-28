@@ -41,6 +41,7 @@ export function prepareCssoccerExactActuaPlayerMaterials({
   retailActRendDatBytes,
   retailActRendOffBytes,
   sourceAtlasPngBytes,
+  alternateSourceAtlas,
 } = {}) {
   if (
     geometry?.schema !== CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_SCHEMA
@@ -67,7 +68,22 @@ export function prepareCssoccerExactActuaPlayerMaterials({
   });
   const sourceAtlasBytes = requireBytes(sourceAtlasPngBytes, "exact player source atlas");
   const sourceAtlas = decodeFilterZeroRgbaPng(sourceAtlasBytes);
-  if (sourceAtlas.width !== 2048 || sourceAtlas.height !== 256) {
+  const alternateAtlasBytes = requireBytes(
+    alternateSourceAtlas?.pngBytes,
+    "exact player alternate source atlas",
+  );
+  const alternateAtlas = decodeFilterZeroRgbaPng(alternateAtlasBytes);
+  const alternatePageByNativePage = new Map(
+    alternateSourceAtlas.metadata.nativePages.map(({ nativePage, atlasPage }) => (
+      [nativePage, atlasPage]
+    )),
+  );
+  if (
+    sourceAtlas.width !== 2048
+    || sourceAtlas.height !== 256
+    || alternateAtlas.width !== 512
+    || alternateAtlas.height !== 256
+  ) {
     throw new Error("Exact player source atlas dimensions changed.");
   }
 
@@ -124,7 +140,9 @@ export function prepareCssoccerExactActuaPlayerMaterials({
     || Math.max(...bootSlots) !== 356
     || [...bootSlots].some((slot) => nonBootSlots.has(slot))
   ) throw new Error("Exact player boot material slot domain changed.");
-  const spainPlan = profilePlans.find(({ profile }) => profile.country === "spain");
+  const spainPlan = profilePlans.find(({ profile }) => (
+    profile.country === "spain" && profile.geometryVariant === "outfield"
+  ));
   const spainShortsSlots = materialSlotsForFaces(
     spainPlan,
     SPAIN_SHORTS_FACE_INDEXES,
@@ -143,11 +161,19 @@ export function prepareCssoccerExactActuaPlayerMaterials({
   ) throw new Error("Exact Spain shorts or lower-leg material slot domain changed.");
   const orderedSlots = [...requiredSlots].sort((left, right) => left - right);
   if (
-    orderedSlots.length !== 386
+    orderedSlots.length !== 562
     || orderedSlots[0] !== 1
     || orderedSlots[355] !== 356
-    || orderedSlots[356] !== 549
-    || orderedSlots.at(-1) !== 578
+    || orderedSlots[356] !== 417
+    || orderedSlots[415] !== 476
+    || orderedSlots[416] !== 505
+    || orderedSlots[443] !== 532
+    || orderedSlots[444] !== 549
+    || orderedSlots[473] !== 578
+    || orderedSlots[474] !== 849
+    || orderedSlots[501] !== 876
+    || orderedSlots[502] !== 937
+    || orderedSlots.at(-1) !== 996
   ) throw new Error("Exact player complete material slot domain changed.");
 
   const atlasRows = Math.ceil(orderedSlots.length / ATLAS_COLUMNS);
@@ -160,21 +186,26 @@ export function prepareCssoccerExactActuaPlayerMaterials({
       nativeTextureSlotValue * TEXTURE_RECORD_BYTES,
     );
     const record = decodeExactActuaTextureRecord(nativeTextureSlotValue, recordBytes);
-    const sourceX = record.page * SOURCE_PAGE_SIZE + record.sourceRect.x;
+    const source = sourcePage(record.page, {
+      sourceAtlas,
+      alternateAtlas,
+      alternatePageByNativePage,
+    });
+    const sourceX = source.x + record.sourceRect.x;
     const sourceY = record.sourceRect.y;
     if (
       sourceX < 0
       || sourceY < 0
-      || sourceX + record.sourceRect.width > sourceAtlas.width
-      || sourceY + record.sourceRect.height > sourceAtlas.height
+      || sourceX + record.sourceRect.width > source.width
+      || sourceY + record.sourceRect.height > SOURCE_PAGE_SIZE
     ) throw new Error(`Exact player material slot ${nativeTextureSlotValue} exceeds its source atlas.`);
     const column = entryIndex % ATLAS_COLUMNS;
     const row = Math.floor(entryIndex / ATLAS_COLUMNS);
     const targetX = column * CELL_WIDTH + GUTTER;
     const targetY = row * CELL_HEIGHT + GUTTER;
     const oriented = orientedSourceCrop({
-      source: sourceAtlas.rgba,
-      sourceWidth: sourceAtlas.width,
+      source: source.rgba,
+      sourceWidth: source.width,
       sourceX,
       sourceY,
       width: record.sourceRect.width,
@@ -236,8 +267,10 @@ export function prepareCssoccerExactActuaPlayerMaterials({
       id: profile.id,
       country: profile.country,
       sourceModelSymbol: profile.sourceModelSymbol,
-      geometryId: geometry.geometry.geometryId,
-      topologySha256: geometry.geometry.topologySha256,
+      geometryVariant: profile.geometryVariant,
+      geometryId: geometry.geometryVariants[profile.geometryVariant].geometryId,
+      topologySha256:
+        geometry.geometryVariants[profile.geometryVariant].topologySha256,
       atlasUrl: ASSET_URL,
       invariantLeafStyle: {
         width: `${CSSOCCER_EXACT_ACTUA_PLAYER_LEAF_RASTER.width}px`,
@@ -264,16 +297,24 @@ export function prepareCssoccerExactActuaPlayerMaterials({
     },
   ]));
   const fixturePlayers = Object.freeze(["spain", "argentina"].flatMap((country, teamIndex) => {
-    const profileId = `${country}-player-material`;
-    return Array.from({ length: 11 }, (_, index) => ({
-      nativeRuntimeIndex: teamIndex * 11 + index,
-      country,
-      playerNumber: index + 1,
-      materialProfileId: profileId,
-      numberBinding: materialProfiles[profileId].shirtNumbers.byPlayerNumber[index + 1],
-      geometryId: geometry.geometry.geometryId,
-      topologySha256: geometry.geometry.topologySha256,
-    }));
+    return Array.from({ length: 11 }, (_, index) => {
+      const geometryVariant = index === 0 ? "goalkeeper" : "outfield";
+      const profileId = `${country}-${
+        geometryVariant === "goalkeeper" ? "goalkeeper" : "player"
+      }-material`;
+      const profile = materialProfiles[profileId];
+      return {
+        nativeRuntimeIndex: teamIndex * 11 + index,
+        country,
+        playerNumber: index + 1,
+        sourceModelSymbol: profile.sourceModelSymbol,
+        geometryVariant,
+        materialProfileId: profileId,
+        numberBinding: profile.shirtNumbers.byPlayerNumber[index + 1],
+        geometryId: profile.geometryId,
+        topologySha256: profile.topologySha256,
+      };
+    });
   }));
   const pngBytes = encodeRgbaPng(atlasWidth, atlasHeight, atlasRgba);
   const atlas = {
@@ -295,13 +336,15 @@ export function prepareCssoccerExactActuaPlayerMaterials({
   };
   const core = {
     schema: CSSOCCER_EXACT_ACTUA_PLAYER_MATERIALS_SCHEMA,
-    status: "ready-complete-two-profile-normalized-atlas",
+    status: "ready-complete-four-profile-two-geometry-normalized-atlas",
     fixtureId: "spain-argentina-full-match",
     geometryId: geometry.geometry.geometryId,
     topologySha256: geometry.geometry.topologySha256,
+    geometryVariants: geometry.geometryVariants,
     viewContractSha256: views.contractSha256,
     counts: {
-      profiles: 2,
+      profiles: 4,
+      geometryVariants: 2,
       fixturePlayers: fixturePlayers.length,
       faceBindingsPerProfile: 13,
       supportedNumbersPerProfile: 15,
@@ -314,6 +357,7 @@ export function prepareCssoccerExactActuaPlayerMaterials({
     fixturePlayers,
     source: {
       sourceAtlasSha256: sha256(sourceAtlasBytes),
+      alternateSourceAtlasSha256: sha256(alternateAtlasBytes),
       textureTableSha256: sha256(textureTable),
       numberTextureSlots: [549, 578],
       normalizedAtPrepareTime: true,
@@ -363,6 +407,29 @@ export function prepareCssoccerExactActuaPlayerMaterials({
       expectedSha256: atlas.sha256,
     }),
   });
+}
+
+function sourcePage(nativePage, {
+  sourceAtlas,
+  alternateAtlas,
+  alternatePageByNativePage,
+}) {
+  if (nativePage >= 0 && nativePage < 8) {
+    return {
+      rgba: sourceAtlas.rgba,
+      width: sourceAtlas.width,
+      x: nativePage * SOURCE_PAGE_SIZE,
+    };
+  }
+  const atlasPage = alternatePageByNativePage.get(nativePage);
+  if (!Number.isSafeInteger(atlasPage)) {
+    throw new Error(`Exact player native page ${nativePage} is unavailable.`);
+  }
+  return {
+    rgba: alternateAtlas.rgba,
+    width: alternateAtlas.width,
+    x: atlasPage * SOURCE_PAGE_SIZE,
+  };
 }
 
 function materialSlotsForFaces(plan, faceIndexes) {

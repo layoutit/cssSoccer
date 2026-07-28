@@ -67,6 +67,17 @@ button {
   z-index: 2;
   overflow: hidden;
   pointer-events: none;
+  transform-style: preserve-3d;
+}
+
+.cssoccer-exact-live-player-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 320px;
+  height: 200px;
+  transform-origin: 0 0;
+  transform-style: preserve-3d;
 }
 
 .cssoccer-exact-player-screen-root {
@@ -83,6 +94,22 @@ button {
   position: absolute !important;
   top: 0;
   left: 0;
+}
+
+.cssoccer-exact-player-raster {
+  position: absolute;
+  inset: 0;
+  width: 640px;
+  height: 400px;
+  pointer-events: none;
+}
+
+.cssoccer-exact-player-raster > s {
+  position: absolute;
+  display: block;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+  pointer-events: none;
 }
 
 #scene [data-cssoccer-stable-root="true"] {
@@ -216,6 +243,8 @@ button {
 }
 
 #hud-clock,
+#hud-possession-team-a,
+#hud-possession-team-b,
 #hud-team-a,
 #hud-score,
 #hud-team-b,

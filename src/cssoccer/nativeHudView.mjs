@@ -1,15 +1,20 @@
-export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@3";
+import { CSSOCCER_MATCH_MODE } from "./boundaryState.mjs";
+
+export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@4";
 
 const HUD_STATE_KEYS = Object.freeze([
   "clock",
   "goalHistory",
   "halftimeTransitionTicks",
+  "matchMode",
   "phase",
+  "possession",
   "schema",
   "score",
   "tick",
 ]);
 const CLOCK_SLOT_COUNT = 5;
+const POSSESSION_SLOT_COUNT = 20;
 const SCORE_SLOT_COUNT = 5;
 const TEAM_A = "SPAIN";
 const TEAM_B = "ARGENTINA";
@@ -34,6 +39,7 @@ const COLOR_BAND_INDEX = Object.freeze({
   scorer: 4,
 });
 const SOURCE_HALFTIME_PHASES = new Set(["halftime-whistle", "halftime-transition"]);
+const SOURCE_FULL_TIME_PHASE = "full-time-terminal";
 const SOURCE_HALFTIME_BOUNDARY_PHASE = "halftime-end-swap-second-half-kickoff";
 const SOURCE_PHASES = new Set([
   "opening-kickoff",
@@ -41,7 +47,7 @@ const SOURCE_PHASES = new Set([
   ...SOURCE_HALFTIME_PHASES,
   SOURCE_HALFTIME_BOUNDARY_PHASE,
   "second-half-live-clock",
-  "full-time-terminal",
+  SOURCE_FULL_TIME_PHASE,
 ]);
 const HALFTIME_MENU_MAX_SLIDE = 108;
 const HALFTIME_MENU_SLIDE_PER_TICK = 5;
@@ -50,7 +56,16 @@ export function createCssoccerNativeHudState(options = {}) {
   requirePlainObject(options, "cssoccer native HUD options");
   requireOnlyKeys(
     options,
-    ["clock", "goalHistory", "halftimeTransitionTicks", "phase", "score", "tick"],
+    [
+      "clock",
+      "goalHistory",
+      "halftimeTransitionTicks",
+      "matchMode",
+      "phase",
+      "possession",
+      "score",
+      "tick",
+    ],
     "cssoccer native HUD options",
   );
   return assertCssoccerNativeHudState(deepFreeze({
@@ -58,7 +73,9 @@ export function createCssoccerNativeHudState(options = {}) {
     clock: clone(options.clock ?? { minutes: 0, seconds: 0 }),
     goalHistory: clone(options.goalHistory ?? []),
     halftimeTransitionTicks: options.halftimeTransitionTicks ?? 0,
+    matchMode: options.matchMode ?? CSSOCCER_MATCH_MODE.NORMAL,
     phase: options.phase ?? "opening-kickoff",
+    possession: clone(options.possession ?? null),
     score: clone(options.score ?? { spain: 0, argentina: 0 }),
     tick: options.tick ?? 0,
   }));
@@ -161,6 +178,29 @@ export function assertCssoccerNativeHudState(state) {
     throw new Error(`cssoccer native HUD has no source presentation for ${String(state.phase)}.`);
   }
   if (
+    !Number.isSafeInteger(state.matchMode)
+    || state.matchMode < CSSOCCER_MATCH_MODE.NORMAL
+    || state.matchMode > CSSOCCER_MATCH_MODE.SWAP_ENDS
+  ) {
+    throw new RangeError("cssoccer native HUD matchMode must stay inside 0..19.");
+  }
+  if (state.possession !== null) {
+    requirePlainObject(state.possession, "cssoccer native HUD possession");
+    requireExactKeys(
+      state.possession,
+      ["country", "label"],
+      "cssoccer native HUD possession",
+    );
+    if (
+      !["spain", "argentina"].includes(state.possession.country)
+      || typeof state.possession.label !== "string"
+      || state.possession.label.length === 0
+      || state.possession.label.length > POSSESSION_SLOT_COUNT
+    ) {
+      throw new Error("cssoccer native HUD possession is invalid.");
+    }
+  }
+  if (
     !Number.isSafeInteger(state.halftimeTransitionTicks)
     || state.halftimeTransitionTicks < 0
   ) {
@@ -206,6 +246,8 @@ export function createCssoccerNativeHudView({ host } = {}) {
   }
   materializeStableHudLeaves(host);
   const clock = host.querySelector("#hud-clock");
+  const possessionTeamA = host.querySelector("#hud-possession-team-a");
+  const possessionTeamB = host.querySelector("#hud-possession-team-b");
   const teamA = host.querySelector("#hud-team-a");
   const score = host.querySelector("#hud-score");
   const teamB = host.querySelector("#hud-team-b");
@@ -218,6 +260,8 @@ export function createCssoccerNativeHudView({ host } = {}) {
   const halftimeScorerA = host.querySelector("#hud-halftime-scorer-a");
   const halftimeScorerB = host.querySelector("#hud-halftime-scorer-b");
   const clockSlots = preparedGlyphSlots(clock);
+  const possessionTeamASlots = preparedGlyphSlots(possessionTeamA);
+  const possessionTeamBSlots = preparedGlyphSlots(possessionTeamB);
   const teamASlots = preparedGlyphSlots(teamA);
   const scoreSlots = preparedGlyphSlots(score);
   const teamBSlots = preparedGlyphSlots(teamB);
@@ -233,10 +277,14 @@ export function createCssoccerNativeHudView({ host } = {}) {
   if (
     !clock
     || clock.tagName !== "TIME"
+    || !possessionTeamA
+    || !possessionTeamB
     || !teamA
     || !score
     || !teamB
     || clockSlots.length !== CLOCK_SLOT_COUNT
+    || possessionTeamASlots.length !== POSSESSION_SLOT_COUNT
+    || possessionTeamBSlots.length !== POSSESSION_SLOT_COUNT
     || teamASlots.length !== TEAM_A.length
     || scoreSlots.length !== SCORE_SLOT_COUNT
     || teamBSlots.length !== TEAM_B.length
@@ -254,30 +302,25 @@ export function createCssoccerNativeHudView({ host } = {}) {
 
   let destroyed = false;
   let popoverOpen = false;
-  let previousPhase = null;
-  let boundaryMenuTick = null;
   return Object.freeze({
     render(state) {
       if (destroyed) throw new Error("cssoccer native HUD view has been destroyed.");
       const current = assertCssoccerNativeHudState(state);
       renderClock(clock, clockSlots, current.clock);
-      const sourceHalftime = SOURCE_HALFTIME_PHASES.has(current.phase);
-      if (
-        current.phase === SOURCE_HALFTIME_BOUNDARY_PHASE
-        && SOURCE_HALFTIME_PHASES.has(previousPhase)
-      ) {
-        boundaryMenuTick = current.tick;
-      }
-      const halftimeVisible = sourceHalftime
-        || (
-          current.phase === SOURCE_HALFTIME_BOUNDARY_PHASE
-          && boundaryMenuTick === current.tick
-        );
-      previousPhase = current.phase;
-      if (halftimeVisible) {
-        renderHalftimeMenu({
+      renderPossession({
+        current,
+        teamA: possessionTeamA,
+        teamASlots: possessionTeamASlots,
+        teamB: possessionTeamB,
+        teamBSlots: possessionTeamBSlots,
+      });
+      const scoreMenuVisible = SOURCE_HALFTIME_PHASES.has(current.phase)
+        || current.phase === SOURCE_FULL_TIME_PHASE;
+      if (scoreMenuVisible) {
+        renderScoreMenu({
           menu: halftimeMenu,
           current,
+          heading: current.phase === SOURCE_FULL_TIME_PHASE ? "FULL TIME" : "HALF TIME",
           elements: {
             heading: halftimeHeading,
             teamA: halftimeTeamA,
@@ -292,8 +335,8 @@ export function createCssoccerNativeHudView({ host } = {}) {
       } else {
         halftimeMenu.hidden = true;
       }
-      for (const element of [teamA, score, teamB]) element.hidden = halftimeVisible;
-      if (!halftimeVisible) {
+      for (const element of [teamA, score, teamB]) element.hidden = scoreMenuVisible;
+      if (!scoreMenuVisible) {
         renderSourceText(teamA, teamASlots, TEAM_A, {
           anchorX: 280,
           y: 386,
@@ -341,7 +384,35 @@ export function createCssoccerNativeHudView({ host } = {}) {
   });
 }
 
-function renderHalftimeMenu({ menu, current, elements, slots }) {
+function renderPossession({
+  current,
+  teamA,
+  teamASlots,
+  teamB,
+  teamBSlots,
+}) {
+  const throwIn = current.matchMode === CSSOCCER_MATCH_MODE.THROW_IN_A
+    || current.matchMode === CSSOCCER_MATCH_MODE.THROW_IN_B;
+  if (current.possession === null || throwIn) {
+    teamA.hidden = true;
+    teamB.hidden = true;
+    return;
+  }
+  const home = current.possession.country === "spain";
+  const target = home ? teamA : teamB;
+  const slots = home ? teamASlots : teamBSlots;
+  teamA.hidden = !home;
+  teamB.hidden = home;
+  renderSourceText(target, slots, current.possession.label, {
+    anchorX: home ? 8 : NATIVE_VIEWPORT_WIDTH - 8,
+    y: 1,
+    justification: home ? "left" : "right",
+    colorBand: home ? "team-a" : "team-b",
+  });
+  target.setAttribute("aria-label", `${current.possession.country} ${current.possession.label}`);
+}
+
+function renderScoreMenu({ menu, current, heading, elements, slots }) {
   const scorerLines = {
     spain: formatSourceScorerLines(current.goalHistory, "spain"),
     argentina: formatSourceScorerLines(current.goalHistory, "argentina"),
@@ -367,7 +438,8 @@ function renderHalftimeMenu({ menu, current, elements, slots }) {
       child.hidden = index >= verticalSegments;
     });
   }
-  renderLocalSourceText(elements.heading, slots.heading, "HALF TIME", {
+  menu.setAttribute("aria-label", heading === "FULL TIME" ? "Full time" : "Half time");
+  renderLocalSourceText(elements.heading, slots.heading, heading, {
     anchorX: 288,
     y: 56,
     justification: "center",

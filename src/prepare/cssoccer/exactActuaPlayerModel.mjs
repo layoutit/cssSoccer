@@ -12,6 +12,8 @@ const MODEL_ID = "player_f1";
 const MODEL_FACE_SHA256 = Object.freeze({
   player_f1: "cb77521c8fbc97579233f0f5f8bed1bedb8bdaa7fc59a777c33e10a339cf2219",
   player_f2: "b0ed1f3f8206b0006c745994b475a4371897115ced132244285681cd0ef918ae",
+  player_fg1: "34dbf985b12c1dd7219ff53052dfc8cb3474ece16d68b8b96cdc21a7d298a942",
+  player_fg2: "b1ff61240d26e58966080b2d762fca58388a05b56c15a370a494c1e519422fcf",
 });
 const FACE_COUNT = 13;
 const POINT_COUNT = 28;
@@ -28,7 +30,7 @@ const PINNED_POSE_BYTES_SHA256 =
   "74c929ee1b913ecfb276114766ada6ca760d9eb0b7c6db3e25d3ce7b2403298c";
 
 /**
- * Prepare the untouched native player_f1 topology and MC_STAND payload.
+ * Prepare an untouched native outfield/goalkeeper topology and MC_STAND payload.
  * This contract deliberately stops before any presentation adapter runs.
  */
 export function prepareExactActuaPlayerModel({
@@ -132,7 +134,7 @@ export function assertExactActuaPlayerModelRoundTrip(contract, {
     || contract.topology?.wordType !== "int16le"
     || contract.topology?.faces?.length !== FACE_COUNT
   ) {
-    throw new Error("Exact player_f1 topology type or count changed.");
+    throw new Error(`Exact ${modelId} topology type or count changed.`);
   }
   if (
     contract.animation?.symbol !== "MC_STAND"
@@ -151,7 +153,7 @@ export function assertExactActuaPlayerModelRoundTrip(contract, {
   const expectedFaceBytes = dataObject.symbolBytes(modelId);
   const rebuiltFaceBytes = int16Bytes(contract.topology.rawWords);
   if (!rebuiltFaceBytes.equals(expectedFaceBytes)) {
-    throw new Error("Exact player_f1 raw words do not round-trip to DATA.OBJ.");
+    throw new Error(`Exact ${modelId} raw words do not round-trip to DATA.OBJ.`);
   }
   const rebuiltFaces = Buffer.concat(contract.topology.faces.map((face, faceIndex) => {
     validateFace(face, faceIndex, modelId);
@@ -159,9 +161,13 @@ export function assertExactActuaPlayerModelRoundTrip(contract, {
   }));
   const rebuiltFaceList = Buffer.concat([int16Bytes([FACE_COUNT]), rebuiltFaces]);
   if (!rebuiltFaceList.equals(expectedFaceBytes)) {
-    throw new Error("Exact player_f1 face order or payload changed.");
+    throw new Error(`Exact ${modelId} face order or payload changed.`);
   }
-  assertSha256(rebuiltFaceList, contract.topology.sourceBytesSha256, "prepared player_f1 faces");
+  assertSha256(
+    rebuiltFaceList,
+    contract.topology.sourceBytesSha256,
+    `prepared ${modelId} faces`,
+  );
 
   const archive = decodeActuaOffsetArchive({
     dataBytes: requireBytes(euroRendDatBytes, "EUROREND.DAT"),
@@ -191,13 +197,15 @@ function decodeExactFaces(bytes, modelId = MODEL_ID) {
   const faces = [];
   let offset = 2;
   for (let faceIndex = 0; faceIndex < FACE_COUNT; faceIndex += 1) {
-    if (offset + 4 > bytes.length) throw new Error(`player_f1 ends inside face ${faceIndex}.`);
+    if (offset + 4 > bytes.length) {
+      throw new Error(`${modelId} ends inside face ${faceIndex}.`);
+    }
     const primitiveCode = bytes.readInt16LE(offset);
     const sourceColorCode = bytes.readInt16LE(offset + 2);
     const payloadWordCount = primitivePayloadWordCount(primitiveCode, faceIndex);
     const faceByteCount = (2 + payloadWordCount) * 2;
     if (offset + faceByteCount > bytes.length) {
-      throw new Error(`player_f1 ends inside face ${faceIndex} payload.`);
+      throw new Error(`${modelId} ends inside face ${faceIndex} payload.`);
     }
     const rawBytes = Buffer.from(bytes.subarray(offset, offset + faceByteCount));
     const rawWords = readInt16Words(rawBytes);
@@ -205,7 +213,9 @@ function decodeExactFaces(bytes, modelId = MODEL_ID) {
     const pointIndexCount = primitiveCode === 4 ? 4 : primitiveCode === 0 ? 2 : 3;
     const pointIndexes = payload.slice(0, pointIndexCount);
     if (pointIndexes.some((pointIndex) => pointIndex < 0 || pointIndex >= POINT_COUNT)) {
-      throw new Error(`player_f1 face ${faceIndex} references a point outside 0..${POINT_COUNT - 1}.`);
+      throw new Error(
+        `${modelId} face ${faceIndex} references a point outside 0..${POINT_COUNT - 1}.`,
+      );
     }
     const face = Object.freeze({
       id: `${modelId}:face-${String(faceIndex).padStart(2, "0")}`,
@@ -222,7 +232,9 @@ function decodeExactFaces(bytes, modelId = MODEL_ID) {
     faces.push(face);
     offset += faceByteCount;
   }
-  if (offset !== bytes.length) throw new Error("player_f1 has trailing or missing face bytes.");
+  if (offset !== bytes.length) {
+    throw new Error(`${modelId} has trailing or missing face bytes.`);
+  }
   return { faces: Object.freeze(faces) };
 }
 
@@ -272,11 +284,19 @@ function validateFace(face, expectedIndex, modelId = MODEL_ID) {
     || face.payload?.length !== payloadWordCount
     || face.payload.some((word, index) => word !== face.rawWords[index + 2])
   ) {
-    throw new Error(`Exact player_f1 face ${expectedIndex} identity, order, or raw payload changed.`);
+    throw new Error(
+      `Exact ${modelId} face ${expectedIndex} identity, order, or raw payload changed.`,
+    );
   }
   const dispatch = face.primitiveCode === 4 ? "addpoly" : face.primitiveCode === 0 ? "add3dcmap" : "add3demap";
-  if (face.dispatch !== dispatch) throw new Error(`Exact player_f1 face ${expectedIndex} dispatch changed.`);
-  assertSha256(int16Bytes(face.rawWords), face.rawBytesSha256, `prepared player_f1 face ${expectedIndex}`);
+  if (face.dispatch !== dispatch) {
+    throw new Error(`Exact ${modelId} face ${expectedIndex} dispatch changed.`);
+  }
+  assertSha256(
+    int16Bytes(face.rawWords),
+    face.rawBytesSha256,
+    `prepared ${modelId} face ${expectedIndex}`,
+  );
 }
 
 function validatePose(pose, expectedIndex) {
@@ -305,7 +325,7 @@ function primitivePayloadWordCount(code, faceIndex) {
   if (code === 4) return 4;
   if (code === 0) return 4;
   if (code === -1) return 6;
-  throw new Error(`player_f1 face ${faceIndex} has unrecognized primitive code ${code}.`);
+  throw new Error(`Player face ${faceIndex} has unrecognized primitive code ${code}.`);
 }
 
 function readInt16Words(bytes) {

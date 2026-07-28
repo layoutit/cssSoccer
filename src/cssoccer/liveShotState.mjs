@@ -245,7 +245,9 @@ function releaseCssoccerShotKernel(input, newSetPieceKick) {
     : requireInteger(input.charge, 1, 30, "shot release charge");
   const direction = input.direction === null
     ? null
-    : requireUnitDirection(input.direction, "shot release direction");
+    : newSetPieceKick === null
+      ? requireUnitDirection(input.direction, "shot release direction")
+      : requireNonzeroDirection(input.direction, "shot release direction");
   if (
     ball.ball.tick !== tick
     || possession.owner !== owner.nativePlayerNumber
@@ -427,6 +429,9 @@ function releaseCssoccerShotKernel(input, newSetPieceKick) {
   }
 
   const launchDistance = sourceDistance2d({ x: xOffset, y: yOffset });
+  // aim_shot_at_goal stores the new-kick direction*10 values in its float
+  // xoff/yoff references. shoot_ball then measures and divides those stored
+  // offsets, including their single-precision rounding.
   const displacement = {
     x: F32(shotSpeed * xOffset / launchDistance),
     y: F32(shotSpeed * yOffset / launchDistance),
@@ -447,7 +452,10 @@ function releaseCssoccerShotKernel(input, newSetPieceKick) {
         nativeState: 0,
         fullXY,
         fullZ,
-        xy: F32(0),
+        // aim_shot_at_goal clears ball_zspin but leaves ball_xyspin intact
+        // until the following process_ball swerve update. Preserve even its
+        // signed-zero bit at the release boundary.
+        xy: ball.ball.spin.xy,
         z: F32(0),
       },
       rng: shotRng,
@@ -670,10 +678,17 @@ function requirePoint(value, label) {
 }
 
 function requireUnitDirection(value, label) {
-  const direction = requirePoint(value, label);
+  const direction = requireNonzeroDirection(value, label);
   const length = Math.hypot(direction.x, direction.y);
-  if (length === 0) throw new Error(`${label} must not be zero`);
   return { x: F32(direction.x / length), y: F32(direction.y / length) };
+}
+
+function requireNonzeroDirection(value, label) {
+  const direction = requirePoint(value, label);
+  if (direction.x === 0 && direction.y === 0) {
+    throw new Error(`${label} must not be zero`);
+  }
+  return direction;
 }
 
 function requireBoolean(value, label) {

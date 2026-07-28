@@ -1,8 +1,10 @@
-import { stepBallMatchState } from "./ballMatchState.mjs";
+import { stepBallTrajectoryPredictionState } from "./ballState.mjs";
+import { createBallMatchState } from "./ballMatchState.mjs";
 import {
   sourceAngleCosine,
   sourceGetThereTime,
 } from "./motionState.mjs";
+import { CSSOCCER_NATIVE_GAMEPLAY_PROFILE } from "./nativeGameplayProfile.mjs";
 
 const F32 = Math.fround;
 const PREDICTION_LIMIT = 50;
@@ -720,7 +722,8 @@ export function projectCssoccerControlWaitTransition(input = {}) {
   const receiveTicks = F32(best.rt);
   const receivePlanarDistance = sourcePlanarDistance(best.x, best.y);
   const receiveValid = receivePlanarDistance / receiveTicks <= 1
-    && Math.abs(best.z) <= 4;
+    && Math.abs(best.z)
+      <= CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value;
   const receiveDisplacement = receiveValid
     ? {
         x: F32(best.x / receiveTicks),
@@ -1235,11 +1238,14 @@ function rotateSourceOffset(local, facing) {
 
 /** Prediction tables stop feeding a qualified restart back into ball physics. */
 function stepCssoccerInterceptPrediction(state, afterTouchInput) {
-  return state.outcome === null
-    ? stepBallMatchState(state, {
-        ...(state.ball.afterTouch.user === 0 ? {} : { afterTouchInput }),
-      }).state
-    : state;
+  if (state.outcome !== null) return state;
+  const ball = stepBallTrajectoryPredictionState(state.ball, {
+    ...(state.ball.afterTouch.user === 0 ? {} : { afterTouchInput }),
+  });
+  return createBallMatchState({
+    ...state,
+    ball,
+  });
 }
 
 function sourcePlanarDistance(x, y) {

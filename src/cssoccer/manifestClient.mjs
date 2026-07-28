@@ -62,7 +62,8 @@ const REQUIRED_FILES = Object.freeze([
   "facts/spain-argentina-full-match.json",
   "scenes/spain-argentina-full-match.json",
 ]);
-const ANIMATION_STYLE_PATH = /^assets\/animation\/(?:(?:player-highlight-marker)\/(?:slot-[0-9]{3}|frames-[0-9]{6}-[0-9]{6})\.json|exact-(?:player|official)\/(?:index\.json|slot-[0-9]{3}\/frames-[0-9]{3}-[0-9]{3}\.json))$/u;
+const EXACT_PLAYER_RASTER_PATH = /^assets\/animation\/exact-player-raster\/slot-[0-9]{3}\/frames-[0-9]{3}-[0-9]{3}-(?:base|number-delta)\.png$/u;
+const ANIMATION_STYLE_PATH = /^assets\/animation\/(?:(?:player-highlight-marker)\/(?:slot-[0-9]{3}|frames-[0-9]{6}-[0-9]{6})\.json|exact-(?:player|official)\/(?:index\.json|slot-[0-9]{3}\/frames-[0-9]{3}-[0-9]{3}\.json)|exact-player-raster\/slot-[0-9]{3}\/frames-[0-9]{3}-[0-9]{3}-(?:base|number-delta)\.png)$/u;
 const HASH = /^[0-9a-f]{64}$/u;
 const SAFE_PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const NATIVE_REQUEST = /(?:^|\/)(?:native|oracle)(?:\/|$)|\.(?:exe|dll|lib)$/iu;
@@ -340,7 +341,12 @@ export function assertPreparedExactPlayers(value) {
     || value.index?.schema !== "cssoccer-exact-actua-player-animation-index@1"
     || value.index?.counts?.samples !== 140_568
     || value.index?.counts?.faceStates !== 1_827_384
+    || value.index?.counts?.geometryVariants !== 2
+    || value.index?.counts?.variantFaceStates !== 3_654_768
+    || value.index?.counts?.poseCoordinates !== 491_988
     || value.materials?.schema !== "cssoccer-exact-actua-player-materials@1"
+    || value.materials?.counts?.profiles !== 4
+    || value.materials?.counts?.geometryVariants !== 2
     || value.materials?.counts?.fixturePlayers !== 22
     || value.materials?.geometryId !== value.index?.geometryId
     || value.materials?.topologySha256 !== value.index?.topologySha256
@@ -623,7 +629,8 @@ function descriptorForPath(manifest, path) {
 function validatePreparedDescriptor(descriptor) {
   if (!isPlainObject(descriptor)) throw new Error("Prepared file descriptor must be an object.");
   const path = validatePreparedPath(descriptor.path);
-  const expectedMediaType = TEXTURE_PATHS.has(path) ? "image/png" : "application/json";
+  const isPng = TEXTURE_PATHS.has(path) || EXACT_PLAYER_RASTER_PATH.test(path);
+  const expectedMediaType = isPng ? "image/png" : "application/json";
   if (
     descriptor.url !== `/cssoccer/${path}`
     || descriptor.mediaType !== expectedMediaType
@@ -635,7 +642,7 @@ function validatePreparedDescriptor(descriptor) {
   ) {
     throw new Error(`Prepared file descriptor ${path} is not fully bound.`);
   }
-  if (!TEXTURE_PATHS.has(path)) validatePreparedUrl(descriptor.url);
+  if (!isPng) validatePreparedUrl(descriptor.url);
   return path;
 }
 

@@ -45,6 +45,24 @@ const GET_UP_FRONT_FRAME_COUNT = 87;
 const TROT_A_FRAME_COUNT = 32;
 const RUN_FRAME_COUNT = 26;
 const STAND_FRAME_COUNT = 39;
+// BALLINT.CPP get_mcball_coords indexes the single contiguous player_p
+// allocation with mcaps[ls_anim].cappts + (short)(ls_frm * capfrms).  The
+// source does not clamp ls_frm to the selected animation.  A long-lived
+// MC_STAND capture can therefore read a later prepared slot.  The retained
+// full-match trace reaches MC_STAND local frame 158, which is player_p global
+// frame 3036: MC_D_HEAD (slot 81), frame 16.
+const RETAINED_MOTION_BALL_POINT_BY_CAPTURE = deepFreeze({
+  "78:158": {
+    globalFrame: 3036,
+    preparedAnimation: 81,
+    preparedFrame: 16,
+    local: {
+      x: F32(8.829717636108398),
+      y: F32(0.6504261493682861),
+      z: F32(21.894996643066406),
+    },
+  },
+});
 const RUN_REFERENCE_SPEED = 3.19;
 const TROT_A_FRAME_STEP = 1 / (20 * TROT_A_FRAME_COUNT / 40);
 const RUN_FRAME_STEP = 1 / (20 * RUN_FRAME_COUNT / 40);
@@ -375,7 +393,10 @@ export const CSSOCCER_PLAYER_ANIMATION_SOURCE = deepFreeze({
     {
       file: "BALLINT.CPP",
       sha256: "a57298a8dc783e778957a763c2675dd04fc2552fc59f221a183dd6f15b24f327",
-      producers: ["ball_interact before ordinary player intelligence/action"],
+      producers: [
+        "ball_interact before ordinary player intelligence/action",
+        "get_mcball_coords retained ls_anim/ls_frm player_p lookup",
+      ],
     },
     {
       file: "INTELL.CPP",
@@ -807,6 +828,65 @@ export function projectCssoccerPassKickLaunch(input = {}) {
 /** Project make_shoot -> init_anim -> init_kick_act for any source shot kick. */
 export function projectCssoccerShotKickLaunch(input = {}) {
   return projectCssoccerKickLaunch(input, SHOT_KICK_PROFILE_BY_TYPE, "make_shoot");
+}
+
+/**
+ * Project BALLINT.CPP get_mcball_coords for a source-retained animation pose.
+ *
+ * Return null when the retained pointer has not yet been qualified from the
+ * prepared player_p domain; callers then keep the source's below-ground
+ * fallback instead of inventing a motion point.
+ */
+export function projectCssoccerRetainedMotionBall(input = {}) {
+  requirePlainObject(input, "retained motion ball input");
+  requireExactKeys(input, [
+    "animation",
+    "animationFrame",
+    "facing",
+    "playerPosition",
+  ], "retained motion ball input");
+  if (!Number.isSafeInteger(input.animation) || input.animation < 0) {
+    throw new TypeError("retained motion ball animation must be a non-negative integer");
+  }
+  const animationFrame = requireF32(
+    input.animationFrame,
+    "retained motion ball animationFrame",
+  );
+  const facing = requireLaunchFacing(input.facing);
+  requirePlainObject(input.playerPosition, "retained motion ball playerPosition");
+  requireExactKeys(
+    input.playerPosition,
+    ["x", "y", "z"],
+    "retained motion ball playerPosition",
+  );
+  const playerPosition = {
+    x: requireF32(input.playerPosition.x, "retained motion ball playerPosition.x"),
+    y: requireF32(input.playerPosition.y, "retained motion ball playerPosition.y"),
+    z: requireF32(input.playerPosition.z, "retained motion ball playerPosition.z"),
+  };
+  const frameCount = input.animation === STAND_ANIMATION
+    ? STAND_FRAME_COUNT
+    : null;
+  if (frameCount === null) return null;
+  const localFrame = Math.trunc(animationFrame * frameCount);
+  const point = RETAINED_MOTION_BALL_POINT_BY_CAPTURE[
+    `${input.animation}:${localFrame}`
+  ];
+  if (point === undefined) return null;
+  const offset = rotateSourceOffset(point.local, facing);
+  return deepFreeze({
+    animation: input.animation,
+    animationFrame,
+    globalFrame: point.globalFrame,
+    preparedAnimation: point.preparedAnimation,
+    preparedFrame: point.preparedFrame,
+    position: {
+      x: F32(playerPosition.x + offset.x),
+      y: F32(playerPosition.y + offset.y),
+      // get_mcball_coords publishes the prepared vertical point directly.
+      z: point.local.z,
+    },
+  });
 }
 
 /** Project the generic make_pass type-1 -> init_kick_act backheel launch. */

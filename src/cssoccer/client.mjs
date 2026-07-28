@@ -16,12 +16,14 @@ import {
   createCssoccerFreePlayRematchState,
   createCssoccerFreePlayState,
 } from "./freePlayState.mjs";
+import { assertCssoccerFreePlayCommand } from "./freePlayContract.mjs";
 import {
   installCssoccerDebugApi,
   uninstallCssoccerDebugApi,
 } from "./debugApi.mjs";
 import { createCssoccerDebugTools } from "./debugTools.mjs";
 import { requireControlCountry } from "./fixtureContract.mjs";
+import { createCssoccerInputState } from "./inputState.mjs";
 import {
   createCssoccerNativeHudState,
   createCssoccerNativeHudView,
@@ -157,6 +159,7 @@ export function mountCssoccerClient({
       visualCaptureRuntime: Object.freeze({
         begin: beginVisualCapture,
         advanceToTick: advanceVisualCaptureToTick,
+        stepCommand: stepVisualCaptureCommand,
         end: endVisualCapture,
         state: visualCaptureState,
       }),
@@ -616,16 +619,22 @@ export function mountCssoccerClient({
     return transaction.commit();
   }
 
-  function prepareProductTick(previousInput) {
+  function prepareProductTick(previousInput, boundCommand = null) {
     const now = debugTools.isRecording() || windowImpl.__cssoccerDisableLiveScheduler === true
       ? monotonicNow
       : null;
     const simulationStarted = now?.() ?? 0;
-    const emitted = createCssoccerBrowserInputCommand(state.inputState, {
-      tick: state.engine.snapshot().tick,
-      previousInput,
-      movementBasis: state.mount.gameplayInputBasis(),
-    });
+    const engineTick = state.engine.snapshot().tick;
+    const emitted = boundCommand === null
+      ? createCssoccerBrowserInputCommand(state.inputState, {
+          tick: engineTick,
+          previousInput,
+          movementBasis: state.mount.gameplayInputBasis(),
+        })
+      : createBoundProductInputCommand(boundCommand, {
+          expectedTick: engineTick,
+          previousInput,
+        });
     const snapshot = state.engine.step(emitted.command);
     const frame = createCssoccerFreePlayRenderFrame(state.playerRenderContract, {
       snapshot,
@@ -896,6 +905,24 @@ export function mountCssoccerClient({
     return visualCaptureState();
   }
 
+  async function stepVisualCaptureCommand(command) {
+    if (visualCaptureDepth <= 0) {
+      throw new Error("css.soccer visual capture must be frozen before bound-command stepping.");
+    }
+    if (state.liveFrame.terminal) {
+      throw new Error("css.soccer visual capture cannot step a terminal match.");
+    }
+    const transaction = prepareProductTick(state.lastInputState, command);
+    if (transaction.missingExactStates.length > 0) {
+      await preloadExactTransaction(transaction);
+    }
+    const published = transaction.commit();
+    return Object.freeze({
+      ...visualCaptureState(),
+      command: Object.freeze({ ...published.command }),
+    });
+  }
+
   function endVisualCapture() {
     if (visualCaptureDepth <= 0) {
       throw new Error("css.soccer visual capture is not frozen.");
@@ -937,6 +964,8 @@ export function mountCssoccerClient({
       phase: state.matchState.clock.phase,
       halftimeTransitionTicks: state.matchState.clock.halftimeTransitionTicks,
       goalHistory: state.hudGoalHistory,
+      matchMode: live?.camera.matchMode ?? state.matchState.rules.matchMode,
+      possession: projectNativeHudPossession(live, state.preparedFacts),
     });
     documentImpl.body.dataset.matchPaused = String(state.inputState.paused);
     documentImpl.body.dataset.matchFocused = String(state.inputState.focused);
@@ -946,6 +975,34 @@ export function mountCssoccerClient({
     );
     renderTouchControls();
     return hudView.render(state.hudState);
+  }
+
+  function projectNativeHudPossession(live, preparedFacts) {
+    const lastTouch = live?.camera.lastTouch ?? 0;
+    if (lastTouch === 0) return null;
+    const player = live?.players?.commands?.find(({ nativePlayerNumber }) => (
+      nativePlayerNumber === lastTouch
+    ));
+    if (player === undefined) {
+      throw new Error(`cssoccer native HUD lost last-touch player ${lastTouch}.`);
+    }
+    const actor = preparedFacts?.actors?.actors?.find(({ id }) => id === player.rootId);
+    const shirtNumber = actor?.material?.shirtNumber;
+    if (
+      !actor
+      || !["spain", "argentina"].includes(actor.country)
+      || typeof actor.name !== "string"
+      || !Number.isSafeInteger(shirtNumber)
+      || shirtNumber < 0
+      || shirtNumber > 10
+    ) {
+      throw new Error(`cssoccer native HUD cannot resolve source player ${player.rootId}.`);
+    }
+    const surname = actor.name.slice(actor.name.lastIndexOf(" ") + 1);
+    return {
+      country: actor.country,
+      label: `${shirtNumber + 1}. ${surname}`,
+    };
   }
 
   function retainNativeHudGoals(match) {
@@ -1282,6 +1339,14 @@ async function advanceAsyncProductFrameScheduler(scheduler, timestamp, {
   }
   if (steps === MAX_STEPS_PER_ANIMATION_FRAME) scheduler.accumulator = 0;
   return Object.freeze({ steps, elapsed, accumulator: scheduler.accumulator });
+}
+
+function createBoundProductInputCommand(command, { expectedTick, previousInput }) {
+  const boundCommand = assertCssoccerFreePlayCommand(command, { expectedTick });
+  return Object.freeze({
+    command: boundCommand,
+    input: createCssoccerInputState(boundCommand, { previous: previousInput }),
+  });
 }
 
 function requireFrameTimestamp(value) {

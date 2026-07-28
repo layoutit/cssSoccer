@@ -111,7 +111,9 @@ export function projectExactActuaPlayerSample({
   const faces = projectedGeometry.faces.map((geometryFace) => {
     const face = model.topology.faces[geometryFace.faceIndex];
     const runtimeColorCode = face.faceIndex === 12
-      ? -533 - 2016 - (model.id === "player_f2" ? 15 : 0) - (shirtNumber - 1)
+      ? -533 - 2016
+        - (model.id === "player_f2" || model.id === "player_fg2" ? 15 : 0)
+        - (shirtNumber - 1)
       : face.sourceColorCode;
     const selectedColorCode = geometryFace.visible
       ? runtimeColorCode + geometryFace.materialSelectorOffset
@@ -407,10 +409,19 @@ function validateCamera(camera) {
 function assertExactModel(model) {
   if (
     model?.schema !== CSSOCCER_EXACT_ACTUA_PLAYER_MODEL_SCHEMA
-    || !new Set(["player_f1", "player_f2"]).has(model?.id)
+    || !new Set([
+      "player_f1",
+      "player_f2",
+      "player_fg1",
+      "player_fg2",
+    ]).has(model?.id)
     || model?.topology?.faceCount !== 13
     || model?.animation?.poseCount !== 39
-  ) throw new TypeError("Exact Actua native projection requires a prepared player_f1/player_f2 contract.");
+  ) {
+    throw new TypeError(
+      "Exact Actua native projection requires a prepared outfield/goalkeeper contract.",
+    );
+  }
 }
 
 function assertExactTopologyAndCoordinates(topology, coordinates) {

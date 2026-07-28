@@ -232,7 +232,9 @@ export function projectCssoccerActuaWireCamera(effectiveBall) {
   let cameraY = F32(
     targetY - directionY * (distance - (distance * (targetY / (width * 2)))),
   );
-  const verticalRatio = F32(F32(targetY - centreY) / F32(centreY));
+  // Open Watcom evaluates this source expression in its x87 expression
+  // precision and rounds only when the float local receives the quotient.
+  const verticalRatio = F32((targetY - centreY) / centreY);
   const cameraZ = F32(
     height - ((height * 0.8) * Math.abs(verticalRatio)),
   );
@@ -245,7 +247,7 @@ export function projectCssoccerActuaWireCamera(effectiveBall) {
   const adjustedTargetY = F32(targetY + (ballY * cameraZ / (magnitude * 5)));
   const adjustedTargetZ = F32(targetZ / 2);
 
-  return createPose({
+  return createLimitedPose({
     eye: [cameraX, cameraY, cameraZ],
     target: [adjustedTargetX, adjustedTargetY, adjustedTargetZ],
   });
@@ -365,6 +367,10 @@ function projectCssoccerActuaCornerCamera(effectiveBall, { rightGoal }) {
 }
 
 function createRestartPose({ eye, target }) {
+  return createLimitedPose({ eye, target });
+}
+
+function createLimitedPose({ eye, target }) {
   const perimeter = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.restart.stadiumPerimeter;
   const { length, width } = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.pitch;
   const limitedEye = [
@@ -391,7 +397,7 @@ export function projectCssoccerActuaFaceCelebrationCamera(goalScorer) {
   const cameraZ = F32(
     CSSOCCER_ACTUA_GAMEPLAY_CAMERA.setHeight / profile.heightDivisor,
   );
-  return createPose({
+  return createLimitedPose({
     eye: [cameraX, cameraY, cameraZ],
     target: [targetX, targetY, F32(profile.targetHeight)],
   });
@@ -400,7 +406,7 @@ export function projectCssoccerActuaFaceCelebrationCamera(goalScorer) {
 /** Direct translation of 3D_UPD2.CPP camera == 16 (TUNNEL VIEW). */
 export function projectCssoccerActuaTunnelCamera() {
   const { eye, target } = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.tunnel;
-  return createPose({ eye, target });
+  return createLimitedPose({ eye, target });
 }
 
 /** Matrix applied once to .polycss-scene under a 440px CSS perspective. */

@@ -245,11 +245,9 @@ function releaseCssoccerAerialReceiverPass(input, { kind, speedBonus }) {
   if (
     possession.owner < 1
     || possession.owner > 22
-    || possession.owner === 1
-    || possession.owner === 12
     || possession.inHands !== 0
   ) {
-    throw new Error(`${kind}-pass release requires an ordinary outfield possession owner`);
+    throw new Error(`${kind}-pass release requires an ordinary feet-possession owner`);
   }
   if (
     !Number.isSafeInteger(input.takerAccuracy)

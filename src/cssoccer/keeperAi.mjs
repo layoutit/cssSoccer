@@ -3,11 +3,11 @@ import {
   CSSOCCER_NATIVE_GAMEPLAY_PROFILE_HASH,
   projectCssoccerKeeperSourceConstants,
 } from "./nativeGameplayProfile.mjs";
+import { createBallMatchState } from "./ballMatchState.mjs";
 import {
-  createBallMatchState,
-  stepBallMatchState,
-} from "./ballMatchState.mjs";
-import { CSSOCCER_BALL_CONSTANTS } from "./ballState.mjs";
+  CSSOCCER_BALL_CONSTANTS,
+  stepBallTrajectoryPredictionState,
+} from "./ballState.mjs";
 import {
   collectPossession,
   createPossessionState,
@@ -15,6 +15,10 @@ import {
 } from "./possessionState.mjs";
 
 const F32 = Math.fround;
+// INTELL.OBJ save_in_zone_c comparisons at 0x2ccb and 0x3063 retain
+// SAVE_CHEST_HGT/prat = 1.8 and SAVE_HEAD_HGT/prat = 2.5 as f64 operands.
+const SAVE_CHEST_HEIGHT_MULTIPLIER = 1.8;
+const SAVE_HEAD_HEIGHT_MULTIPLIER = 2.5;
 
 export const CSSOCCER_KEEPER_AI_SCHEMA = "cssoccer-keeper-intent@1";
 export const CSSOCCER_KEEPER_SAVE_PLAN_SCHEMA = "cssoccer-keeper-save-plan@1";
@@ -372,17 +376,15 @@ export function planCssoccerKeeperSave(input = {}) {
     let predicted = ball;
     for (let index = 1; index < 50; index += 1) {
       const previousPosition = clonePoint(predicted.ball.position);
-      let stepped;
-      try {
-        stepped = stepBallMatchState(predicted, {
-          ...(predicted.ball.afterTouch.user === 0
-            ? {}
-            : { afterTouchInput: { x: F32(0), y: F32(0) } }),
-        });
-      } catch {
-        break;
-      }
-      predicted = stepped.state;
+      const predictedBall = stepBallTrajectoryPredictionState(predicted.ball, {
+        ...(predicted.ball.afterTouch.user === 0
+          ? {}
+          : { afterTouchInput: { x: F32(0), y: F32(0) } }),
+      });
+      predicted = createBallMatchState({
+        ...predicted,
+        ball: predictedBall,
+      });
       predictions.push(clonePoint(predicted.ball.position));
       // BALL.CPP move_ball publishes ns_ballx/y after planar movement but
       // snapshots ns_ballz before the vertical movement and gravity pass.
@@ -459,9 +461,9 @@ export function planCssoccerKeeperSave(input = {}) {
         : null;
   const height = save.target.z < pitch.ratio
     ? "feet"
-    : save.target.z < pitch.ratio * 2
+    : save.target.z < pitch.ratio * SAVE_CHEST_HEIGHT_MULTIPLIER
       ? "body"
-      : save.target.z < pitch.ratio * 2.5
+      : save.target.z < pitch.ratio * SAVE_HEAD_HEIGHT_MULTIPLIER
         ? "head"
         : "jump";
   if (zone === null) {

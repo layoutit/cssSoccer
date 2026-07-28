@@ -269,6 +269,39 @@ export function stepBallState(
 }
 
 /**
+ * Advance only BALL.CPP ball_trajectory for BALLINT.CPP predict_ball.
+ *
+ * Native prediction snapshots and later restores the live ball globals. It
+ * deliberately omits get_ball_speed, ball_collision, pitch_bounds,
+ * stadium_bounds, and the match tick; predicted shots therefore keep
+ * travelling beyond the pitch instead of rebounding through match policy.
+ */
+export function stepBallTrajectoryPredictionState(
+  state,
+  { windEnabled = false, afterTouchInput } = {},
+) {
+  const current = createBallState(state);
+  if (windEnabled !== false) {
+    throw new Error("The canonical cssoccer fixture has wind disabled.");
+  }
+  if (afterTouchInput !== undefined) {
+    createPlanarVector(afterTouchInput, "afterTouchInput");
+  }
+  if (afterTouchInput !== undefined && current.afterTouch.user === 0) {
+    throw new Error("afterTouchInput is unsupported while after touch is inactive.");
+  }
+
+  const draft = mutableState(current);
+  // Prediction suppresses native bounce/audio effects. The temporary event
+  // sink preserves the shared trajectory math without publishing them.
+  moveBall(draft, [], afterTouchInput);
+  applyGravity(draft);
+  applyFriction(draft);
+  draft.still = draft.displacement.x !== 0 || draft.displacement.y !== 0 ? 0 : 1;
+  return createBallState(draft);
+}
+
+/**
  * Advance the BALL.CPP process_ball branch for a current feet-possession
  * owner. ball_trajectory does not integrate, gravitate, or apply friction
  * while ball_poss is non-zero, but ball_collision and the bounds visit still

@@ -11,6 +11,10 @@ import {
   mountCssoccerRenderBundleMesh,
 } from "./renderBundleMesh.mjs";
 import { mountExactActuaPlayerMesh } from "./exactActuaPlayerMesh.mjs";
+import {
+  applyCssoccerLiveActuaPlayerProjection,
+  CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT,
+} from "./liveActuaPlayerProjection.mjs";
 import { createCssoccerSkyBackdropHandle } from "./skyBackdrop.mjs";
 import { CSSOCCER_LIVE_RENDER_FRAME_SCHEMA } from "./playerRenderState.mjs";
 import { CSSOCCER_PRESENTATION_CAMERA_PRESET } from "./presentationCameraPreset.mjs";
@@ -38,7 +42,10 @@ const EXACT_PLAYER_VIEWPORT_WIDTH = 640;
 const EXACT_PLAYER_VIEWPORT_HEIGHT = 400;
 const EXACT_PLAYER_ORIGIN_X = 320;
 const EXACT_PLAYER_ORIGIN_Y = 267.368408203125;
-const EXACT_PLAYER_SCALE_NUMERATOR = 55;
+// 3DENG.C drawman prepares the one-basis actor with q=640 from an eye
+// 80 units away horizontally and 30 units above its target. Restore that
+// true basis depth before applying the gameplay projection q=440.
+const EXACT_PLAYER_SCALE_NUMERATOR = 440 * Math.hypot(80, 30) / 640;
 const SAFE_ID = /^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$/u;
 const ROOT_GROUPS = Object.freeze([
   Object.freeze({ key: "static", kind: "static", count: 9 }),
@@ -113,6 +120,8 @@ export async function mountPreparedMatchScene({
     seamBleed: 0,
   });
   const exactPlayerOverlay = createExactPlayerOverlay(host);
+  const exactLivePlayerLayer = createExactLivePlayerLayer(exactPlayerOverlay);
+  refreshExactLivePlayerLayer(exactLivePlayerLayer);
   const skyBackdrop = createCssoccerSkyBackdropHandle({
     host,
     backdrop: sceneData.backdrop,
@@ -165,14 +174,24 @@ export async function mountPreparedMatchScene({
       }
       const handle = exactActor
         ? mountExactMatchPlayer({
-            overlay: exactPlayerOverlay,
+            overlay: exactPlayer ? exactLivePlayerLayer : exactPlayerOverlay,
             assetRuntime: exactPlayer ? exactPlayerAssets : exactOfficialAssets,
             materialProfileId: exactPlayer
-              ? `${root.country}-player-material`
+              ? `${root.country}-${
+                  root.nativeRuntimeIndex % 11 === 0
+                    ? "goalkeeper"
+                    : "player"
+                }-material`
               : root.materialId,
             shirtNumber: exactPlayer ? root.nativeRuntimeIndex % 11 + 1 : null,
+            wholePlayerRaster: false,
+            liveCameraProjection: exactPlayer,
             presentationCamera,
             initialTransform: initialActorCommand.transform,
+            initialFacing: [
+              initialActorCommand.facing.cosine,
+              initialActorCommand.facing.sine,
+            ],
             initialAnimation: {
               slotId: initialActorCommand.animation.slotId,
               localFrameIndex: initialActorCommand.animation.frame,
@@ -325,6 +344,7 @@ export async function mountPreparedMatchScene({
       applyActuaGameplayCamera(scene.sceneElement, presentationCamera);
       syncPolycssCameraFacing(camera, presentationCamera);
       skyBackdrop.apply(presentationCamera);
+      refreshExactLivePlayerLayer(exactLivePlayerLayer);
       setDatasetValue(host, "cssoccerCameraMode", presentationCamera.sourceMode);
       const goalScorerNativePlayer = frame.camera.goalScorer?.nativePlayerNumber ?? null;
       const highlight = frame.playerHighlight;
@@ -408,6 +428,7 @@ export async function mountPreparedMatchScene({
             presentationCamera,
             command.transform,
             command.facing.yawDegrees,
+            [command.facing.cosine, command.facing.sine],
           );
           if (transformChanged || result.presentationChanged) {
             livePlayerTransformApplyCount += 1;
@@ -545,6 +566,7 @@ export async function mountPreparedMatchScene({
       applyActuaGameplayCamera(scene.sceneElement, presentationCamera);
       syncPolycssCameraFacing(camera, presentationCamera);
       skyBackdrop.apply(presentationCamera);
+      refreshExactLivePlayerLayer(exactLivePlayerLayer);
       for (const mounted of frozenHandles) {
         if (mounted.exactActor) mounted.handle.refreshExactPresentation(presentationCamera);
       }
@@ -561,7 +583,9 @@ export async function mountPreparedMatchScene({
       let frameLeafFullStyleWriteCount = 0;
       let frameLeafTransformWriteCount = 0;
       let frameLeafUnchangedSkipCount = 0;
-      for (const { handle } of frozenHandles) {
+      let exactPlayerLiveProjectionUpdateCount = 0;
+      let exactPlayerRasterUpdateCount = 0;
+      for (const { handle, exactPlayer } of frozenHandles) {
         const handleStats = handle.stats();
         leafCount += handleStats.leafCount;
         connectedLeafCount += handle.leaves.reduce((count, leaf) => (
@@ -573,6 +597,11 @@ export async function mountPreparedMatchScene({
         frameLeafTransformWriteCount += handleStats.frameLeafTransformWriteCount;
         frameLeafUnchangedSkipCount += handleStats.frameLeafUnchangedSkipCount;
         for (const key of ZERO_CONSTRUCTION_KEYS) construction[key] += handleStats[key];
+        if (exactPlayer) {
+          const exactStats = handle.exactStats();
+          exactPlayerLiveProjectionUpdateCount += exactStats.liveProjectionUpdates;
+          exactPlayerRasterUpdateCount += exactStats.raster.updates;
+        }
       }
       const stableIdentityCount = frozenHandles.reduce((count, { id, handle }) => (
         elementsById.get(id) === handle.element ? count + 1 : count
@@ -639,6 +668,8 @@ export async function mountPreparedMatchScene({
         frameLeafFullStyleWriteCount,
         frameLeafTransformWriteCount,
         frameLeafUnchangedSkipCount,
+        exactPlayerLiveProjectionUpdateCount,
+        exactPlayerRasterUpdateCount,
         packedFrameStyles,
         presentationInterpolationMs: CSSOCCER_PRESENTATION_INTERPOLATION_MS,
         presentationCameraInterpolated: hasTransformInterpolation(scene.sceneElement),
@@ -692,13 +723,39 @@ function createExactPlayerOverlay(host) {
   return overlay;
 }
 
+function createExactLivePlayerLayer(overlay) {
+  const layer = overlay.ownerDocument.createElement("div");
+  layer.className = "cssoccer-exact-live-player-layer";
+  layer.dataset.cssoccerExactLivePlayerLayer = "true";
+  layer.setAttribute("aria-hidden", "true");
+  overlay.appendChild(layer);
+  return layer;
+}
+
+function refreshExactLivePlayerLayer(layer) {
+  const windowImpl = layer.ownerDocument.defaultView;
+  const viewportWidth = Number.isFinite(windowImpl?.innerWidth) && windowImpl.innerWidth > 0
+    ? windowImpl.innerWidth
+    : 640;
+  const viewportHeight = Number.isFinite(windowImpl?.innerHeight) && windowImpl.innerHeight > 0
+    ? windowImpl.innerHeight
+    : 400;
+  const scaleX = viewportWidth / CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT.width;
+  const scaleY = viewportHeight / CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT.height;
+  const transform = `scale(${formatPresentationNumber(scaleX)},${formatPresentationNumber(scaleY)})`;
+  if (layer.style.transform !== transform) layer.style.transform = transform;
+}
+
 function mountExactMatchPlayer({
   overlay,
   assetRuntime,
   materialProfileId,
   shirtNumber,
+  wholePlayerRaster,
+  liveCameraProjection = false,
   presentationCamera,
   initialTransform,
+  initialFacing = null,
   initialAnimation,
 }) {
   const documentImpl = overlay.ownerDocument;
@@ -707,11 +764,21 @@ function mountExactMatchPlayer({
   const modelRoot = documentImpl.createElement("div");
   modelRoot.className = "cssoccer-exact-player-model";
   element.appendChild(modelRoot);
+  const rasterRoot = wholePlayerRaster
+    ? documentImpl.createElement("div")
+    : null;
+  if (rasterRoot) {
+    rasterRoot.className = "cssoccer-exact-player-raster";
+    element.appendChild(rasterRoot);
+  }
   overlay.appendChild(element);
   const transform = {};
   assignExactPlayerTransform(transform, initialTransform);
   let camera = presentationCamera;
   let playerYawDegrees = transform.rotation?.[1] ?? 0;
+  let playerFacing = initialFacing === null
+    ? [Math.cos(playerYawDegrees * Math.PI / 180), Math.sin(playerYawDegrees * Math.PI / 180)]
+    : exactFiniteVec2(initialFacing, "facing");
   let slotId = initialAnimation.slotId;
   let localFrameIndex = initialAnimation.localFrameIndex;
   const viewport = { viewportWidth: 0, viewportHeight: 0 };
@@ -723,6 +790,33 @@ function mountExactMatchPlayer({
     materialProfileId,
     shirtNumber,
     initialState: { slotId, localFrameIndex, yawIndex },
+    viewportWidth: liveCameraProjection
+      ? CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT.width
+      : EXACT_PLAYER_VIEWPORT_WIDTH,
+    viewportHeight: liveCameraProjection
+      ? CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT.height
+      : EXACT_PLAYER_VIEWPORT_HEIGHT,
+    splitNumberPanel: liveCameraProjection,
+  });
+  if (liveCameraProjection) {
+    element.style.width = `${CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT.width}px`;
+    element.style.height = `${CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT.height}px`;
+  }
+  const rasterRuntime = rasterRoot
+    ? mountExactPlayerRaster({
+        root: rasterRoot,
+        assetRuntime,
+        materialProfileId,
+        shirtNumber,
+        initialState: { slotId, localFrameIndex, yawIndex },
+      })
+    : null;
+  let usingRaster = rasterRuntime?.isAvailable() ?? false;
+  modelRoot.hidden = usingRaster;
+  let appliedVisualStateKey = exactPlayerStateKey({
+    slotId,
+    localFrameIndex,
+    yawIndex,
   });
   let appliedPresentation = null;
   let removed = false;
@@ -734,6 +828,38 @@ function mountExactMatchPlayer({
 
   const apply = () => {
     const position = transform.position ?? [0, 0, 0];
+    if (liveCameraProjection) {
+      const coordinates = assetRuntime.poseCoordinatesFields(slotId, localFrameIndex);
+      const topology = assetRuntime.materials.geometryVariants[runtime.geometryVariant];
+      const stateKey = [
+        "live",
+        camera.tick,
+        slotId,
+        localFrameIndex,
+        ...position,
+        ...playerFacing,
+      ].join(":");
+      let visibleFaceCount = 0;
+      runtime.applyLiveProjection(stateKey, (applyFace) => {
+        visibleFaceCount = applyCssoccerLiveActuaPlayerProjection({
+          topology,
+          coordinates,
+          camera,
+          position,
+          facing: playerFacing,
+        }, applyFace);
+      });
+      const projectedVisible = visibleFaceCount > 0;
+      const presentationChanged = stateKey !== appliedPresentation;
+      appliedPresentation = stateKey;
+      appliedVisualStateKey = stateKey;
+      modelRoot.hidden = false;
+      element.hidden = !projectedVisible;
+      applyResult.projectedVisible = projectedVisible;
+      applyResult.presentationChanged = presentationChanged;
+      applyResult.sampleChanged = true;
+      return applyResult;
+    }
     refreshExactPlayerViewport(overlay, viewport);
     const [screenX, screenY, depth] = projectCssoccerActuaRendererPoint(
       position,
@@ -741,7 +867,7 @@ function mountExactMatchPlayer({
       viewport,
     );
     const nextYawIndex = exactPlayerYawIndex(camera, position, playerYawDegrees);
-    const sampleChanged = runtime.updateStateFields(slotId, localFrameIndex, nextYawIndex);
+    const sampleChanged = applyVisualSample(slotId, localFrameIndex, nextYawIndex);
     yawIndex = nextYawIndex;
     const projectedVisible = depth > 5;
     let presentationChanged = false;
@@ -777,7 +903,10 @@ function mountExactMatchPlayer({
   });
   const handle = {
     element,
-    leaves: runtime.leaves,
+    leaves: Object.freeze([
+      ...runtime.leaves,
+      ...(rasterRuntime?.leaves ?? []),
+    ]),
     transform,
     getFrameIndex: () => 0,
     setFrameIndex: () => false,
@@ -792,6 +921,7 @@ function mountExactMatchPlayer({
       presentationCamera: nextCamera,
       transform: nextTransform,
       yawDegrees,
+      facing,
     }) {
       return setExactLiveState(
         nextSlotId,
@@ -799,6 +929,7 @@ function mountExactMatchPlayer({
         nextCamera,
         nextTransform,
         yawDegrees,
+        facing,
       );
     },
     setExactStateFields(
@@ -807,6 +938,7 @@ function mountExactMatchPlayer({
       nextCamera,
       nextTransform,
       yawDegrees,
+      facing,
     ) {
       return setExactLiveState(
         nextSlotId,
@@ -814,6 +946,7 @@ function mountExactMatchPlayer({
         nextCamera,
         nextTransform,
         yawDegrees,
+        facing,
       );
     },
     setExactPreparedState({
@@ -829,20 +962,47 @@ function mountExactMatchPlayer({
       slotId = nextSlotId;
       localFrameIndex = nextLocalFrameIndex;
       yawIndex = nextYawIndex;
-      return runtime.updateStateFields(slotId, localFrameIndex, yawIndex);
+      if (liveCameraProjection) return apply().sampleChanged;
+      return applyVisualSample(slotId, localFrameIndex, yawIndex);
     },
     getExactStateKey() {
-      return runtime.stats().appliedStateKey;
+      return appliedVisualStateKey;
     },
     exactStats() {
-      return runtime.stats();
+      const meshStats = runtime.stats();
+      const rasterStats = rasterRuntime?.stats() ?? {
+        updates: 0,
+        geometryWrites: 0,
+        backgroundWrites: 0,
+        visibilityWrites: 0,
+        redundantStateSkips: 0,
+        unchangedPropertySkips: 0,
+        leafCount: 0,
+        connectedLeaves: 0,
+        appliedStateKey: null,
+        available: false,
+      };
+      return Object.freeze({
+        ...meshStats,
+        updates: meshStats.updates + rasterStats.updates,
+        transformWrites: meshStats.transformWrites + rasterStats.geometryWrites,
+        backgroundPositionXWrites:
+          meshStats.backgroundPositionXWrites + rasterStats.backgroundWrites,
+        visibilityWrites: meshStats.visibilityWrites + rasterStats.visibilityWrites,
+        redundantStateSkips:
+          meshStats.redundantStateSkips + rasterStats.redundantStateSkips,
+        unchangedPropertySkips:
+          meshStats.unchangedPropertySkips + rasterStats.unchangedPropertySkips,
+        appliedStateKey: appliedVisualStateKey,
+        raster: rasterStats,
+      });
     },
     refreshExactPresentation(nextCamera) {
       camera = nextCamera;
       return apply();
     },
     stats() {
-      const runtimeStats = runtime.stats();
+      const runtimeStats = handle.exactStats();
       return Object.freeze({
         ...zeroConstruction(),
         frameStyleApplyCount: runtimeStats.updates,
@@ -851,8 +1011,8 @@ function mountExactMatchPlayer({
         frameLeafTransformWriteCount: runtimeStats.transformWrites,
         frameLeafUnchangedSkipCount:
           runtimeStats.redundantStateSkips + runtimeStats.unchangedPropertySkips,
-        leafCount: runtime.leaves.length,
-        appliedStateKey: runtimeStats.appliedStateKey,
+        leafCount: handle.leaves.length,
+        appliedStateKey: appliedVisualStateKey,
       });
     },
     runtimeConstruction: zeroConstruction,
@@ -860,12 +1020,38 @@ function mountExactMatchPlayer({
     dispose: remove,
   };
 
+  function applyVisualSample(nextSlotId, nextLocalFrameIndex, nextYawIndex) {
+    const wasUsingRaster = usingRaster;
+    const rasterChanged = rasterRuntime?.updateStateFields(
+      nextSlotId,
+      nextLocalFrameIndex,
+      nextYawIndex,
+    ) ?? false;
+    usingRaster = rasterRuntime?.isAvailable() ?? false;
+    let sampleChanged = rasterChanged || usingRaster !== wasUsingRaster;
+    modelRoot.hidden = usingRaster;
+    if (!usingRaster) {
+      sampleChanged = runtime.updateStateFields(
+        nextSlotId,
+        nextLocalFrameIndex,
+        nextYawIndex,
+      ) || sampleChanged;
+    }
+    appliedVisualStateKey = exactPlayerStateKey({
+      slotId: nextSlotId,
+      localFrameIndex: nextLocalFrameIndex,
+      yawIndex: nextYawIndex,
+    });
+    return sampleChanged;
+  }
+
   function setExactLiveState(
     nextSlotId,
     nextLocalFrameIndex,
     nextCamera,
     nextTransform,
     yawDegrees,
+    nextFacing = null,
   ) {
       if (!Number.isSafeInteger(nextSlotId) || nextSlotId < 0) {
         throw new RangeError("Exact Actua match player slot must be a non-negative integer.");
@@ -880,10 +1066,143 @@ function mountExactMatchPlayer({
       localFrameIndex = nextLocalFrameIndex;
       camera = nextCamera;
       playerYawDegrees = yawDegrees;
+      if (liveCameraProjection) {
+        playerFacing = exactFiniteVec2(nextFacing, "facing");
+      }
       assignExactPlayerTransform(transform, nextTransform);
       return apply();
   }
+  if (liveCameraProjection) apply();
   return Object.freeze(handle);
+}
+
+function mountExactPlayerRaster({
+  root,
+  assetRuntime,
+  materialProfileId,
+  shirtNumber,
+  initialState,
+}) {
+  const kinds = Object.freeze(["base", "numberDelta"]);
+  const counters = {
+    updates: 0,
+    geometryWrites: 0,
+    backgroundWrites: 0,
+    visibilityWrites: 0,
+    redundantStateSkips: 0,
+    unchangedPropertySkips: 0,
+  };
+  const leaves = kinds.map((kind) => {
+    const leaf = root.ownerDocument.createElement("s");
+    leaf.dataset.cssoccerExactRasterLayer = kind;
+    root.appendChild(leaf);
+    return leaf;
+  });
+  const cache = leaves.map(() => Object.create(null));
+  let appliedStateKey = null;
+  let available = false;
+  let mounting = true;
+  updateStateFields(
+    initialState.slotId,
+    initialState.localFrameIndex,
+    initialState.yawIndex,
+  );
+  mounting = false;
+
+  return Object.freeze({
+    leaves: Object.freeze([...leaves]),
+    updateStateFields,
+    isAvailable: () => available,
+    stats() {
+      return Object.freeze({
+        ...counters,
+        leafCount: leaves.length,
+        connectedLeaves: leaves.filter((leaf) => leaf.isConnected).length,
+        appliedStateKey,
+        available,
+      });
+    },
+  });
+
+  function updateStateFields(slotId, localFrameIndex, yawIndex) {
+    const stateKey = exactPlayerStateKey({ slotId, localFrameIndex, yawIndex });
+    if (!mounting && stateKey === appliedStateKey) {
+      counters.redundantStateSkips += 1;
+      return false;
+    }
+    available = assetRuntime.applyRasterSampleFields(
+      slotId,
+      localFrameIndex,
+      yawIndex,
+      materialProfileId,
+      shirtNumber,
+      applySprite,
+    );
+    root.hidden = !available;
+    appliedStateKey = stateKey;
+    if (!mounting) counters.updates += 1;
+    return true;
+  }
+
+  function applySprite(
+    kind,
+    assetUrl,
+    assetWidth,
+    assetHeight,
+    atlasX,
+    atlasY,
+    width,
+    height,
+    basisX,
+    basisY,
+  ) {
+    const layerIndex = kinds.indexOf(kind);
+    if (layerIndex < 0) throw new Error(`Unknown exact player raster layer ${kind}.`);
+    const leaf = leaves[layerIndex];
+    const layerCache = cache[layerIndex];
+    writeStyle(leaf, layerCache, "left", `${basisX}px`, "geometryWrites");
+    writeStyle(leaf, layerCache, "top", `${basisY}px`, "geometryWrites");
+    writeStyle(leaf, layerCache, "width", `${width}px`, "geometryWrites");
+    writeStyle(leaf, layerCache, "height", `${height}px`, "geometryWrites");
+    writeStyle(
+      leaf,
+      layerCache,
+      "backgroundImage",
+      `url("${assetUrl}")`,
+      "backgroundWrites",
+    );
+    writeStyle(
+      leaf,
+      layerCache,
+      "backgroundSize",
+      `${assetWidth}px ${assetHeight}px`,
+      "backgroundWrites",
+    );
+    writeStyle(
+      leaf,
+      layerCache,
+      "backgroundPosition",
+      `${-atlasX}px ${-atlasY}px`,
+      "backgroundWrites",
+    );
+    writeStyle(
+      leaf,
+      layerCache,
+      "visibility",
+      width > 0 && height > 0 ? "visible" : "hidden",
+      "visibilityWrites",
+    );
+  }
+
+  function writeStyle(leaf, layerCache, property, value, counter) {
+    if (layerCache[property] === value) {
+      if (!mounting) counters.unchangedPropertySkips += 1;
+      return;
+    }
+    leaf.style[property] = value;
+    layerCache[property] = value;
+    if (!mounting) counters[counter] += 1;
+  }
 }
 
 function refreshExactPlayerViewport(overlay, viewport) {
@@ -944,6 +1263,13 @@ function exactFiniteVec3(value, label) {
   return value;
 }
 
+function exactFiniteVec2(value, label) {
+  if (!Array.isArray(value) || value.length !== 2 || value.some((entry) => !Number.isFinite(entry))) {
+    throw new TypeError(`Exact Actua player ${label} must contain two finite values.`);
+  }
+  return value;
+}
+
 function formatPresentationNumber(value) {
   return String(Number(value.toFixed(6)));
 }
@@ -954,10 +1280,15 @@ function assertExactPlayerAssets(value) {
     || value.schema !== "cssoccer-exact-actua-player-asset-runtime@1"
     || value.index?.counts?.sequences !== 124
     || value.index?.counts?.faceStates !== 1_827_384
+    || value.index?.counts?.geometryVariants !== 2
+    || value.index?.counts?.variantFaceStates !== 3_654_768
+    || value.index?.counts?.poseCoordinates !== 491_988
+    || value.materials?.counts?.profiles !== 4
+    || value.materials?.counts?.geometryVariants !== 2
     || value.materials?.counts?.fixturePlayers !== 22
     || value.materials?.geometryId !== value.index?.geometryId
     || value.materials?.topologySha256 !== value.index?.topologySha256
-  ) throw new Error("Prepared match scene requires the one-basis exact Actua player runtime.");
+  ) throw new Error("Prepared match scene requires exact Actua player poses and materials.");
   return value;
 }
 

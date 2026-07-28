@@ -332,6 +332,7 @@ function assertMetadataFreePng(bytes, label) {
     throw new Error(`${label} is not a complete PNG image`);
   }
   const chunkTypes = [];
+  let colorType = null;
   let offset = 8;
   while (offset < png.length) {
     if (offset + 12 > png.length) throw new Error(`${label} ends inside a PNG chunk`);
@@ -339,9 +340,10 @@ function assertMetadataFreePng(bytes, label) {
     const end = offset + 12 + length;
     if (end > png.length) throw new Error(`${label} has an out-of-bounds PNG chunk`);
     const type = png.toString("ascii", offset + 4, offset + 8);
-    if (!new Set(["IHDR", "IDAT", "IEND"]).has(type)) {
+    if (!new Set(["IHDR", "PLTE", "tRNS", "IDAT", "IEND"]).has(type)) {
       throw new Error(`${label} contains PNG metadata chunk ${type}`);
     }
+    if (type === "IHDR") colorType = png[offset + 17];
     chunkTypes.push(type);
     offset = end;
     if (type === "IEND") break;
@@ -353,6 +355,22 @@ function assertMetadataFreePng(bytes, label) {
       || chunkTypes.filter((type) => type === "IEND").length !== 1
       || !chunkTypes.includes("IDAT")) {
     throw new Error(`${label} has a noncanonical PNG chunk sequence`);
+  }
+  const paletteCount = chunkTypes.filter((type) => type === "PLTE").length;
+  const transparencyCount = chunkTypes.filter((type) => type === "tRNS").length;
+  if (
+    (colorType === 3 && (
+      paletteCount !== 1
+      || transparencyCount > 1
+      || chunkTypes.indexOf("PLTE") > chunkTypes.indexOf("IDAT")
+      || (
+        transparencyCount === 1
+        && chunkTypes.indexOf("tRNS") > chunkTypes.indexOf("IDAT")
+      )
+    ))
+    || (colorType !== 3 && (paletteCount !== 0 || transparencyCount !== 0))
+  ) {
+    throw new Error(`${label} has invalid indexed-color PNG structure`);
   }
 }
 

@@ -64,7 +64,7 @@ export function prepareCssoccerExactActuaPlayerViews({
   const degenerateExamples = [];
   let sampleCount = 0;
   let faceStateCount = 0;
-  for (const sample of iteratePreparedSamples(context)) {
+  for (const { sample, projectionInput } of iteratePreparedSamplesWithInput(context)) {
     if (sample.sampleIndex !== sampleCount) {
       throw new Error(`Exact Actua view sample ${sampleCount} is not contiguous.`);
     }
@@ -93,7 +93,7 @@ export function prepareCssoccerExactActuaPlayerViews({
     }
     digest.update(JSON.stringify(sample));
     digest.update("\n");
-    if (onSample) onSample(sample);
+    if (onSample) onSample(sample, projectionInput);
     sampleCount += 1;
   }
   if (sampleCount !== EXPECTED_SAMPLES || faceStateCount !== EXPECTED_FACE_STATES) {
@@ -177,14 +177,24 @@ export function prepareCssoccerExactActuaPlayerViewSample({
 }
 
 function* iteratePreparedSamples(context) {
+  for (const { sample } of iteratePreparedSamplesWithInput(context)) {
+    yield sample;
+  }
+}
+
+function* iteratePreparedSamplesWithInput(context) {
   for (let preparedPoseIndex = 0; preparedPoseIndex < EXPECTED_POSES; preparedPoseIndex += 1) {
     for (let yawIndex = 0; yawIndex < YAW_COUNT; yawIndex += 1) {
-      yield prepareSample(context, preparedPoseIndex, yawIndex);
+      yield prepareSampleWithInput(context, preparedPoseIndex, yawIndex);
     }
   }
 }
 
 function prepareSample(context, preparedPoseIndex, yawIndex) {
+  return prepareSampleWithInput(context, preparedPoseIndex, yawIndex).sample;
+}
+
+function prepareSampleWithInput(context, preparedPoseIndex, yawIndex) {
   const frameAddress = context.sequences.frameByPreparedIndex[preparedPoseIndex];
   const sequence = context.sequences.sequences.find(
     ({ slotId }) => slotId === frameAddress.slotId,
@@ -202,17 +212,21 @@ function prepareSample(context, preparedPoseIndex, yawIndex) {
   if (materializedSha256 !== frameAddress.exactFloat32PoseSha256) {
     throw new Error(`Exact Actua prepared pose ${preparedPoseIndex} changed float32 bits.`);
   }
-  return prepareCssoccerExactActuaActorViewSample({
+  const projectionInput = Object.freeze({
     topology: context.projectionTopology,
     coordinates,
-    sampleIndex: preparedPoseIndex * YAW_COUNT + yawIndex,
+    expectedPoseSha256: materializedSha256,
     preparedPoseIndex,
+  });
+  const sample = prepareCssoccerExactActuaActorViewSample({
+    ...projectionInput,
+    sampleIndex: preparedPoseIndex * YAW_COUNT + yawIndex,
     sequenceIndex: sequence.sequenceIndex,
     slotId: sequence.slotId,
     localFrameIndex: frameAddress.localFrameIndex,
     yawIndex,
-    expectedPoseSha256: materializedSha256,
   });
+  return Object.freeze({ sample, projectionInput });
 }
 
 /** Prepare one checked 28-point actor pose/view using the shared native projection seam. */
