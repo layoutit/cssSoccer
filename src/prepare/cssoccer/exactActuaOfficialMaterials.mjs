@@ -138,6 +138,7 @@ export function prepareCssoccerExactActuaOfficialMaterials({
       sourceModelSymbol: profile.sourceModelSymbol,
       nativeRenderType: profile.nativeRenderType,
       nativeRendererIndexes: [...profile.nativeRendererIndexes],
+      geometryVariant: "outfield",
       geometryId: profile.geometryId,
       topologySha256: profile.topologySha256,
       atlasUrl: ASSET_URL,
@@ -202,9 +203,14 @@ export function prepareCssoccerExactActuaOfficialMaterials({
     fixtureId: "spain-argentina-full-match",
     geometryId: officialSource.geometry.geometryId,
     topologySha256: officialSource.geometry.topologySha256,
+    geometryVariants: {
+      outfield: officialSource.geometry,
+    },
+    tweenBaseline: officialSource.tweenBaseline,
     sourceContractSha256: officialSource.contractSha256,
     counts: {
       profiles: 2,
+      geometryVariants: 1,
       fixtureOfficials: 3,
       faceBindingsPerProfile: 12,
       textureEntries: entries.length,

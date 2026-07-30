@@ -11,20 +11,32 @@ export const CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_ID =
 export const CSSOCCER_EXACT_ACTUA_GOALKEEPER_GEOMETRY_ID =
   "actua-goalkeeper-28p-13f-one-basis";
 
-const MODEL_IDS = Object.freeze([
+const MATERIAL_MODEL_IDS = Object.freeze([
   "player_f1",
   "player_f2",
   "player_fg1",
   "player_fg2",
 ]);
+const MIRRORED_MODEL_IDS = Object.freeze([
+  "player_f1x",
+  "player_f2x",
+  "player_fg1x",
+  "player_fg2x",
+]);
+const MODEL_IDS = Object.freeze([
+  ...MATERIAL_MODEL_IDS,
+  ...MIRRORED_MODEL_IDS,
+]);
 const GEOMETRY_VARIANTS = Object.freeze({
   outfield: Object.freeze({
     id: CSSOCCER_EXACT_ACTUA_PLAYER_GEOMETRY_ID,
-    modelIds: Object.freeze(["player_f1", "player_f2"]),
+    directModelIds: Object.freeze(["player_f1", "player_f2"]),
+    mirroredModelIds: Object.freeze(["player_f1x", "player_f2x"]),
   }),
   goalkeeper: Object.freeze({
     id: CSSOCCER_EXACT_ACTUA_GOALKEEPER_GEOMETRY_ID,
-    modelIds: Object.freeze(["player_fg1", "player_fg2"]),
+    directModelIds: Object.freeze(["player_fg1", "player_fg2"]),
+    mirroredModelIds: Object.freeze(["player_fg1x", "player_fg2x"]),
   }),
 });
 const MATERIAL_PROFILE_BY_MODEL = Object.freeze({
@@ -48,6 +60,16 @@ const MATERIAL_PROFILE_BY_MODEL = Object.freeze({
     country: "argentina",
     geometryVariant: "goalkeeper",
   }),
+});
+const MATERIAL_PROFILE_ID_BY_MODEL = Object.freeze({
+  player_f1: "spain-player-material",
+  player_f2: "argentina-player-material",
+  player_f1x: "spain-player-material",
+  player_f2x: "argentina-player-material",
+  player_fg1: "spain-goalkeeper-material",
+  player_fg2: "argentina-goalkeeper-material",
+  player_fg1x: "spain-goalkeeper-material",
+  player_fg2x: "argentina-goalkeeper-material",
 });
 const FACE_ROLES = Object.freeze([
   "head",
@@ -73,22 +95,66 @@ export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
   assertModels(models);
   const geometryVariants = Object.fromEntries(
     Object.entries(GEOMETRY_VARIANTS).map(([variantId, variant]) => {
-      const canonicalModel = models[variant.modelIds[0]];
-      const topology = prepareGeometryVariant({
+      const directModel = models[variant.directModelIds[0]];
+      const direct = prepareGeometryVariant({
         geometryId: variant.id,
-        canonicalModel,
+        canonicalModel: directModel,
       });
-      for (const modelId of variant.modelIds) {
+      for (const modelId of variant.directModelIds) {
         const candidateFaces = models[modelId].topology.faces.map(
           (face, faceIndex) => normalizeGeometryFace(face, faceIndex),
         );
-        if (canonicalJson(candidateFaces) !== canonicalJson(topology.faces)) {
+        if (canonicalJson(candidateFaces) !== canonicalJson(direct.faces)) {
           throw new Error(
             `${modelId} does not share the exact ${variantId} geometry table.`,
           );
         }
       }
-      return [variantId, topology];
+      const mirrored = prepareGeometryVariant({
+        geometryId: `${variant.id}-mirrored`,
+        canonicalModel: models[variant.mirroredModelIds[0]],
+      });
+      for (const modelId of variant.mirroredModelIds) {
+        const candidateFaces = models[modelId].topology.faces.map(
+          (face, faceIndex) => normalizeGeometryFace(face, faceIndex),
+        );
+        if (canonicalJson(candidateFaces) !== canonicalJson(mirrored.faces)) {
+          throw new Error(
+            `${modelId} does not share the exact mirrored ${variantId} geometry table.`,
+          );
+        }
+      }
+      for (let teamIndex = 0; teamIndex < variant.directModelIds.length; teamIndex += 1) {
+        const directSource = models[variant.directModelIds[teamIndex]];
+        const mirroredSource = models[variant.mirroredModelIds[teamIndex]];
+        if (directSource.topology.faces.some((face, faceIndex) => (
+          face.sourceColorCode !== mirroredSource.topology.faces[faceIndex].sourceColorCode
+        ))) {
+          throw new Error(
+            `${variant.mirroredModelIds[teamIndex]} changed material while mirroring ${variantId}.`,
+          );
+        }
+      }
+      const mirroredTopologyDifferenceFaceIndices = direct.faces
+        .map(({ faceIndex }) => faceIndex)
+        .filter((faceIndex) => (
+          canonicalJson(direct.faces[faceIndex])
+          !== canonicalJson(mirrored.faces[faceIndex])
+        ));
+      if (canonicalJson(mirroredTopologyDifferenceFaceIndices) !== "[12]") {
+        throw new Error(
+          `Native mirrored ${variantId} topology must change only the shirt-number panel.`,
+        );
+      }
+      return [variantId, {
+        ...direct,
+        mirrored,
+        mirroredTopologyDifferenceFaceIndices,
+        sourceModels: {
+          direct: [...variant.directModelIds],
+          mirrored: [...variant.mirroredModelIds],
+        },
+      }];
     }),
   );
   if (
@@ -98,7 +164,7 @@ export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
     throw new Error("Native outfield and goalkeeper geometry unexpectedly collapsed.");
   }
 
-  const materialProfiles = Object.fromEntries(MODEL_IDS.map((modelId) => {
+  const materialProfiles = Object.fromEntries(MATERIAL_MODEL_IDS.map((modelId) => {
     const profile = MATERIAL_PROFILE_BY_MODEL[modelId];
     const topology = geometryVariants[profile.geometryVariant];
     const bindings = models[modelId].topology.faces.map((face, faceIndex) => ({
@@ -119,7 +185,7 @@ export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
   }));
   const differingMaterialFaceIndicesByVariant = Object.fromEntries(
     Object.entries(GEOMETRY_VARIANTS).map(([variantId, variant]) => {
-      const [leftModelId, rightModelId] = variant.modelIds;
+      const [leftModelId, rightModelId] = variant.directModelIds;
       return [
         variantId,
         geometryVariants[variantId].faces
@@ -142,7 +208,7 @@ export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
     materialProfiles,
     materialProfileBySourceModel: Object.fromEntries(MODEL_IDS.map((modelId) => [
       modelId,
-      MATERIAL_PROFILE_BY_MODEL[modelId].id,
+      MATERIAL_PROFILE_ID_BY_MODEL[modelId],
     ])),
     differingMaterialFaceIndices:
       differingMaterialFaceIndicesByVariant.outfield,
@@ -156,7 +222,7 @@ export function prepareCssoccerExactActuaPlayerGeometry({ models } = {}) {
         models[modelId].topology.sourceBytesSha256,
       ])),
       proof:
-        "outfield opponents share one topology; goalkeeper opponents share a second wider native topology; source color codes remain material bindings",
+        "outfield opponents share direct and mirrored topologies; goalkeeper opponents share a second wider direct/mirrored pair; mirrored motion capture changes only the shirt-number panel winding and keeps source color codes",
     },
   };
   return deepFreeze({

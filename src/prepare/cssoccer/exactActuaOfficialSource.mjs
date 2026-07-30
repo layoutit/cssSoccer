@@ -245,11 +245,13 @@ export function prepareCssoccerExactActuaOfficialSource({
       slotId,
       symbol: expected.symbol,
       sourceSlotId: frames[0].sourceSlotId,
+      mirrored: frames[0].sourceSlotId !== slotId,
       frameCount: slot.resolvedFrameCount,
       frameSha256: frames.map(({ exactFloat32PoseSha256 }) => exactFloat32PoseSha256),
       sourceFrameSha256: frames.map(({ sourceFrameSha256 }) => sourceFrameSha256),
     };
   });
+  const tweenBaseline = resolveCssoccerExactActuaOfficialTweenBaseline(animationTable);
   const core = {
     schema: CSSOCCER_EXACT_ACTUA_OFFICIAL_SOURCE_SCHEMA,
     status: "ready-exact-referee-and-two-assistants",
@@ -261,6 +263,7 @@ export function prepareCssoccerExactActuaOfficialSource({
       player_fl: PROFILE_BY_MODEL.player_fl.id,
     },
     animations,
+    tweenBaseline,
     counts: {
       officials: 3,
       sourceModels: 2,
@@ -309,7 +312,9 @@ export function prepareCssoccerExactActuaOfficialSource({
 }
 
 function collectSelectorOffsets({ animationTable, topology }) {
-  const sets = Array.from({ length: FACE_COUNT }, () => new Set());
+  const sets = topology.faces.map((face) => new Set(
+    completeNativeSelectorOffsets(face.dispatch),
+  ));
   let preparedPoseIndex = 0;
   for (const slotId of SLOT_IDS) {
     for (const frame of resolveCssoccerExactActuaOfficialFrames(animationTable, slotId)) {
@@ -322,7 +327,15 @@ function collectSelectorOffsets({ animationTable, topology }) {
           sourcePoseBitsSha256: frame.exactFloat32PoseSha256,
         });
         for (const face of sample.faces) {
-          if (face.visible) sets[face.faceIndex].add(face.materialSelectorOffset);
+          if (
+            face.visible
+            && !sets[face.faceIndex].has(face.materialSelectorOffset)
+          ) {
+            throw new Error(
+              `Exact official face ${face.faceIndex} produced selector `
+                + `${face.materialSelectorOffset} outside its native primitive domain.`,
+            );
+          }
         }
       }
       preparedPoseIndex += 1;
@@ -330,6 +343,20 @@ function collectSelectorOffsets({ animationTable, topology }) {
   }
   if (preparedPoseIndex !== 312) throw new Error("Exact official pose occurrence count changed.");
   return sets.map((set) => [...set].sort((left, right) => left - right));
+}
+
+function completeNativeSelectorOffsets(dispatch) {
+  if (dispatch === "addpoly") return [0];
+  if (dispatch === "add3dcmap") {
+    return Array.from({ length: 7 }, (_, index) => index - 3);
+  }
+  if (dispatch === "add3demap") {
+    // 3DENG.C selects one of twelve angular bands and then applies the
+    // longitudinal 0/12/24/36 bank. Camera-relative live projection can
+    // reach every integer offset in this closed native range.
+    return Array.from({ length: 60 }, (_, index) => index - 47);
+  }
+  throw new Error(`Exact official primitive dispatch ${String(dispatch)} is unsupported.`);
 }
 
 export function resolveCssoccerExactActuaOfficialFrames(animationTable, slotId) {
@@ -369,6 +396,38 @@ export function resolveCssoccerExactActuaOfficialFrames(animationTable, slotId) 
         : sourceFrame.sha256,
       coordinates,
     });
+  });
+}
+
+/**
+ * 3DENG.C initializes every plyrtwdat entry with player_p[0], even for the
+ * referee and assistants. Publish that one source pose so the browser can
+ * reproduce native animation transitions without inventing an official-only
+ * starting pose.
+ */
+export function resolveCssoccerExactActuaOfficialTweenBaseline(animationTable) {
+  const slot = animationTable?.slots?.[0];
+  const sourceFrame = slot?.posePayload?.frames?.[0];
+  if (
+    slot?.id !== 0
+    || sourceFrame?.index !== 0
+    || !Array.isArray(sourceFrame.coordinates)
+    || sourceFrame.coordinates.length !== POINT_COUNT * 3
+  ) {
+    throw new Error("Exact official renderer tween baseline is unavailable.");
+  }
+  const coordinates = [...sourceFrame.coordinates];
+  const exactFloat32PoseSha256 = sha256(encodePoseBytes(coordinates));
+  if (exactFloat32PoseSha256 !== sourceFrame.sha256) {
+    throw new Error("Exact official renderer tween baseline changed float32 bits.");
+  }
+  return deepFreeze({
+    sourceSlotId: 0,
+    localFrameIndex: 0,
+    pointCount: POINT_COUNT,
+    coordinateCount: coordinates.length,
+    exactFloat32PoseSha256,
+    coordinates,
   });
 }
 

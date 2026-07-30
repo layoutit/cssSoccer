@@ -339,14 +339,22 @@ function assertAssetRuntime(value) {
   const player = value?.schema === "cssoccer-exact-actua-player-asset-runtime@1"
     && value.index?.counts?.facesPerSample === 13
     && value.index?.counts?.faceStates === 1_827_384
+    && value.index?.counts?.mirroredSequences === 30
     && value.index?.counts?.geometryVariants === 2
     && value.index?.counts?.variantFaceStates === 3_654_768
     && value.index?.counts?.poseCoordinates === 491_988
-    && value.materials?.counts?.fixturePlayers === 22;
+    && value.materials?.counts?.fixturePlayers === 22
+    && typeof value.projectionTopologyFields === "function"
+    && typeof value.projectionSequenceMirroredFields === "function";
   const official = value?.schema === "cssoccer-exact-actua-official-asset-runtime@1"
     && value.index?.counts?.facesPerSample === 12
     && value.index?.counts?.faceStates === 89_856
-    && value.materials?.counts?.fixtureOfficials === 3;
+    && value.index?.counts?.poseCoordinates === 26_208
+    && value.materials?.counts?.fixtureOfficials === 3
+    && typeof value.poseCoordinatesFields === "function"
+    && typeof value.projectionTopologyFields === "function"
+    && typeof value.projectionSequenceMirroredFields === "function"
+    && typeof value.projectionTweenBaselineFields === "function";
   if (!player && !official) {
     throw new TypeError("Exact Actua actor mount requires a checked one-basis asset runtime.");
   }

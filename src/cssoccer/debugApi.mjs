@@ -117,6 +117,12 @@ export function installCssoccerDebugApi(
       await state.exactPlayerAssets.preload(exactState);
       return state.mount.setExactPlayerEvidenceState(rootId, exactState);
     },
+    inspectExactPlayerProjection(rootId) {
+      if (!state.mount) {
+        throw new Error("Exact player projection inspection requires the mounted canonical match.");
+      }
+      return state.mount.inspectExactPlayerProjection(rootId);
+    },
     inspect() {
       const mount = state.mount?.stats?.() ?? null;
       const match = state.matchState === null

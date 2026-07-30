@@ -8,6 +8,9 @@ import {
   iterateCssoccerExactActuaOfficialViews,
   prepareCssoccerExactActuaOfficialViews,
 } from "./exactActuaOfficialViews.mjs";
+import {
+  resolveCssoccerExactActuaOfficialFrames,
+} from "./exactActuaOfficialSource.mjs";
 
 export const CSSOCCER_EXACT_ACTUA_OFFICIAL_PACKAGING_SCHEMA =
   "cssoccer-exact-actua-official-packaging@1";
@@ -20,8 +23,11 @@ export const CSSOCCER_EXACT_ACTUA_OFFICIAL_CACHE_LIMIT = 6;
 
 const FACE_COUNT = 12;
 const YAW_COUNT = 24;
+const POINT_COUNT = 28;
+const COORDINATE_COUNT = POINT_COUNT * 3;
 const SEQUENCE_COUNT = 11;
 const POSE_COUNT = 312;
+const POSE_COORDINATE_COUNT = POSE_COUNT * COORDINATE_COUNT;
 const SAMPLE_COUNT = POSE_COUNT * YAW_COUNT;
 const FACE_STATE_COUNT = SAMPLE_COUNT * FACE_COUNT;
 
@@ -37,6 +43,10 @@ export function prepareCssoccerExactActuaOfficialPackaging({
     animationTable,
     officialSource,
   });
+  const framesBySlot = new Map(officialSource.animations.map(({ slotId }) => [
+    slotId,
+    resolveCssoccerExactActuaOfficialFrames(animationTable, slotId),
+  ]));
   const chunkMetadata = [];
   let current = null;
   let totalBytes = 0;
@@ -45,18 +55,33 @@ export function prepareCssoccerExactActuaOfficialPackaging({
 
   const finishCurrent = () => {
     if (current === null) return;
-    const packaged = encodeCssoccerExactActuaActorChunk({
+    const encoded = encodeCssoccerExactActuaActorChunk({
       current,
       geometry: officialSource.geometry,
       chunkSchema: CSSOCCER_EXACT_ACTUA_OFFICIAL_CHUNK_SCHEMA,
       idPrefix: "exact-official",
       faceCount: FACE_COUNT,
     });
+    const packaged = encodeOfficialPoseChunk(encoded, current);
     const json = `${canonicalJson(packaged.contract)}\n`;
     const decoded = decodeCssoccerExactActuaActorChunk(packaged.contract, {
       chunkSchema: CSSOCCER_EXACT_ACTUA_OFFICIAL_CHUNK_SCHEMA,
       faceCount: FACE_COUNT,
+      poseCoordinates: true,
     });
+    for (let frameOffset = 0; frameOffset < current.poseCoordinates.length; frameOffset += 1) {
+      const localFrameIndex = current.frameStart + frameOffset;
+      const actual = decoded.pose(localFrameIndex);
+      const expected = current.poseCoordinates[frameOffset];
+      if (
+        actual.length !== expected.length
+        || actual.some((value, index) => !Object.is(value, Math.fround(expected[index])))
+      ) {
+        throw new Error(
+          `Exact official chunk ${packaged.contract.id} lost pose ${localFrameIndex}.`,
+        );
+      }
+    }
     for (const sample of current.samples) {
       const actual = decoded.sample(sample.localFrameIndex, sample.yawIndex);
       for (let faceIndex = 0; faceIndex < FACE_COUNT; faceIndex += 1) {
@@ -84,6 +109,7 @@ export function prepareCssoccerExactActuaOfficialPackaging({
       faceStateCount: packaged.contract.faceStateCount,
       transformDictionaryEntries: packaged.contract.transformDictionary.length,
       transformIndexWidthBits: packaged.contract.transformIndex.widthBits,
+      poseCoordinateCount: packaged.contract.poseCoordinates.count,
       path: chunkPath(
         packaged.contract.slotId,
         packaged.contract.frameStart,
@@ -115,7 +141,17 @@ export function prepareCssoccerExactActuaOfficialPackaging({
         chunkIndex,
         frameStart: chunkIndex * CSSOCCER_EXACT_ACTUA_OFFICIAL_CHUNK_FRAME_LIMIT,
         samples: [],
+        poseCoordinates: [],
       };
+    }
+    if (sample.yawIndex === 0) {
+      const coordinates = framesBySlot.get(sample.slotId)?.[sample.localFrameIndex]?.coordinates;
+      if (!Array.isArray(coordinates) || coordinates.length !== COORDINATE_COUNT) {
+        throw new Error(
+          `Exact official slot ${sample.slotId} frame ${sample.localFrameIndex} lost its pose.`,
+        );
+      }
+      current.poseCoordinates.push([...coordinates]);
     }
     current.samples.push(sample);
   }
@@ -130,6 +166,7 @@ export function prepareCssoccerExactActuaOfficialPackaging({
     return {
       sequenceIndex,
       slotId: animation.slotId,
+      mirrored: animation.mirrored,
       frameCount: animation.frameCount,
       chunkFrameLimit: CSSOCCER_EXACT_ACTUA_OFFICIAL_CHUNK_FRAME_LIMIT,
       chunks,
@@ -149,7 +186,9 @@ export function prepareCssoccerExactActuaOfficialPackaging({
     viewContractSha256: viewContract.contractSha256,
     counts: {
       sequences: SEQUENCE_COUNT,
+      mirroredSequences: sequences.filter(({ mirrored }) => mirrored).length,
       poseOccurrences: POSE_COUNT,
+      poseCoordinates: POSE_COORDINATE_COUNT,
       yawBins: YAW_COUNT,
       samples: SAMPLE_COUNT,
       facesPerSample: FACE_COUNT,
@@ -161,6 +200,7 @@ export function prepareCssoccerExactActuaOfficialPackaging({
       chunk: "chunks[Math.floor(localFrame/16)]",
       sample: "(localFrame-frameStart)*24+yawIndex",
       face: "sample*12+faceIndex",
+      pose: "(localFrame-frameStart)*84",
       scanning: false,
     },
     cache: {
@@ -214,9 +254,54 @@ function publicationChunkMetadata(metadata) {
     faceStateCount: metadata.faceStateCount,
     transformDictionaryEntries: metadata.transformDictionaryEntries,
     transformIndexWidthBits: metadata.transformIndexWidthBits,
+    poseCoordinateCount: metadata.poseCoordinateCount,
     path: metadata.path,
     bytes: metadata.bytes,
     sha256: metadata.sha256,
+  };
+}
+
+function encodeOfficialPoseChunk(encoded, current) {
+  const frameCount = encoded.contract.frameCount;
+  if (
+    current.poseCoordinates.length !== frameCount
+    || current.poseCoordinates.some((coordinates) => (
+      !Array.isArray(coordinates)
+      || coordinates.length !== COORDINATE_COUNT
+      || coordinates.some((value) => !Number.isFinite(value))
+    ))
+  ) {
+    throw new Error(`Exact official chunk ${current.key} lost its prepared pose coordinates.`);
+  }
+  const coordinateBytes = Buffer.alloc(frameCount * COORDINATE_COUNT * 4);
+  current.poseCoordinates.forEach((coordinates, frameOffset) => {
+    coordinates.forEach((value, coordinateIndex) => {
+      coordinateBytes.writeFloatLE(
+        Math.fround(value),
+        (frameOffset * COORDINATE_COUNT + coordinateIndex) * 4,
+      );
+    });
+  });
+  const {
+    contractSha256: _contractSha256,
+    ...encodedCore
+  } = encoded.contract;
+  const core = {
+    ...encodedCore,
+    poseCoordinates: {
+      encoding: "base64-float32le",
+      pointCount: POINT_COUNT,
+      coordinateCountPerFrame: COORDINATE_COUNT,
+      frameCount,
+      count: frameCount * COORDINATE_COUNT,
+      data: coordinateBytes.toString("base64"),
+    },
+  };
+  return {
+    contract: {
+      ...core,
+      contractSha256: sha256(Buffer.from(canonicalJson(core))),
+    },
   };
 }
 

@@ -30,6 +30,8 @@ const ASSET_URL = `/cssoccer/${ASSET_PATH}`;
 const BOOT_FACE_INDEXES = new Set([2, 3]);
 const SPAIN_SHORTS_FACE_INDEXES = new Set([8, 10]);
 const SPAIN_LOWER_LEG_FACE_INDEXES = new Set([9, 11]);
+const PLAYER_NUMBER_FIRST_NATIVE_TEXTURE_SLOT = 549;
+const PLAYER_NUMBER_FINAL_NATIVE_TEXTURE_SLOT = 578;
 
 /** Prepare every view-selected team texture and fixture number once. */
 export function prepareCssoccerExactActuaPlayerMaterials({
@@ -212,7 +214,12 @@ export function prepareCssoccerExactActuaPlayerMaterials({
       height: record.sourceRect.height,
       projectedCornerBySourceCorner: record.projectedCornerBySourceCorner,
     });
-    const normalizedSource = oriented;
+    const sourceAtlasNumberPrebake = nativeTextureSlotValue
+      >= PLAYER_NUMBER_FIRST_NATIVE_TEXTURE_SLOT
+      && nativeTextureSlotValue <= PLAYER_NUMBER_FINAL_NATIVE_TEXTURE_SLOT;
+    const normalizedSource = sourceAtlasNumberPrebake
+      ? rotateRgba180(oriented)
+      : oriented;
     blitNearestNormalized({
       source: normalizedSource.rgba,
       sourceWidth: normalizedSource.width,
@@ -359,7 +366,15 @@ export function prepareCssoccerExactActuaPlayerMaterials({
       sourceAtlasSha256: sha256(sourceAtlasBytes),
       alternateSourceAtlasSha256: sha256(alternateAtlasBytes),
       textureTableSha256: sha256(textureTable),
-      numberTextureSlots: [549, 578],
+      numberTextureSlots: [
+        PLAYER_NUMBER_FIRST_NATIVE_TEXTURE_SLOT,
+        PLAYER_NUMBER_FINAL_NATIVE_TEXTURE_SLOT,
+      ],
+      numberPresentation: {
+        sourceAtlasPrebake: "vertical-and-horizontal-reflection",
+        exactFaceCompensation: "rotate-180",
+        result: "native-facing-upright-shirt-number",
+      },
       normalizedAtPrepareTime: true,
       bootTextures: {
         faceIndexes: [...BOOT_FACE_INDEXES],
@@ -429,6 +444,19 @@ function sourcePage(nativePage, {
     rgba: alternateAtlas.rgba,
     width: alternateAtlas.width,
     x: atlasPage * SOURCE_PAGE_SIZE,
+  };
+}
+
+function rotateRgba180(source) {
+  const rgba = Buffer.alloc(source.rgba.length);
+  const pixelCount = source.width * source.height;
+  for (let sourcePixel = 0; sourcePixel < pixelCount; sourcePixel += 1) {
+    const targetPixel = pixelCount - sourcePixel - 1;
+    source.rgba.copy(rgba, targetPixel * 4, sourcePixel * 4, sourcePixel * 4 + 4);
+  }
+  return {
+    ...source,
+    rgba,
   };
 }
 

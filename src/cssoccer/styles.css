@@ -70,14 +70,51 @@ button {
   transform-style: preserve-3d;
 }
 
+#scene > .cssoccer-goal-occlusion-camera {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cssoccer-goal-occlusion-scene {
+  pointer-events: none;
+}
+
+.cssoccer-native-pitch-line-layer,
+.cssoccer-exact-ground-shadow-layer,
 .cssoccer-exact-live-player-layer {
   position: absolute;
   top: 0;
   left: 0;
-  width: 320px;
-  height: 200px;
+  width: 640px;
+  height: 400px;
   transform-origin: 0 0;
   transform-style: preserve-3d;
+}
+
+.cssoccer-native-pitch-line-layer {
+  display: block;
+  overflow: visible;
+  pointer-events: none;
+  shape-rendering: crispEdges;
+}
+
+.cssoccer-exact-ground-shadow-layer {
+  pointer-events: none;
+}
+
+.cssoccer-exact-ground-shadow-layer > s {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 640px;
+  height: 400px;
+  background: rgb(0 0 0 / 50%);
+  transform: scaleY(-1);
+  transform-origin: 50% 50%;
+  pointer-events: none;
 }
 
 .cssoccer-exact-player-screen-root {
@@ -135,6 +172,96 @@ button {
   > .cssoccer-two-sided-face {
   -webkit-backface-visibility: visible !important;
   backface-visibility: visible !important;
+}
+
+#scene [data-cssoccer-native-stadium-texture="triangle"] {
+  background-image: none !important;
+}
+
+#scene [data-cssoccer-native-stadium-texture="triangle"]::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  background-image: var(--cssoccer-native-stadium-background-image);
+  background-position-x: var(--cssoccer-native-stadium-background-position-x);
+  background-position-y: var(--cssoccer-native-stadium-background-position-y);
+  background-repeat: var(--cssoccer-native-stadium-background-repeat);
+  background-size: var(--cssoccer-native-stadium-background-size);
+  content: "";
+  image-rendering: pixelated;
+  pointer-events: none;
+  transform: var(--cssoccer-native-stadium-texture-transform);
+  transform-origin: 0 0;
+  transform-style: preserve-3d;
+}
+
+#scene > .cssoccer-native-stadium-scanline-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  contain: strict;
+  width: 640px;
+  height: 400px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cssoccer-native-stadium-exact-raster {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 640px;
+  height: 400px;
+  overflow: hidden;
+  pointer-events: none;
+  shape-rendering: crispEdges;
+}
+
+.cssoccer-native-stadium-scanline-face {
+  position: absolute;
+  inset: 0;
+  width: 640px;
+  height: 400px;
+  pointer-events: none;
+}
+
+.cssoccer-native-stadium-scanline-band {
+  position: absolute;
+  left: 0;
+  display: block;
+  width: 640px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cssoccer-native-stadium-scanline-band::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: var(--cssoccer-native-stadium-scanline-source-width);
+  height: var(--cssoccer-native-stadium-scanline-source-height);
+  background-image: var(--cssoccer-native-stadium-scanline-background-image);
+  background-position-x:
+    var(--cssoccer-native-stadium-scanline-background-position-x);
+  background-position-y:
+    var(--cssoccer-native-stadium-scanline-background-position-y);
+  background-repeat: no-repeat;
+  background-size: var(--cssoccer-native-stadium-scanline-background-size);
+  content: "";
+  image-rendering: pixelated;
+  pointer-events: none;
+  transform: var(--cssoccer-native-stadium-scanline-transform);
+  transform-origin: 0 0;
+}
+
+#scene [data-cssoccer-native-stadium-texture="scanline"] {
+  background-image: none !important;
 }
 
 #country-choice {
@@ -237,12 +364,14 @@ button {
   margin: 0;
   padding: 0;
   border: 0;
+  overflow: hidden;
   background: transparent;
   color: transparent;
   pointer-events: none;
 }
 
 #hud-clock,
+#hud-camera-message,
 #hud-possession-team-a,
 #hud-possession-team-b,
 #hud-team-a,
@@ -251,7 +380,7 @@ button {
 #hud-halftime-menu [data-native-hud-slot-count] {
   position: absolute;
   display: flex;
-  height: 13em;
+  height: var(--native-hud-glyph-height, 13em);
   margin: 0;
   padding: 0;
   border: 0;
@@ -265,12 +394,20 @@ button {
   display: block;
   flex: 0 0 var(--native-hud-glyph-width);
   width: var(--native-hud-glyph-width);
-  height: 13em;
+  height: var(--native-hud-glyph-height, 13em);
   background-image: url("/cssoccer/assets/textures/spain-argentina-hud-glyphs.png");
   background-position: var(--native-hud-glyph-x) var(--native-hud-glyph-y);
   background-repeat: no-repeat;
-  background-size: 160em 325em;
+  background-size: 160em 675em;
   image-rendering: pixelated;
+}
+
+[data-native-hud-font="normal"] {
+  --native-hud-glyph-height: 14em;
+}
+
+[data-native-hud-font="menu"] {
+  --native-hud-glyph-height: 13em;
 }
 
 #hud-halftime-menu {

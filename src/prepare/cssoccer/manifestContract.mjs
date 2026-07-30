@@ -85,6 +85,7 @@ export function validateCssoccerPreparedScene(scene) {
   ) {
     throw new Error("Prepared css.soccer scene must bind its source renderer axes and camera anchor.");
   }
+  validatePitchLineRaster(scene.pitchLineRaster);
   const rootKinds = validateSceneRoots(scene.roots);
   validateSceneMeshes(scene.meshes, rootKinds);
   validateSkyBackdrop(scene.backdrop, scene.dimensions?.stadiumContext);
@@ -129,6 +130,69 @@ export function validateCssoccerPreparedScene(scene) {
     throw new Error("Prepared css.soccer scene may not require runtime construction.");
   }
   return scene;
+}
+
+function validatePitchLineRaster(value) {
+  requirePlainObject(value, "prepared native pitch-line raster");
+  const expectedObjectCounts = new Map([
+    ["l1", 6],
+    ["l2", 6],
+    ["l3", 6],
+    ["l4", 6],
+    ["l5", 2],
+    ["l6", 2],
+  ]);
+  if (
+    value.schema !== "cssoccer-prepared-native-pitch-line-raster@1"
+    || value.status !== "ready"
+    || value.viewport?.width !== 640
+    || value.viewport?.height !== 400
+    || value.palette?.sourceIndex !== 22
+    || value.palette?.color !== "#aeaeae"
+    || value.projection?.sourceFile !== "3DENG.C"
+    || value.projection?.coordinateType !== "scrpt signed int"
+    || value.projection?.quantization !== "truncate-toward-zero"
+    || value.projection?.browserY !== "height-1-trunc(height-y)"
+    || value.raster?.sourceFile !== "Render.c"
+    || value.raster?.routine !== "line"
+    || value.raster?.fixedPointFractionBits !== 16
+    || value.raster?.endpointInclusive !== true
+    || value.raster?.antialias !== false
+    || value.fallback?.rootId !== "pitch-markings"
+    || value.fallback?.preparedMarkingKind !== "native-screen-line"
+    || value.fallback?.logicalLeafCount !== 17
+    || value.fallback?.composition !== "retained-world-polygon-plus-native-screen-line"
+    || !Array.isArray(value.segments)
+    || value.segments.length !== 28
+  ) {
+    throw new Error("Prepared native pitch-line raster changed its source contract.");
+  }
+  const ids = new Set();
+  const objectCounts = new Map();
+  for (const segment of value.segments) {
+    const expectedCount = expectedObjectCounts.get(segment?.object);
+    if (
+      !segment
+      || segment.id !== `${segment.object}:face:${segment.sourceFaceIndex}`
+      || !expectedCount
+      || !Number.isSafeInteger(segment.sourceFaceIndex)
+      || segment.sourceFaceIndex < 0
+      || segment.sourceFaceIndex >= expectedCount
+      || !Array.isArray(segment.points)
+      || segment.points.length !== 2
+      || segment.points.some((point) => !finiteVec3(point))
+      || ids.has(segment.id)
+    ) {
+      throw new Error("Prepared native pitch-line segment is invalid.");
+    }
+    ids.add(segment.id);
+    objectCounts.set(segment.object, (objectCounts.get(segment.object) ?? 0) + 1);
+  }
+  if ([...expectedObjectCounts].some((
+    [object, count],
+  ) => objectCounts.get(object) !== count)) {
+    throw new Error("Prepared native pitch-line raster lost a source object.");
+  }
 }
 
 function validateFixedFixture(fixture, label, { labels = false } = {}) {

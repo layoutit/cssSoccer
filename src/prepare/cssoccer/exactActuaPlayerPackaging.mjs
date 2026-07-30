@@ -46,10 +46,17 @@ export function prepareCssoccerExactActuaPlayerPackaging({
     geometry?.geometryVariants?.outfield !== geometry.geometry
     || goalkeeperGeometry?.faceCount !== FACE_COUNT
     || goalkeeperGeometry?.pointCount !== 28
+    || goalkeeperGeometry?.mirrored?.faceCount !== FACE_COUNT
+    || goalkeeperGeometry?.mirrored?.pointCount !== 28
   ) {
-    throw new Error("Exact Actua package requires outfield and goalkeeper geometry variants.");
+    throw new Error(
+      "Exact Actua package requires direct and mirrored outfield/goalkeeper geometry.",
+    );
   }
   const goalkeeperTopology = projectionTopology(goalkeeperGeometry);
+  const goalkeeperMirroredTopology = projectionTopology(
+    goalkeeperGeometry.mirrored,
+  );
   const chunkMetadata = [];
   let current = null;
   let selectedChunkBytes = 0;
@@ -252,7 +259,9 @@ export function prepareCssoccerExactActuaPlayerPackaging({
       current.samples.push(sample);
       current.goalkeeperSamples.push(prepareCssoccerExactActuaActorViewSample({
         ...projectionInput,
-        topology: goalkeeperTopology,
+        topology: projectionInput.mirrored
+          ? goalkeeperMirroredTopology
+          : goalkeeperTopology,
         sampleIndex: sample.sampleIndex,
         sequenceIndex: sample.sequenceIndex,
         slotId: sample.slotId,
@@ -277,6 +286,7 @@ export function prepareCssoccerExactActuaPlayerPackaging({
     return {
       sequenceIndex: sequence.sequenceIndex,
       slotId: sequence.slotId,
+      mirrored: sequence.lineage.mode === "source-mirror-z",
       frameCount: sequence.localFrameCount,
       preparedFrameStart: sequence.preparedFrameStart,
       preparedFrameEnd: sequence.preparedFrameEnd,
@@ -293,6 +303,7 @@ export function prepareCssoccerExactActuaPlayerPackaging({
     viewContractSha256: viewContract.contractSha256,
     counts: {
       sequences: sequenceIndex.length,
+      mirroredSequences: sequenceIndex.filter(({ mirrored }) => mirrored).length,
       poseOccurrences: 5_857,
       yawBins: YAW_COUNT,
       samples: 140_568,

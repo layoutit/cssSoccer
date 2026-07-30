@@ -1,11 +1,14 @@
 import { CSSOCCER_MATCH_MODE } from "./boundaryState.mjs";
 
-export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@4";
+export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@6";
 
 const HUD_STATE_KEYS = Object.freeze([
+  "cameraMessage",
   "clock",
   "goalHistory",
   "halftimeTransitionTicks",
+  "justScored",
+  "kickoffMenuActive",
   "matchMode",
   "phase",
   "possession",
@@ -14,23 +17,45 @@ const HUD_STATE_KEYS = Object.freeze([
   "tick",
 ]);
 const CLOCK_SLOT_COUNT = 5;
+const CAMERA_MESSAGE_SLOT_COUNT = 4;
 const POSSESSION_SLOT_COUNT = 20;
 const SCORE_SLOT_COUNT = 5;
 const TEAM_A = "SPAIN";
 const TEAM_B = "ARGENTINA";
 const NATIVE_VIEWPORT_WIDTH = 640;
 const NATIVE_VIEWPORT_HEIGHT = 400;
-const FONT_COLUMNS = 10;
-const FONT_CELL_WIDTH = 16;
-const FONT_CELL_HEIGHT = 13;
-const FONT_BAND_HEIGHT = 65;
-const FONT_OFFSET = 7;
 const FONT_ASCII_BASE = 48;
-const FONT_WIDTHS = Object.freeze([
-  11, 8, 11, 11, 11, 10, 11, 11, 11, 11, 5, 9, 11, 11, 11, 7,
-  5, 14, 11, 12, 12, 9, 9, 14, 12, 5, 8, 13, 9, 16, 13, 14,
-  11, 14, 12, 10, 11, 12, 13, 16, 14, 11, 13,
-]);
+const FONT_BAND_HEIGHT = 135;
+const FONT_PROFILES = deepFreeze({
+  normal: {
+    id: "normal",
+    columns: 9,
+    cellWidth: 16,
+    cellHeight: 14,
+    atlasBandY: 0,
+    offset: 0,
+    presentationScale: 2,
+    widths: [
+      7, 6, 7, 7, 7, 7, 7, 7, 7, 7, 3, 4, 6, 7, 6, 4,
+      3, 7, 7, 7, 7, 7, 7, 7, 7, 6, 7, 7, 7, 7, 7, 7,
+      7, 7, 7, 7, 6, 7, 7, 7, 7, 7, 7,
+    ],
+  },
+  menu: {
+    id: "menu",
+    columns: 10,
+    cellWidth: 16,
+    cellHeight: 13,
+    atlasBandY: 70,
+    offset: 7,
+    presentationScale: 1,
+    widths: [
+      11, 8, 11, 11, 11, 10, 11, 11, 11, 11, 5, 9, 11, 11, 11, 7,
+      5, 14, 11, 12, 12, 9, 9, 14, 12, 5, 8, 13, 9, 16, 13, 14,
+      11, 14, 12, 10, 11, 12, 13, 16, 14, 11, 13,
+    ],
+  },
+});
 const COLOR_BAND_INDEX = Object.freeze({
   neutral: 0,
   "team-a": 1,
@@ -51,6 +76,15 @@ const SOURCE_PHASES = new Set([
 ]);
 const HALFTIME_MENU_MAX_SLIDE = 108;
 const HALFTIME_MENU_SLIDE_PER_TICK = 5;
+const SOURCE_CAMERA_MESSAGE_RENDER_TICKS = 40;
+const SOURCE_KICKOFF_MENU_SLIDE = 44;
+const SOURCE_KICKOFF_MENU_HOLD = 240;
+const SOURCE_MENU_RATE_PER_RENDER_TICK = 5;
+const SOURCE_KICKOFF_MENU_RENDER_TICKS = (
+  Math.ceil(SOURCE_KICKOFF_MENU_SLIDE / SOURCE_MENU_RATE_PER_RENDER_TICK)
+  + Math.ceil(SOURCE_KICKOFF_MENU_HOLD / SOURCE_MENU_RATE_PER_RENDER_TICK)
+  + Math.ceil(SOURCE_KICKOFF_MENU_SLIDE / SOURCE_MENU_RATE_PER_RENDER_TICK)
+);
 
 export function createCssoccerNativeHudState(options = {}) {
   requirePlainObject(options, "cssoccer native HUD options");
@@ -60,6 +94,7 @@ export function createCssoccerNativeHudState(options = {}) {
       "clock",
       "goalHistory",
       "halftimeTransitionTicks",
+      "justScored",
       "matchMode",
       "phase",
       "possession",
@@ -68,16 +103,26 @@ export function createCssoccerNativeHudState(options = {}) {
     ],
     "cssoccer native HUD options",
   );
+  const tick = options.tick ?? 0;
+  const phase = options.phase ?? "opening-kickoff";
+  const sourceRenderedTick = Math.max(0, tick - 1);
   return assertCssoccerNativeHudState(deepFreeze({
     schema: CSSOCCER_NATIVE_HUD_STATE_SCHEMA,
+    cameraMessage: phase === "opening-kickoff"
+      && sourceRenderedTick < SOURCE_CAMERA_MESSAGE_RENDER_TICKS
+      ? "WIRE"
+      : null,
     clock: clone(options.clock ?? { minutes: 0, seconds: 0 }),
     goalHistory: clone(options.goalHistory ?? []),
     halftimeTransitionTicks: options.halftimeTransitionTicks ?? 0,
+    justScored: options.justScored ?? 0,
+    kickoffMenuActive: phase === "opening-kickoff"
+      && sourceRenderedTick < SOURCE_KICKOFF_MENU_RENDER_TICKS,
     matchMode: options.matchMode ?? CSSOCCER_MATCH_MODE.NORMAL,
-    phase: options.phase ?? "opening-kickoff",
+    phase,
     possession: clone(options.possession ?? null),
     score: clone(options.score ?? { spain: 0, argentina: 0 }),
-    tick: options.tick ?? 0,
+    tick,
   }));
 }
 
@@ -174,6 +219,12 @@ export function assertCssoccerNativeHudState(state) {
   if (!Number.isSafeInteger(state.tick) || state.tick < 0) {
     throw new TypeError("cssoccer native HUD tick must be a non-negative safe integer.");
   }
+  if (state.cameraMessage !== null && state.cameraMessage !== "WIRE") {
+    throw new Error("cssoccer native HUD camera message must be WIRE or null.");
+  }
+  if (typeof state.kickoffMenuActive !== "boolean") {
+    throw new TypeError("cssoccer native HUD kickoff menu state must be boolean.");
+  }
   if (!SOURCE_PHASES.has(state.phase)) {
     throw new Error(`cssoccer native HUD has no source presentation for ${String(state.phase)}.`);
   }
@@ -207,6 +258,13 @@ export function assertCssoccerNativeHudState(state) {
     throw new TypeError(
       "cssoccer native HUD halftimeTransitionTicks must be a non-negative safe integer.",
     );
+  }
+  if (
+    !Number.isSafeInteger(state.justScored)
+    || state.justScored < 0
+    || state.justScored > 220
+  ) {
+    throw new RangeError("cssoccer native HUD justScored must stay inside 0..220.");
   }
   if (!Array.isArray(state.goalHistory)) {
     throw new TypeError("cssoccer native HUD goalHistory must be an array.");
@@ -246,6 +304,7 @@ export function createCssoccerNativeHudView({ host } = {}) {
   }
   materializeStableHudLeaves(host);
   const clock = host.querySelector("#hud-clock");
+  const cameraMessage = host.querySelector("#hud-camera-message");
   const possessionTeamA = host.querySelector("#hud-possession-team-a");
   const possessionTeamB = host.querySelector("#hud-possession-team-b");
   const teamA = host.querySelector("#hud-team-a");
@@ -260,6 +319,7 @@ export function createCssoccerNativeHudView({ host } = {}) {
   const halftimeScorerA = host.querySelector("#hud-halftime-scorer-a");
   const halftimeScorerB = host.querySelector("#hud-halftime-scorer-b");
   const clockSlots = preparedGlyphSlots(clock);
+  const cameraMessageSlots = preparedGlyphSlots(cameraMessage);
   const possessionTeamASlots = preparedGlyphSlots(possessionTeamA);
   const possessionTeamBSlots = preparedGlyphSlots(possessionTeamB);
   const teamASlots = preparedGlyphSlots(teamA);
@@ -277,12 +337,14 @@ export function createCssoccerNativeHudView({ host } = {}) {
   if (
     !clock
     || clock.tagName !== "TIME"
+    || !cameraMessage
     || !possessionTeamA
     || !possessionTeamB
     || !teamA
     || !score
     || !teamB
     || clockSlots.length !== CLOCK_SLOT_COUNT
+    || cameraMessageSlots.length !== CAMERA_MESSAGE_SLOT_COUNT
     || possessionTeamASlots.length !== POSSESSION_SLOT_COUNT
     || possessionTeamBSlots.length !== POSSESSION_SLOT_COUNT
     || teamASlots.length !== TEAM_A.length
@@ -307,6 +369,7 @@ export function createCssoccerNativeHudView({ host } = {}) {
       if (destroyed) throw new Error("cssoccer native HUD view has been destroyed.");
       const current = assertCssoccerNativeHudState(state);
       renderClock(clock, clockSlots, current.clock);
+      renderCameraMessage(cameraMessage, cameraMessageSlots, current.cameraMessage);
       renderPossession({
         current,
         teamA: possessionTeamA,
@@ -316,6 +379,11 @@ export function createCssoccerNativeHudView({ host } = {}) {
       });
       const scoreMenuVisible = SOURCE_HALFTIME_PHASES.has(current.phase)
         || current.phase === SOURCE_FULL_TIME_PHASE;
+      // Once the halftime menu has slid away, the source framebuffer resumes
+      // the normal bottom score during await_swap.
+      const normalScoreVisible = !scoreMenuVisible
+        && !current.kickoffMenuActive
+        && current.justScored === 0;
       if (scoreMenuVisible) {
         renderScoreMenu({
           menu: halftimeMenu,
@@ -335,13 +403,14 @@ export function createCssoccerNativeHudView({ host } = {}) {
       } else {
         halftimeMenu.hidden = true;
       }
-      for (const element of [teamA, score, teamB]) element.hidden = scoreMenuVisible;
-      if (!scoreMenuVisible) {
+      for (const element of [teamA, score, teamB]) element.hidden = !normalScoreVisible;
+      if (normalScoreVisible) {
         renderSourceText(teamA, teamASlots, TEAM_A, {
           anchorX: 280,
           y: 386,
           justification: "right",
           colorBand: "team-a",
+          fontProfile: "menu",
         });
         renderSourceText(
           score,
@@ -352,6 +421,7 @@ export function createCssoccerNativeHudView({ host } = {}) {
             y: 386,
             justification: "center",
             colorBand: "neutral",
+            fontProfile: "menu",
           },
         );
         renderSourceText(teamB, teamBSlots, TEAM_B, {
@@ -359,6 +429,7 @@ export function createCssoccerNativeHudView({ host } = {}) {
           y: 386,
           justification: "left",
           colorBand: "team-b",
+          fontProfile: "menu",
         });
       }
       score.setAttribute(
@@ -382,6 +453,22 @@ export function createCssoccerNativeHudView({ host } = {}) {
       host.hidden = true;
     },
   });
+}
+
+function renderCameraMessage(element, glyphSlots, message) {
+  if (message === null) {
+    element.hidden = true;
+    return;
+  }
+  renderSourceText(element, glyphSlots, message, {
+    anchorX: 320,
+    y: 25,
+    justification: "center",
+    colorBand: "scorer",
+    fontProfile: "menu",
+  });
+  element.setAttribute("aria-label", `${message.toLowerCase()} camera`);
+  element.hidden = false;
 }
 
 function renderPossession({
@@ -408,6 +495,7 @@ function renderPossession({
     y: 1,
     justification: home ? "left" : "right",
     colorBand: home ? "team-a" : "team-b",
+    fontProfile: "menu",
   });
   target.setAttribute("aria-label", `${current.possession.country} ${current.possession.label}`);
 }
@@ -513,6 +601,7 @@ function renderClock(clock, glyphSlots, value) {
     y: 1,
     justification: "center",
     colorBand: "neutral",
+    fontProfile: "menu",
   });
   clock.setAttribute("datetime", `PT${value.minutes}M${seconds}S`);
   clock.setAttribute("aria-label", `${value.minutes} minutes ${seconds} seconds`);
@@ -524,18 +613,24 @@ function renderSourceText(element, glyphSlots, text, {
   justification,
   colorBand,
   coordinateSpace = "viewport",
+  fontProfile = "menu",
 }) {
   if (text.length > glyphSlots.length) {
     throw new RangeError(
       `cssoccer native HUD text ${text} exceeds its ${glyphSlots.length} prepared glyph slots.`,
     );
   }
-  const glyphs = [...text].map(sourceGlyph);
-  const length = glyphs.reduce((sum, glyph) => sum + glyph.advance, 0);
+  const font = FONT_PROFILES[fontProfile];
+  if (!font) {
+    throw new Error(`cssoccer native HUD has no prepared ${fontProfile} font profile.`);
+  }
+  const glyphs = [...text].map((character) => sourceGlyph(character, font));
+  const sourceLength = glyphs.reduce((sum, glyph) => sum + glyph.sourceAdvance, 0);
+  const length = sourceLength * font.presentationScale;
   const x = justification === "right"
     ? anchorX - length
     : justification === "center"
-      ? anchorX - (length >> 1)
+      ? anchorX - ((sourceLength >> 1) * font.presentationScale)
       : anchorX;
   const bandIndex = COLOR_BAND_INDEX[colorBand];
   if (bandIndex === undefined) {
@@ -547,6 +642,7 @@ function renderSourceText(element, glyphSlots, text, {
   element.style.top = coordinateSpace === "local"
     ? `${y}em`
     : centeredNativeCoordinate(y - (NATIVE_VIEWPORT_HEIGHT / 2));
+  element.dataset.nativeHudFont = font.id;
   element.dataset.nativeHudText = text;
   for (let index = 0; index < glyphSlots.length; index += 1) {
     const slot = glyphSlots[index];
@@ -559,17 +655,17 @@ function renderSourceText(element, glyphSlots, text, {
     slot.style.setProperty("--native-hud-glyph-width", `${glyph.advance}em`);
     slot.style.setProperty(
       "--native-hud-glyph-x",
-      `${-(glyph.column * FONT_CELL_WIDTH)}em`,
+      `${-(glyph.column * font.cellWidth)}em`,
     );
     slot.style.setProperty(
       "--native-hud-glyph-y",
-      `${-(bandIndex * FONT_BAND_HEIGHT + glyph.row * FONT_CELL_HEIGHT)}em`,
+      `${-(bandIndex * FONT_BAND_HEIGHT + font.atlasBandY + glyph.row * font.cellHeight)}em`,
     );
     slot.hidden = false;
   }
 }
 
-function sourceGlyph(character) {
+function sourceGlyph(character, font) {
   let mapped = character;
   if (mapped === " ") mapped = ";";
   if (mapped === ".") mapped = "@";
@@ -578,16 +674,17 @@ function sourceGlyph(character) {
   if (mapped === "O") mapped = "0";
   if (mapped === "&") mapped = "O";
   const glyphIndex = mapped.codePointAt(0) - FONT_ASCII_BASE;
-  const width = FONT_WIDTHS[glyphIndex];
+  const width = font.widths[glyphIndex];
   if (width === undefined) {
     throw new Error(`cssoccer native HUD has no prepared glyph for ${character}.`);
   }
-  const atlasIndex = glyphIndex + FONT_OFFSET;
+  const atlasIndex = glyphIndex + font.offset;
   return {
     character: mapped,
-    column: atlasIndex % FONT_COLUMNS,
-    row: Math.floor(atlasIndex / FONT_COLUMNS),
-    advance: width + 1,
+    column: atlasIndex % font.columns,
+    row: Math.floor(atlasIndex / font.columns),
+    sourceAdvance: width + 1,
+    advance: (width + 1) * font.presentationScale,
   };
 }
 

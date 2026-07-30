@@ -60,15 +60,15 @@ const PLAYER_NUMBER_SOURCE_BANDS = deepFreeze([
     team: "spain",
     rendererTeamSlot: 0,
     symbol: "BM_NUMBERS1",
-    selector: 872,
+    selector: 1936,
     y: 62,
     height: 27,
   },
   {
     team: "argentina",
     rendererTeamSlot: 1,
-    symbol: "BM_NUMBERS4",
-    selector: 896,
+    symbol: "BM_NUMBERS2",
+    selector: 1944,
     y: 89,
     height: 54,
   },
@@ -118,9 +118,29 @@ const SKY_BACKDROP_PATH = "assets/textures/spain-argentina-sky.png";
 const SKY_BACKDROP_URL = cssoccerPublicUrl(SKY_BACKDROP_PATH);
 const MARKING_PIXEL_PATH = "assets/textures/spain-argentina-marking-pixel.png";
 const MARKING_PIXEL_URL = cssoccerPublicUrl(MARKING_PIXEL_PATH);
+const SOURCE_MARKING_RGBA = deepFreeze([174, 174, 174, 255]);
 const STADIUM_PAGE_COUNT = 2;
-const STADIUM_ATLAS_WIDTH = PAGE_SIZE * 4;
-const STADIUM_ATLAS_HEIGHT = PAGE_SIZE * 3;
+const STADIUM_NATIVE_RASTER_SOURCE_SCHEMA =
+  "cssoccer-prepared-native-stadium-raster-source@2";
+const STADIUM_TRANSPARENT_PALETTE_INDEX = 1;
+const STADIUM_CUTOUT_RASTER_SCALE = 2;
+const STADIUM_SHARED_SOURCE_ATLAS_RASTER_SCALE = 1;
+const STADIUM_ATLAS_WIDTH = 828;
+const STADIUM_ATLAS_HEIGHT = 612;
+const STADIUM_SCANLINE_SOURCE_MIN_WIDTH = 150;
+const STADIUM_SCANLINE_SOURCE_MIN_HEIGHT = 80;
+const STADIUM_SCANLINE_SOURCE_PADDING = 1;
+const STADIUM_SCANLINE_BILLBOARD_TEXTURE_INDEXES = deepFreeze([
+  13,
+  14,
+  26,
+  33,
+  34,
+  37,
+  38,
+  39,
+  48,
+]);
 const GOAL_NET_TEXTURE = deepFreeze({
   textureTableSelector: 8,
   bitmapSelector: 320,
@@ -139,12 +159,21 @@ const GOAL_NET_TEXTURE = deepFreeze({
   transparentPaletteIndex: 1,
   sourceBitmapSha256: "8041471f193f40d64af669dafd32029d9206322d919172ab1716222c5773a4dc",
   atlasRegion: {
-    x: PAGE_SIZE * 2,
+    x: 0,
     y: 0,
     width: PAGE_SIZE * 2,
     height: PAGE_SIZE,
   },
 });
+const STADIUM_RASTER_TRANSFORMS = deepFreeze(
+  Array.from({ length: 4 }, (_unused, quarterTurns) => (
+    [false, true].map((reflectX) => ({
+      id: `quarter-turn-${quarterTurns}${reflectX ? "-reflect-x" : ""}`,
+      quarterTurns,
+      reflectX,
+    }))
+  )).flat(),
+);
 const PITCH_SURFACE_BOUNDS = deepFreeze({
   x: [-200, 1480],
   z: [-980, 180],
@@ -184,7 +213,32 @@ const PINNED_FOOTY_PALETTE = Object.freeze({
   bytes: 768,
   sha256: "73918cecf278e00172e0607053cd8c62e9c4172f70b7cb8e8884d2261a9ae436",
 });
-const HUD_FONT = deepFreeze({
+const HUD_NORMAL_FONT = deepFreeze({
+  id: "normal",
+  sourceFile: "FGFX.C",
+  fontNo: 1,
+  page: 0,
+  sourceX: 96,
+  sourceY: 143,
+  sourcePitchRow: 27,
+  sourcePageSymbol: "BM_PB",
+  sourcePageSelector: VISUAL_PITCH_SOURCE.pitchSelector,
+  columns: 9,
+  cellWidth: 8,
+  cellHeight: 7,
+  rows: 5,
+  offset: 0,
+  asciiBase: 48,
+  presentationScale: 2,
+  atlasBandY: 0,
+  widths: [
+    7, 6, 7, 7, 7, 7, 7, 7, 7, 7, 3, 4, 6, 7, 6, 4,
+    3, 7, 7, 7, 7, 7, 7, 7, 7, 6, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 6, 7, 7, 7, 7, 7, 7,
+  ],
+});
+const HUD_MENU_FONT = deepFreeze({
+  id: "menu",
   sourceFile: "FGFX.C",
   fontNo: 2,
   page: 0,
@@ -197,14 +251,24 @@ const HUD_FONT = deepFreeze({
   rows: 5,
   offset: 7,
   asciiBase: 48,
+  presentationScale: 1,
+  atlasBandY: HUD_NORMAL_FONT.rows
+    * HUD_NORMAL_FONT.cellHeight
+    * HUD_NORMAL_FONT.presentationScale,
   widths: [
     11, 8, 11, 11, 11, 10, 11, 11, 11, 11, 5, 9, 11, 11, 11, 7,
     5, 14, 11, 12, 12, 9, 9, 14, 12, 5, 8, 13, 9, 16, 13, 14,
     11, 14, 12, 10, 11, 12, 13, 16, 14, 11, 13,
   ],
 });
-const HUD_GLYPH_ATLAS_WIDTH = HUD_FONT.columns * HUD_FONT.cellWidth;
-const HUD_GLYPH_BAND_HEIGHT = HUD_FONT.rows * HUD_FONT.cellHeight;
+const HUD_FONTS = deepFreeze([HUD_NORMAL_FONT, HUD_MENU_FONT]);
+const HUD_GLYPH_ATLAS_WIDTH = Math.max(...HUD_FONTS.map(
+  (font) => font.columns * font.cellWidth * font.presentationScale,
+));
+const HUD_GLYPH_BAND_HEIGHT = HUD_FONTS.reduce(
+  (height, font) => height + font.rows * font.cellHeight * font.presentationScale,
+  0,
+);
 const HUD_COLOR_BANDS = deepFreeze([
   {
     id: "neutral",
@@ -240,6 +304,9 @@ const HUD_COLOR_BANDS = deepFreeze([
 const HUD_GLYPH_ATLAS_HEIGHT = HUD_GLYPH_BAND_HEIGHT * HUD_COLOR_BANDS.length;
 const HUD_NATIVE_LAYOUT = deepFreeze({
   viewport: [640, 400],
+  sourceViewport: [640, 400],
+  presentationScale: 1,
+  fontProfile: HUD_MENU_FONT.id,
   clock: { x: 320, y: 1, justification: "center" },
   teamA: { x: 280, y: 386, justification: "right" },
   score: { x: 320, y: 386, justification: "center", separator: "=" },
@@ -366,10 +433,13 @@ const SELECTORS = deepFreeze({
   player: {
     argentinaHead: 64,
     argentinaLimbs: 512,
+    spainTorso: 408,
+    spainLimbs: 520,
   },
   pitch: 1920,
   paletteOverrides: {
     argentinaSkin: 1536,
+    spainKit: 1456,
   },
 });
 const NATIVE_PLAYER_SELECTORS = deepFreeze({
@@ -401,9 +471,9 @@ const RETAIL_PLAYER_SELECTORS = deepFreeze({
   textureTable: 8,
   argentinaTorso: 96,
   refereeTorso: 576,
+  playerHighlightPage: 584,
   assistantLimbs: 608,
   refereeLimbs: 1928,
-  playerHighlightPage: 584,
   spainNumbers: 1936,
   argentinaNumbers: 1944,
   argentinaKitPalette: 1144,
@@ -411,6 +481,8 @@ const RETAIL_PLAYER_SELECTORS = deepFreeze({
 const EXPECTED_RECORD_BYTES = new Map([
   [SELECTORS.player.argentinaHead, 32_768],
   [SELECTORS.player.argentinaLimbs, 19_968],
+  [SELECTORS.player.spainTorso, 65_536],
+  [SELECTORS.player.spainLimbs, 19_968],
   [SELECTORS.pitch, 16_384],
   [SELECTORS.paletteOverrides.argentinaSkin, 24],
   [CORNER_FLAG_TEXTURE.paletteSource.selector, 72],
@@ -438,7 +510,7 @@ const EXPECTED_NATIVE_PLAYER_RECORD_BYTES = new Map([
   [NATIVE_PLAYER_SELECTORS.teamBNumbers, 13_824],
 ]);
 const EXACT_PLAYER_PAGE_THREE_SHA256 =
-  "aa6cd8cdad96619191813918780a2917cf344c8f67dfa17c365adba14dd04993";
+  "c1947af89be9ac5441011ff404568d310585c64ae5e0070c8081f28739bda18d";
 const EXACT_PLAYER_SOURCE_AUDIT = deepFreeze([
   {
     role: "renderer-slot-0-lower-leg",
@@ -447,7 +519,7 @@ const EXACT_PLAYER_SOURCE_AUDIT = deepFreeze([
     textureRecordSha256:
       "cd46dbc60d6e79078a93d31b36530d83ecafbe6bd349b612dc20a841acd33967",
     indexedTexelSha256:
-      "3ee90399006c82b7fed08c87b11d6b7bee01c7efd0695bddb66a850cd35d8121",
+      "b6817501c94b1645f082e211444d611403aebe59400cf3f471931d873566ae1d",
   },
   {
     role: "renderer-slot-0-shorts",
@@ -456,7 +528,7 @@ const EXACT_PLAYER_SOURCE_AUDIT = deepFreeze([
     textureRecordSha256:
       "2b7b66e826ec5b5d88ebb26fefcd5ae2849500fec6bacbc9b09e50c9fafa9846",
     indexedTexelSha256:
-      "7f1d375e1d2684cb358281b8c109627011291c1b2b8f95baca0af20949d573ba",
+      "ec78ab6bd66fc28646db138252c6870212c03e66e960f582511544d73ce69958",
   },
   {
     role: "shared-boots",
@@ -480,6 +552,48 @@ const EXPECTED_RETAIL_PLAYER_RECORD_BYTES = new Map([
   [RETAIL_PLAYER_SELECTORS.argentinaNumbers, 13_824],
   [RETAIL_PLAYER_SELECTORS.argentinaKitPalette, 72],
 ]);
+const EXPECTED_RETAIL_FIXTURE_PLAYER_SHA256 = new Map([
+  [
+    RETAIL_PLAYER_SELECTORS.argentinaTorso,
+    "0a34eb62484405d7e85343da33dcd49b3269640a887bc7c819e8c22fbbfaddac",
+  ],
+  [
+    RETAIL_PLAYER_SELECTORS.spainNumbers,
+    "73ad7e3909571db26911a37cb5edea9156d81b8fd68277dc3e3f2903c24ba962",
+  ],
+  [
+    RETAIL_PLAYER_SELECTORS.argentinaNumbers,
+    "60f83beccbc6fd8f01bdd0a479a79432e213e0c55c4e6b747073ddbcd3a6e276",
+  ],
+  [
+    RETAIL_PLAYER_SELECTORS.argentinaKitPalette,
+    "7de6d99471e4d19b09cb9c5af6e814df8806d2051d16356e92c260888fc8c0af",
+  ],
+]);
+const EXPECTED_DEMO_FIXTURE_PLAYER_SHA256 = new Map([
+  [
+    SELECTORS.player.argentinaHead,
+    "e1cbae8df8a8a2440e2b243d201fd5bb89d6498361b3a2d0e88799e34d1bd458",
+  ],
+  [
+    SELECTORS.player.spainTorso,
+    "09f18816ebe0399d559a8855e20604c7de48f696afeccba7ed04cf3c21e8a5d8",
+  ],
+  [
+    SELECTORS.player.spainLimbs,
+    "83aac54a14f7e882d69343ae71f0b602f8a1ddcf948072a7791e47b53971b56b",
+  ],
+  [
+    SELECTORS.player.argentinaLimbs,
+    "d12ac31ed752814888c04896720ef6c73039a7c85a70b338dc6989d005542dfd",
+  ],
+  [
+    SELECTORS.paletteOverrides.spainKit,
+    "af3e3f40a16c7d7998996eb34f98c229404e5304f7e277e3f94fe927cfae44ba",
+  ],
+]);
+const EXACT_LATINO_SKIN_PALETTE_SHA256 =
+  "6a4a600e6e299290844cb713d82589b8b6dd45e11370f88b26e5f52e73644bfd";
 
 /**
  * Prepare only the canonical fixture pitch surface. This is the same
@@ -523,9 +637,9 @@ export function prepareCssoccerPitchSurfaceAsset({
 }
 
 /**
- * Reproduce the native M8 match map-page and palette preparation using only
- * ignored local demo bytes plus the pinned retail Argentina supplement. The
- * returned PNG is a generated browser asset;
+ * Reproduce the native M8 match map-page and palette preparation using
+ * ignored local renderer bytes plus the pinned retail Argentina and number
+ * records. The returned PNG is a generated browser asset;
  * original indexed records never enter the publication.
  */
 export function prepareCssoccerSourceTextureAtlas({
@@ -629,11 +743,31 @@ export function prepareCssoccerSourceTextureAtlas({
       throw new Error(`ACTREND selector ${selector} has ${actual.size} bytes, expected ${expectedBytes}.`);
     }
   }
+  if (
+    sha256(archive.recordBytes(SELECTORS.paletteOverrides.argentinaSkin))
+    !== EXACT_LATINO_SKIN_PALETTE_SHA256
+  ) {
+    throw new Error("Playable-demo COL_XLATINO changed source record.");
+  }
+  for (const [selector, expectedSha256] of EXPECTED_DEMO_FIXTURE_PLAYER_SHA256) {
+    if (sha256(archive.recordBytes(selector)) !== expectedSha256) {
+      throw new Error(
+        `Playable-demo fixture player selector ${selector} changed source record.`,
+      );
+    }
+  }
   for (const [selector, expectedBytes] of EXPECTED_RETAIL_PLAYER_RECORD_BYTES) {
     const actual = retailArchive.recordInfo(selector);
     if (actual.size !== expectedBytes) {
       throw new Error(
         `Retail ACTREND selector ${selector} has ${actual.size} bytes, expected ${expectedBytes}.`,
+      );
+    }
+  }
+  for (const [selector, expectedSha256] of EXPECTED_RETAIL_FIXTURE_PLAYER_SHA256) {
+    if (sha256(retailArchive.recordBytes(selector)) !== expectedSha256) {
+      throw new Error(
+        `Retail fixture player selector ${selector} changed source record.`,
       );
     }
   }
@@ -646,7 +780,11 @@ export function prepareCssoccerSourceTextureAtlas({
     }
   }
 
-  const palette = preparePalette(nativeArchive);
+  const palette = preparePalette({
+    nativeArchive,
+    retailArchive,
+    demoArchive: archive,
+  });
   const pitchSurface = preparePitchSurfaceFromArchive(nativeArchive);
   const skyBackdrop = prepareSkyBackdrop(
     nativeArchive,
@@ -660,6 +798,8 @@ export function prepareCssoccerSourceTextureAtlas({
   const textureRecords = decodeTextureRecords(textureTableBytes);
   const playerPages = preparePlayerPages(
     nativeArchive,
+    retailArchive,
+    archive,
     textureRecords,
   );
   const playerSourceAudit = preparePlayerSourceAudit(playerPages, textureRecords);
@@ -684,10 +824,10 @@ export function prepareCssoccerSourceTextureAtlas({
   const pitchSurfaceRgba = pitchSurface.rgbaBytes;
   const pitchSurfacePngBytes = pitchSurface.assetFile.bytes;
   const pitchSurfaceSha256 = pitchSurface.assetFile.expectedSha256;
-  const markingPixelRgba = Buffer.from([255, 255, 255, 255]);
+  const markingPixelRgba = Buffer.from(SOURCE_MARKING_RGBA);
   const markingPixelPngBytes = encodeRgbaPng(1, 1, markingPixelRgba);
   const markingPixelSha256 = sha256(markingPixelPngBytes);
-  const hudGlyphAtlas = prepareHudGlyphAtlas(nativeArchive);
+  const hudGlyphAtlas = prepareHudGlyphAtlas(nativeArchive, palette);
   const halftimeMenuSpriteAtlas = prepareHalftimeMenuSpriteAtlas(nativeArchive, palette);
   const stadiumAtlas = prepareStadiumAtlas(nativeArchive, stadiumSelectors, palette);
   const pageMaterials = Array.from({ length: PLAYER_PAGE_COUNT }, (_, page) => (
@@ -761,13 +901,16 @@ export function prepareCssoccerSourceTextureAtlas({
         index: { file: "ACTREND.OFF", ...PINNED_RETAIL_ARCHIVE.index },
         distribution: PINNED_RETAIL_ARCHIVE.distribution,
         selectors: RETAIL_PLAYER_SELECTORS,
+        usage:
+          "Argentina torso, both number pages, and the Argentina kit palette",
       },
       nativePlayerFoundation: {
         data: { file: "EUROREND.DAT", ...PINNED_NATIVE_ARCHIVE.data },
         index: { file: "EUROREND.OFF", ...PINNED_NATIVE_ARCHIVE.index },
         selectors: NATIVE_PLAYER_SELECTORS,
         usage:
-          "compiled renderer slots 0 and 1, shared boot texels, goalkeeper and official pages, and the complete match texture table",
+          "match/player texture tables, goalkeeper and official pages, "
+          + "pitch/highlight palettes, and player-highlight texels",
         publication: "prepare-derived browser assets only; source records remain ignored local input",
       },
       nativeCornerFlagSupplement: {
@@ -815,40 +958,46 @@ export function prepareCssoccerSourceTextureAtlas({
       sha256: sha256(palette),
       indexZero: paletteIndexZero,
       skinPalette: {
-        status: "exact-compiled-renderer-slot-palette-selection",
-        teamASymbol: "COL_XCAUCASA",
-        teamASelector: NATIVE_PLAYER_SELECTORS.teamASkinPalette,
-        teamBSymbol: "COL_XCAUCASA",
-        teamBSelector: NATIVE_PLAYER_SELECTORS.teamBSkinPalette,
+        status: "exact-native-fixture-palette-selection",
+        teamASymbol: "COL_XLATINO",
+        teamASelector: SELECTORS.paletteOverrides.argentinaSkin,
+        teamBSymbol: "COL_XLATINO",
+        teamBSelector: SELECTORS.paletteOverrides.argentinaSkin,
+        sourceArchive: "official-playable-demo",
+        sourceSha256: EXACT_LATINO_SKIN_PALETTE_SHA256,
       },
       overrides: [
         {
           id: "renderer-slot-0-kit",
-          selector: NATIVE_PLAYER_SELECTORS.teamAKitPalette,
+          symbol: "COL_XSPAIN",
+          selector: SELECTORS.paletteOverrides.spainKit,
           firstEntry: 32,
           entries: 24,
-          sourceArchive: "retained-native-renderer",
+          sourceArchive: "official-playable-demo",
         },
         {
           id: "renderer-slot-1-kit",
-          selector: NATIVE_PLAYER_SELECTORS.teamBKitPalette,
+          symbol: "COL_XARGENTI",
+          selector: RETAIL_PLAYER_SELECTORS.argentinaKitPalette,
           firstEntry: 56,
           entries: 24,
-          sourceArchive: "retained-native-renderer",
+          sourceArchive: "retail-actua-renderer",
         },
         {
           id: "renderer-slot-0-skin",
-          selector: NATIVE_PLAYER_SELECTORS.teamASkinPalette,
+          symbol: "COL_XLATINO",
+          selector: SELECTORS.paletteOverrides.argentinaSkin,
           firstEntry: 80,
           entries: 8,
-          sourceArchive: "retained-native-renderer",
+          sourceArchive: "official-playable-demo",
         },
         {
           id: "renderer-slot-1-skin",
-          selector: NATIVE_PLAYER_SELECTORS.teamBSkinPalette,
+          symbol: "COL_XLATINO",
+          selector: SELECTORS.paletteOverrides.argentinaSkin,
           firstEntry: 88,
           entries: 8,
-          sourceArchive: "retained-native-renderer",
+          sourceArchive: "official-playable-demo",
         },
         {
           id: "renderer-slot-0-pitch",
@@ -1021,13 +1170,13 @@ export function prepareCssoccerSourceTextureAtlas({
       bytes: markingPixelPngBytes.length,
       sha256: markingPixelSha256,
       rgbaSha256: sha256(markingPixelRgba),
-      rgba: [255, 255, 255, 255],
+      rgba: [...SOURCE_MARKING_RGBA],
       alphaMode: "opaque",
       imageRendering: "pixelated",
       runtimeConstruction: false,
     },
     hudGlyphAtlas: {
-      schema: "cssoccer-prepared-native-hud-glyph-atlas@1",
+      schema: "cssoccer-prepared-native-hud-glyph-atlas@2",
       path: HUD_GLYPH_ATLAS_PATH,
       url: HUD_GLYPH_ATLAS_URL,
       mediaType: "image/png",
@@ -1039,15 +1188,36 @@ export function prepareCssoccerSourceTextureAtlas({
       source: {
         data: { file: "EUROREND.DAT", ...PINNED_NATIVE_ARCHIVE.data },
         index: { file: "EUROREND.OFF", ...PINNED_NATIVE_ARCHIVE.index },
-        page: PINNED_NATIVE_ARCHIVE.glyphPage,
-        sourceRect: {
-          x: HUD_FONT.sourceX,
-          y: HUD_FONT.sourcePitchRow,
-          width: HUD_GLYPH_ATLAS_WIDTH,
-          height: HUD_GLYPH_BAND_HEIGHT,
-        },
+        pages: [
+          {
+            role: "normal-match-low-resolution-font",
+            page: {
+              symbol: HUD_NORMAL_FONT.sourcePageSymbol,
+              selector: HUD_NORMAL_FONT.sourcePageSelector,
+              bytes: nativeArchive.recordInfo(HUD_NORMAL_FONT.sourcePageSelector).size,
+            },
+            runtimePageY: HUD_NORMAL_FONT.sourceY,
+            recordSourceRect: {
+              x: HUD_NORMAL_FONT.sourceX,
+              y: HUD_NORMAL_FONT.sourcePitchRow,
+              width: HUD_NORMAL_FONT.columns * HUD_NORMAL_FONT.cellWidth,
+              height: HUD_NORMAL_FONT.rows * HUD_NORMAL_FONT.cellHeight,
+            },
+          },
+          {
+            role: "halftime-menu-high-resolution-font",
+            page: PINNED_NATIVE_ARCHIVE.glyphPage,
+            runtimePageY: HUD_MENU_FONT.sourceY,
+            recordSourceRect: {
+              x: HUD_MENU_FONT.sourceX,
+              y: HUD_MENU_FONT.sourcePitchRow,
+              width: HUD_MENU_FONT.columns * HUD_MENU_FONT.cellWidth,
+              height: HUD_MENU_FONT.rows * HUD_MENU_FONT.cellHeight,
+            },
+          },
+        ],
       },
-      font: HUD_FONT,
+      fonts: HUD_FONTS,
       colorBands: hudGlyphAtlas.colorBands,
       layout: HUD_NATIVE_LAYOUT,
       sourceDrawContract: {
@@ -1133,10 +1303,10 @@ export function prepareCssoccerSourceTextureAtlas({
         symbol: stadiumSelectors.textures.bitmapSymbols[index],
         selector,
         nativePage: stadiumSelectors.textures.nativeMapPages[index],
-        atlasX: index * PAGE_SIZE,
         width: PAGE_SIZE,
         height: PAGE_SIZE,
         sha256: stadiumAtlas.pageSha256[index],
+        packedInRuntimeAtlas: false,
       })),
       palette: {
         selector: 0,
@@ -1152,6 +1322,7 @@ export function prepareCssoccerSourceTextureAtlas({
       },
       triangleCutouts: {
         count: stadiumAtlas.triangleCutouts.length,
+        rasterScale: STADIUM_CUTOUT_RASTER_SCALE,
         textureIndexes: [...new Set(
           stadiumAtlas.triangleCutouts.map(({ textureIndex }) => textureIndex),
         )],
@@ -1164,7 +1335,48 @@ export function prepareCssoccerSourceTextureAtlas({
           authority: "cyclic source-triangle basis with minimum UV edge area",
           cameraSafety: "prepared quad stays adjacent to its three source vertices",
         },
-        mode: "prepare-time tight edge-basis cutout for native triangles and split quads",
+        mode: "prepare-time tight edge-basis cutout for native triangles",
+      },
+      quadCutouts: {
+        count: stadiumAtlas.quadCutouts.length,
+        rasterScale: STADIUM_CUTOUT_RASTER_SCALE,
+        textureIndexes: stadiumAtlas.quadCutouts.map(({ textureIndex }) => textureIndex),
+        opaque: stadiumAtlas.quadCutouts.filter(({ alphaMode }) => alphaMode === "opaque").length,
+        masked: stadiumAtlas.quadCutouts.filter(({ alphaMode }) => alphaMode === "mask").length,
+        canonicalAxisAligned: stadiumAtlas.quadCutouts.filter(({
+          sourceRasterOrientation,
+        }) => sourceRasterOrientation === "canonical-axis-aligned-source-rect").length,
+        nativeProjectiveFallback: stadiumAtlas.quadCutouts.filter(({
+          sourceRasterOrientation,
+        }) => sourceRasterOrientation === "native-projective-quad").length,
+        mode: "prepare-time canonical source raster with per-face corner order",
+      },
+      sharedCutoutRasters: {
+        schema: "cssoccer-prepared-stadium-shared-cutouts@1",
+        logicalCutoutCount: (
+          stadiumAtlas.triangleCutouts.length + stadiumAtlas.quadCutouts.length
+        ),
+        canonicalRasterCount: stadiumAtlas.canonicalCutouts.length,
+        reusedLogicalCutoutCount: (
+          stadiumAtlas.triangleCutouts.length
+          + stadiumAtlas.quadCutouts.length
+          - stadiumAtlas.canonicalCutouts.length
+        ),
+        contentIdentity:
+          "exact prepared RGBA transforms plus native indexed identity and subrect containment",
+        supportedTransforms: STADIUM_RASTER_TRANSFORMS.map(({ id }) => id),
+        packing: stadiumAtlas.cutoutPacking,
+        runtimeImageConstruction: false,
+      },
+      scanlineSourceRasters: {
+        schema: "cssoccer-prepared-stadium-scanline-source-rasters@1",
+        count: stadiumAtlas.scanlineSourceCutouts.length,
+        textureIndexes: stadiumAtlas.scanlineSourceCutouts.flatMap(({
+          textureIndexes,
+        }) => textureIndexes),
+        mode:
+          "indexed-content and containment-deduplicated native scanline sources with shared atlas views",
+        runtimeImageConstruction: false,
       },
       goalNets: {
         schema: "cssoccer-prepared-native-goal-nets@1",
@@ -1191,9 +1403,9 @@ export function prepareCssoccerSourceTextureAtlas({
         softwarePaletteRemap: GOAL_NET_TEXTURE.softwarePaletteRemap,
         transparentPaletteIndex: GOAL_NET_TEXTURE.transparentPaletteIndex,
         remapAuthority: "3DENG.C setscreen remapgfx(1) over maps[S_BM+2..S_BM+7]",
-        triangleCutoutCount: stadiumAtlas.goalNetTriangleCutouts.length,
+        quadCutoutCount: stadiumAtlas.goalNetQuadCutouts.length,
         atlasRegion: GOAL_NET_TEXTURE.atlasRegion,
-        projectionStage: "prepare-time tight edge-basis cutout",
+        projectionStage: "prepare-time homography-preserving native quad cutout",
         runtimeImageConstruction: false,
         runtimeAlphaMutation: false,
       },
@@ -1274,12 +1486,16 @@ export function prepareCssoccerSourceTextureAtlas({
     officialSourceAtlas,
     markingMaterial,
     stadiumTextureRecords: stadiumAtlas.textureRecords,
-    stadiumPageMaterials: stadiumAtlas.pageMaterials,
     stadiumTriangleCutouts: stadiumAtlas.triangleCutouts,
     stadiumTriangleMaterials: stadiumAtlas.triangleMaterials,
+    stadiumQuadCutouts: stadiumAtlas.quadCutouts,
+    stadiumQuadMaterials: stadiumAtlas.quadMaterials,
+    stadiumScanlineSourceCutouts: stadiumAtlas.scanlineSourceCutouts,
+    stadiumScanlineSourceMaterials: stadiumAtlas.scanlineSourceMaterials,
+    stadiumNativeRasterSource: stadiumAtlas.nativeRasterSource,
     goalNetTextureRecords: stadiumAtlas.goalNetTextureRecords,
-    goalNetTriangleCutouts: stadiumAtlas.goalNetTriangleCutouts,
-    goalNetTriangleMaterials: stadiumAtlas.goalNetTriangleMaterials,
+    goalNetQuadCutouts: stadiumAtlas.goalNetQuadCutouts,
+    goalNetQuadMaterials: stadiumAtlas.goalNetQuadMaterials,
     cornerFlagTexture: deepFreeze({
       sourceColorCode: CORNER_FLAG_TEXTURE.sourceColorCode,
       nativeTextureSlot: CORNER_FLAG_TEXTURE.nativeTextureSlot,
@@ -1431,8 +1647,8 @@ export function bindCssoccerCornerFlagTexture(preparation, sourceColorCode) {
         sourceRoutine: "ground",
         panoramaArcRadians: 2 * 3.1415 / 3,
         horizontalRepeat: true,
-        referenceViewport: [320, 200],
-        referencePerspective: 220,
+        referenceViewport: [640, 400],
+        referencePerspective: 440,
         referenceSourceOrigin: [0, 390],
       },
       imageRendering: "pixelated",
@@ -1484,32 +1700,29 @@ function prepareStadiumAtlas(nativeArchive, stadiumSelectors, matchPalette) {
     }
     payload.copy(palette, override.firstEntry * 3);
   }
-  const rgba = renderStadiumAtlasRgba(indexedPages, palette);
-  const triangleCutouts = prebakeStadiumTriangleCutouts({
+  const rgba = Buffer.alloc(STADIUM_ATLAS_WIDTH * STADIUM_ATLAS_HEIGHT * 4);
+  const goalNet = prepareGoalNetQuadCutouts({
+    nativeArchive,
+    palette: matchPalette,
+    rgba,
+  });
+  const {
+    canonicalCutouts,
+    packing: cutoutPacking,
+    triangleCutouts,
+    quadCutouts,
+    scanlineSourceCutouts,
+    nativeRasterSource,
+  } = prebakeStadiumTextureCutouts({
     indexedPages,
+    occupiedRects: goalNet.quadCutouts,
     palette,
     rgba,
     textureAlphaModes,
     textureRecords,
   });
-  const goalNet = prepareGoalNetCutouts({
-    nativeArchive,
-    palette: matchPalette,
-    rgba,
-  });
   const pngBytes = encodeRgbaPng(STADIUM_ATLAS_WIDTH, STADIUM_ATLAS_HEIGHT, rgba);
   const assetSha256 = sha256(pngBytes);
-  const pageMaterials = selectors.nativeMapPages.map((nativePage, atlasPage) => (
-    createAtlasMaterial({
-      page: atlasPage,
-      assetSha256,
-      height: PAGE_SIZE,
-      key: `cssoccer-source-stadium-page-${nativePage}`,
-      assetUrl: STADIUM_ATLAS_URL,
-      imageWidth: STADIUM_ATLAS_WIDTH,
-      imageHeight: STADIUM_ATLAS_HEIGHT,
-    })
-  ));
   const triangleMaterials = Array.from({ length: textureRecords.length }, () => []);
   for (const cutout of triangleCutouts) {
     triangleMaterials[cutout.textureIndex][cutout.triangleIndex] = createAtlasMaterial({
@@ -1525,41 +1738,70 @@ function prepareStadiumAtlas(nativeArchive, stadiumSelectors, matchPalette) {
       imageHeight: STADIUM_ATLAS_HEIGHT,
     });
   }
-  const goalNetTriangleMaterials = Array.from(
-    { length: goalNet.textureRecords.length },
-    () => [],
-  );
-  for (const cutout of goalNet.triangleCutouts) {
-    goalNetTriangleMaterials[cutout.textureIndex][cutout.triangleIndex] = createAtlasMaterial({
+  const quadMaterials = Array.from({ length: textureRecords.length }, () => null);
+  for (const cutout of quadCutouts) {
+    quadMaterials[cutout.textureIndex] = createAtlasMaterial({
       page: 0,
       x: cutout.x,
       y: cutout.y,
       width: cutout.width,
       height: cutout.height,
       assetSha256,
-      key: `cssoccer-goal-net-triangle-${cutout.nativeTextureSlot}-${cutout.triangleIndex}`,
+      key: `cssoccer-stadium-quad-${cutout.textureIndex}`,
       assetUrl: STADIUM_ATLAS_URL,
       imageWidth: STADIUM_ATLAS_WIDTH,
       imageHeight: STADIUM_ATLAS_HEIGHT,
+      projection: "projective",
     });
   }
-  const nativePagePlacements = selectors.nativeMapPages.map((nativePage, atlasPage) => ({
-    id: `native-stadium-page-${nativePage}`,
-    nativePage,
-    atlasPage,
-    x: atlasPage * PAGE_SIZE,
-    y: 0,
-    width: PAGE_SIZE,
-    height: PAGE_SIZE,
-  }));
+  const scanlineSourceMaterials = scanlineSourceCutouts.map((cutout) => (
+    createAtlasMaterial({
+      page: 0,
+      x: cutout.x,
+      y: cutout.y,
+      width: cutout.width,
+      height: cutout.height,
+      assetSha256,
+      key: cutout.id,
+      assetUrl: STADIUM_ATLAS_URL,
+      imageWidth: STADIUM_ATLAS_WIDTH,
+      imageHeight: STADIUM_ATLAS_HEIGHT,
+      projection: "projective",
+    })
+  ));
+  const goalNetQuadMaterials = Array.from(
+    { length: goalNet.textureRecords.length },
+    () => null,
+  );
+  for (const cutout of goalNet.quadCutouts) {
+    goalNetQuadMaterials[cutout.textureIndex] = createAtlasMaterial({
+      page: 0,
+      x: cutout.x,
+      y: cutout.y,
+      width: cutout.width,
+      height: cutout.height,
+      assetSha256,
+      key: `cssoccer-goal-net-quad-${cutout.nativeTextureSlot}`,
+      assetUrl: STADIUM_ATLAS_URL,
+      imageWidth: STADIUM_ATLAS_WIDTH,
+      imageHeight: STADIUM_ATLAS_HEIGHT,
+      projection: "projective",
+    });
+  }
   return Object.freeze({
     indexedPixelsSha256: sha256(Buffer.concat(indexedPages)),
-    pageMaterials: Object.freeze(pageMaterials),
     triangleMaterials: deepFreeze(triangleMaterials),
     triangleCutouts,
+    quadMaterials: deepFreeze(quadMaterials),
+    quadCutouts,
+    canonicalCutouts,
+    cutoutPacking,
+    scanlineSourceCutouts,
+    scanlineSourceMaterials: deepFreeze(scanlineSourceMaterials),
+    nativeRasterSource,
     goalNetTextureRecords: goalNet.textureRecords,
-    goalNetTriangleMaterials: deepFreeze(goalNetTriangleMaterials),
-    goalNetTriangleCutouts: goalNet.triangleCutouts,
+    goalNetQuadMaterials: deepFreeze(goalNetQuadMaterials),
+    goalNetQuadCutouts: goalNet.quadCutouts,
     goalNetSourceBitmapSha256: goalNet.sourceBitmapSha256,
     goalNetRemappedBitmapSha256: goalNet.remappedBitmapSha256,
     goalNetPaletteSha256: goalNet.paletteSha256,
@@ -1567,9 +1809,9 @@ function prepareStadiumAtlas(nativeArchive, stadiumSelectors, matchPalette) {
     pageSha256: Object.freeze(indexedPages.map((page) => sha256(page))),
     paletteSha256: sha256(palette),
     placements: deepFreeze([
-      ...nativePagePlacements,
-      ...goalNet.triangleCutouts,
-      ...triangleCutouts,
+      ...goalNet.quadCutouts,
+      ...canonicalCutouts,
+      ...scanlineSourceCutouts,
     ]),
     pngBytes,
     rgba,
@@ -1579,7 +1821,7 @@ function prepareStadiumAtlas(nativeArchive, stadiumSelectors, matchPalette) {
   });
 }
 
-function prepareGoalNetCutouts({ nativeArchive, palette, rgba }) {
+function prepareGoalNetQuadCutouts({ nativeArchive, palette, rgba }) {
   if (!Buffer.isBuffer(palette) || palette.length !== 256 * 3) {
     throw new TypeError("Goal-net preparation requires the complete match palette.");
   }
@@ -1608,28 +1850,15 @@ function prepareGoalNetCutouts({ nativeArchive, palette, rgba }) {
     throw new Error("Native BM_NETS lost its remapgfx transparency texels.");
   }
   const specs = textureRecords
-    .flatMap((record) => stadiumTextureTriangleVertexSets(record).map((sourceVertexIndexes, triangleIndex) => {
-      const spec = triangleCutoutSpec(
-        record,
-        triangleIndex,
-        sourceVertexIndexes,
-        "mask",
-      );
-      spec.id = `native-goal-net-triangle-${record.nativeTextureSlot}-${triangleIndex}`;
-      spec.kind = "prebaked-native-goal-net-triangle";
-      spec.nativeTextureSlot = record.nativeTextureSlot;
-      spec.sourceColorCode = record.sourceColorCode;
-      return spec;
-    }))
+    .map((record) => goalNetQuadCutoutSpec(record))
     .sort((left, right) => (
       right.height - left.height
       || right.width - left.width
       || left.nativeTextureSlot - right.nativeTextureSlot
-      || left.triangleIndex - right.triangleIndex
     ));
   packGoalNetCutouts(specs);
   for (const spec of specs) {
-    rasterGoalNetTriangleCutout({
+    rasterGoalNetQuadCutout({
       indexedPage: remappedBitmap,
       palette,
       rgba,
@@ -1638,14 +1867,45 @@ function prepareGoalNetCutouts({ nativeArchive, palette, rgba }) {
   }
   return deepFreeze({
     textureRecords,
-    triangleCutouts: specs.sort((left, right) => (
-      left.textureIndex - right.textureIndex
-      || left.triangleIndex - right.triangleIndex
-    )),
+    quadCutouts: specs.sort((left, right) => left.textureIndex - right.textureIndex),
     sourceBitmapSha256: sha256(sourceBitmap),
     remappedBitmapSha256: sha256(remappedBitmap),
     paletteSha256: sha256(palette),
   });
+}
+
+function goalNetQuadCutoutSpec(record) {
+  const sourceXs = record.uvs.map(([u]) => u * PAGE_SIZE);
+  const sourceYs = record.uvs.map(([, v]) => (1 - v) * PAGE_SIZE);
+  const sourceLeft = Math.floor(Math.min(...sourceXs));
+  const sourceRight = Math.ceil(Math.max(...sourceXs));
+  const sourceTop = Math.floor(Math.min(...sourceYs));
+  const sourceBottom = Math.ceil(Math.max(...sourceYs));
+  const width = Math.max(1, sourceRight - sourceLeft);
+  const height = Math.max(1, sourceBottom - sourceTop);
+  return {
+    id: `native-goal-net-quad-${record.nativeTextureSlot}`,
+    kind: "prebaked-native-goal-net-projective-quad",
+    textureIndex: record.textureIndex,
+    nativeTextureSlot: record.nativeTextureSlot,
+    sourceColorCode: record.sourceColorCode,
+    nativePage: record.page,
+    alphaMode: "mask",
+    directImageTransform: "projective-quad",
+    sourceRect: {
+      x: sourceLeft,
+      y: sourceTop,
+      width,
+      height,
+    },
+    sourceUvs: record.uvs,
+    destinationUvs: FULL_IMAGE_UVS,
+    destinationToSourceHomography: solveUvHomography(FULL_IMAGE_UVS, record.uvs),
+    width,
+    height,
+    x: 0,
+    y: 0,
+  };
 }
 
 function decodeGoalNetTextureRecords(textureTableBytes) {
@@ -1717,25 +1977,103 @@ function packGoalNetCutouts(specs) {
   }
 }
 
-function rasterGoalNetTriangleCutout({ indexedPage, palette, rgba, spec }) {
+function rasterGoalNetQuadCutout({ indexedPage, palette, rgba, spec }) {
+  let transparentTexels = 0;
+  let opaqueTexels = 0;
   for (let y = 0; y < spec.height; y += 1) {
     for (let x = 0; x < spec.width; x += 1) {
-      const s = (x + 0.5) / spec.width;
-      const t = (y + 0.5) / spec.height;
-      if (s + t > 1) continue;
-      const sourceU = spec.basis.origin[0] + spec.basis.uEdge[0] * s + spec.basis.vEdge[0] * t;
-      const sourceV = spec.basis.origin[1] + spec.basis.uEdge[1] * s + spec.basis.vEdge[1] * t;
+      const destinationU = (x + 0.5) / spec.width;
+      const destinationV = 1 - (y + 0.5) / spec.height;
+      const [sourceU, sourceV] = applyUvHomography(
+        spec.destinationToSourceHomography,
+        destinationU,
+        destinationV,
+      );
       const sourceX = clamp(Math.floor(sourceU * PAGE_SIZE), 0, PAGE_SIZE - 1);
       const sourceY = clamp(Math.floor((1 - sourceV) * PAGE_SIZE), 0, PAGE_SIZE - 1);
       const paletteIndex = indexedPage[sourceY * PAGE_SIZE + sourceX];
-      const targetY = spec.y + spec.height - 1 - y;
-      const target = (targetY * STADIUM_ATLAS_WIDTH + spec.x + x) * 4;
+      const target = ((spec.y + y) * STADIUM_ATLAS_WIDTH + spec.x + x) * 4;
+      if (paletteIndex === GOAL_NET_TEXTURE.transparentPaletteIndex) {
+        transparentTexels += 1;
+        continue;
+      }
       rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
       rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
       rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
-      rgba[target + 3] = paletteIndex === GOAL_NET_TEXTURE.transparentPaletteIndex ? 0 : 255;
+      rgba[target + 3] = 255;
+      opaqueTexels += 1;
     }
   }
+  if (transparentTexels === 0 || opaqueTexels === 0) {
+    throw new Error(
+      `Prepared native goal-net quad ${spec.nativeTextureSlot} lost its mask or visible strands.`,
+    );
+  }
+  spec.transparentTexels = transparentTexels;
+  spec.opaqueTexels = opaqueTexels;
+}
+
+function solveUvHomography(destinationUvs, sourceUvs) {
+  if (
+    !Array.isArray(destinationUvs)
+    || !Array.isArray(sourceUvs)
+    || destinationUvs.length !== 4
+    || sourceUvs.length !== 4
+  ) {
+    throw new Error("Native goal-net homography requires four destination and source UVs.");
+  }
+  const matrix = [];
+  const values = [];
+  for (let index = 0; index < 4; index += 1) {
+    const [x, y] = destinationUvs[index];
+    const [u, v] = sourceUvs[index];
+    matrix.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
+    values.push(u);
+    matrix.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
+    values.push(v);
+  }
+  return solveLinearSystem(matrix, values);
+}
+
+function applyUvHomography(coefficients, x, y) {
+  const denominator = coefficients[6] * x + coefficients[7] * y + 1;
+  if (!Number.isFinite(denominator) || Math.abs(denominator) <= 1e-12) {
+    throw new Error("Native goal-net UV homography crossed its projective horizon.");
+  }
+  return [
+    (coefficients[0] * x + coefficients[1] * y + coefficients[2]) / denominator,
+    (coefficients[3] * x + coefficients[4] * y + coefficients[5]) / denominator,
+  ];
+}
+
+function solveLinearSystem(matrix, values) {
+  const rows = matrix.map((row, index) => [...row, values[index]]);
+  for (let column = 0; column < rows.length; column += 1) {
+    let pivot = column;
+    for (let row = column + 1; row < rows.length; row += 1) {
+      if (Math.abs(rows[row][column]) > Math.abs(rows[pivot][column])) pivot = row;
+    }
+    if (Math.abs(rows[pivot][column]) <= 1e-12) {
+      throw new Error("Native goal-net UV quad has no stable projective transform.");
+    }
+    [rows[column], rows[pivot]] = [rows[pivot], rows[column]];
+    const divisor = rows[column][column];
+    for (let entry = column; entry <= rows.length; entry += 1) {
+      rows[column][entry] /= divisor;
+    }
+    for (let row = 0; row < rows.length; row += 1) {
+      if (row === column) continue;
+      const factor = rows[row][column];
+      for (let entry = column; entry <= rows.length; entry += 1) {
+        rows[row][entry] -= factor * rows[column][entry];
+      }
+    }
+  }
+  const solution = rows.map((row) => row[rows.length]);
+  if (solution.some((value) => !Number.isFinite(value))) {
+    throw new Error("Native goal-net UV homography produced a non-finite coefficient.");
+  }
+  return solution;
 }
 
 function stadiumTextureAlphaModes(nativeArchive, stadiumSelectors) {
@@ -1767,78 +2105,697 @@ function stadiumTextureAlphaModes(nativeArchive, stadiumSelectors) {
   return Object.freeze(modes);
 }
 
-function renderStadiumAtlasRgba(indexedPages, palette) {
-  const rgba = Buffer.alloc(STADIUM_ATLAS_WIDTH * STADIUM_ATLAS_HEIGHT * 4);
-  for (let pageIndex = 0; pageIndex < indexedPages.length; pageIndex += 1) {
-    const indexed = indexedPages[pageIndex];
-    for (let y = 0; y < PAGE_SIZE; y += 1) {
-      for (let x = 0; x < PAGE_SIZE; x += 1) {
-        const paletteIndex = indexed[y * PAGE_SIZE + x];
-        const target = (y * STADIUM_ATLAS_WIDTH + pageIndex * PAGE_SIZE + x) * 4;
-        rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
-        rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
-        rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
-        rgba[target + 3] = 255;
-      }
-    }
-  }
-  return rgba;
-}
-
-function prebakeStadiumTriangleCutouts({
+function prebakeStadiumTextureCutouts({
   indexedPages,
+  occupiedRects,
   palette,
   rgba,
   textureAlphaModes,
   textureRecords,
 }) {
-  const specs = textureRecords
-    .flatMap((record) => stadiumTextureTriangleVertexSets(record).map((sourceVertexIndexes, triangleIndex) => (
+  const triangleSpecs = textureRecords
+    .filter(({ vertexCount }) => vertexCount === 3)
+    .map((record) => (
       triangleCutoutSpec(
         record,
-        triangleIndex,
-        sourceVertexIndexes,
+        0,
+        [0, 1, 2],
         textureAlphaModes[record.textureIndex],
       )
-    )))
+    ));
+  const quadSpecs = textureRecords
+    .filter(({ vertexCount }) => vertexCount === 4)
+    .map((record) => stadiumQuadCutoutSpec(
+      record,
+      textureAlphaModes[record.textureIndex],
+    ));
+  const scanlineSourceRasters = prepareStadiumScanlineSourceRasters({
+    indexedPages,
+    palette,
+    specs: [...triangleSpecs, ...quadSpecs],
+  });
+  const sharedSourceSpecs = quadSpecs.filter((spec) => (
+    spec.alphaMode === "opaque"
+    && spec.sourceRasterOrientation === "canonical-axis-aligned-source-rect"
+  ));
+  const sharedSourceSpecIds = new Set(sharedSourceSpecs.map(({ id }) => id));
+  const sharedSourceRasters = prepareStadiumSharedSourceRasters({
+    scanlineSourceRasters,
+    specs: sharedSourceSpecs,
+  });
+  const specs = [...triangleSpecs, ...quadSpecs]
+    .filter(({ id }) => !sharedSourceSpecIds.has(id))
     .sort((left, right) => (
       right.height - left.height
       || right.width - left.width
       || left.textureIndex - right.textureIndex
-      || left.triangleIndex - right.triangleIndex
+      || (left.triangleIndex ?? 0) - (right.triangleIndex ?? 0)
     ));
-  const rows = [];
+  const canonicalByRaster = new Map();
   for (const spec of specs) {
-    let row = rows.find((candidate) => candidate.x + spec.width <= STADIUM_ATLAS_WIDTH);
-    if (!row) {
-      row = {
-        x: 0,
-        y: PAGE_SIZE + rows.reduce((sum, candidate) => sum + candidate.height, 0),
+    const raster = spec.directImageTransform === "projective-quad"
+      ? renderStadiumQuadCutout({ indexedPages, palette, spec })
+      : renderStadiumTriangleCutout({ indexedPages, palette, spec });
+    let canonical = null;
+    let rasterTransform = null;
+    for (const transform of STADIUM_RASTER_TRANSFORMS) {
+      const transformed = transformStadiumRgbaRaster({
         height: spec.height,
+        raster,
+        transform,
+        width: spec.width,
+      });
+      const rasterSha256 = sha256(transformed.raster);
+      const key = `${transformed.width}x${transformed.height}:${rasterSha256}`;
+      canonical = canonicalByRaster.get(key);
+      if (canonical) {
+        rasterTransform = transform;
+        break;
+      }
+    }
+    if (!canonical) {
+      const rasterSha256 = sha256(raster);
+      const key = `${spec.width}x${spec.height}:${rasterSha256}`;
+      canonical = {
+        raster,
+        rasterSha256,
+        width: spec.width,
+        height: spec.height,
+        members: [],
       };
-      rows.push(row);
+      canonicalByRaster.set(key, canonical);
+      rasterTransform = STADIUM_RASTER_TRANSFORMS[0];
     }
-    spec.x = row.x;
-    spec.y = row.y;
-    row.x += spec.width;
-    if (spec.y + spec.height > STADIUM_ATLAS_HEIGHT) {
-      throw new Error(
-        `Prepared stadium triangle cutouts no longer fit the fixed ${STADIUM_ATLAS_WIDTH} `
-        + `by ${STADIUM_ATLAS_HEIGHT} atlas.`,
-      );
-    }
-    rasterStadiumTriangleCutout({ indexedPages, palette, rgba, spec });
+    spec.atlasRasterTransform = rasterTransform.id;
+    spec.atlasUvs = transformStadiumRasterUvs(FULL_IMAGE_UVS, rasterTransform);
+    canonical.members.push(spec);
   }
-  return deepFreeze(specs.sort((left, right) => (
-    left.textureIndex - right.textureIndex
-    || left.triangleIndex - right.triangleIndex
-  )));
+  const canonicalRasters = [...canonicalByRaster.values()]
+    .map((canonical) => {
+      const memberIds = canonical.members.map(({ id }) => id).sort();
+      const sourceRects = [...new Map(canonical.members.map((member) => {
+        const descriptor = {
+          nativePage: member.nativePage,
+          ...member.sourceRect,
+        };
+        return [JSON.stringify(descriptor), descriptor];
+      })).values()];
+      return {
+        ...canonical,
+        placement: {
+          id: `native-stadium-shared-raster-${canonical.rasterSha256.slice(0, 16)}`,
+          kind: "prebaked-native-stadium-shared-raster",
+          rgbaSha256: canonical.rasterSha256,
+          width: canonical.width,
+          height: canonical.height,
+          x: 0,
+          y: 0,
+          sourceCutoutIds: memberIds,
+          sourceCutoutTransforms: Object.fromEntries(
+            canonical.members
+              .map(({ atlasRasterTransform, id }) => [id, atlasRasterTransform])
+              .sort(([left], [right]) => left.localeCompare(right)),
+          ),
+          textureIndexes: [...new Set(
+            canonical.members.map(({ textureIndex }) => textureIndex),
+          )].sort((left, right) => left - right),
+          sourceRects,
+        },
+      };
+    })
+    .sort((left, right) => (
+      right.width * right.height - left.width * left.height
+      || right.height - left.height
+      || right.width - left.width
+      || left.placement.id.localeCompare(right.placement.id)
+    ));
+  const packedRasters = [...canonicalRasters, ...sharedSourceRasters]
+    .sort((left, right) => (
+      right.width * right.height - left.width * left.height
+      || right.height - left.height
+      || right.width - left.width
+      || left.placement.id.localeCompare(right.placement.id)
+    ));
+  const packing = packStadiumSharedRasters(packedRasters, occupiedRects);
+  for (const canonical of canonicalRasters) {
+    const { placement } = canonical;
+    blitStadiumCutout({
+      rgba,
+      raster: canonical.raster,
+      x: placement.x,
+      y: placement.y,
+      width: placement.width,
+      height: placement.height,
+    });
+    for (const spec of canonical.members) {
+      spec.x = placement.x;
+      spec.y = placement.y;
+      spec.width = placement.width;
+      spec.height = placement.height;
+      spec.canonicalTextureId = placement.id;
+      spec.canonicalTextureSha256 = placement.rgbaSha256;
+      spec.canonicalTextureMemberCount = canonical.members.length;
+    }
+  }
+  for (const sharedSourceRaster of sharedSourceRasters) {
+    const { placement } = sharedSourceRaster;
+    blitStadiumCutout({
+      rgba,
+      raster: sharedSourceRaster.raster,
+      x: placement.x,
+      y: placement.y,
+      width: placement.width,
+      height: placement.height,
+    });
+    bindStadiumSpecsToSharedSourceRaster(sharedSourceRaster);
+  }
+  bindUnpackedStadiumScanlineSourcesToCanonicalCutouts({
+    specs: [...triangleSpecs, ...quadSpecs],
+    scanlineSourceRasters,
+  });
+  return deepFreeze({
+    canonicalCutouts: [
+      ...canonicalRasters.map(({ placement }) => placement),
+      ...sharedSourceRasters.map(({ placement }) => placement),
+    ],
+    packing,
+    triangleCutouts: triangleSpecs.sort((left, right) => (
+      left.textureIndex - right.textureIndex
+      || left.triangleIndex - right.triangleIndex
+    )),
+    quadCutouts: quadSpecs.sort((left, right) => (
+      left.textureIndex - right.textureIndex
+    )),
+    scanlineSourceCutouts: scanlineSourceRasters.map(({ placement }) => placement),
+    nativeRasterSource: prepareNativeStadiumRasterSource({
+      palette,
+      scanlineSourceRasters,
+    }),
+  });
 }
 
-function stadiumTextureTriangleVertexSets(record) {
-  return record.vertexCount === 3
-    ? [[0, 1, 2]]
-    : [[0, 1, 2], [0, 2, 3]];
+function prepareStadiumScanlineSourceRasters({ indexedPages, palette, specs }) {
+  const sourcesByRaster = new Map();
+  for (const spec of specs) {
+    const exactTriangle = spec.kind === "prebaked-native-texture-triangle";
+    const reusableSourceQuad = (
+      spec.kind === "prebaked-native-stadium-projective-quad"
+      && spec.sourceRasterOrientation === "canonical-axis-aligned-source-rect"
+    );
+    if (
+      spec.alphaMode !== "opaque"
+      || (
+        !exactTriangle
+        && !reusableSourceQuad
+        && !isStadiumScanlineSourceSpec(spec)
+      )
+    ) continue;
+    const raster = renderStadiumSourceRect({
+      alphaMode: spec.alphaMode,
+      indexedPages,
+      nativePage: spec.nativePage,
+      padding: STADIUM_SCANLINE_SOURCE_PADDING,
+      palette,
+      sourceRect: spec.sourceRect,
+    });
+    const indexedRaster = renderStadiumIndexedSourceRect({
+      indexedPages,
+      nativePage: spec.nativePage,
+      padding: STADIUM_SCANLINE_SOURCE_PADDING,
+      sourceRect: spec.sourceRect,
+    });
+    const rasterSha256 = sha256(raster);
+    const indexedSha256 = sha256(indexedRaster);
+    const rasterWidth = spec.sourceRect.width + STADIUM_SCANLINE_SOURCE_PADDING * 2;
+    const rasterHeight = spec.sourceRect.height + STADIUM_SCANLINE_SOURCE_PADDING * 2;
+    const key = `${rasterWidth}x${rasterHeight}:${indexedSha256}`;
+    let source = sourcesByRaster.get(key);
+    if (!source) {
+      source = {
+        indexedRaster,
+        raster,
+        width: rasterWidth,
+        height: rasterHeight,
+        sourceRects: [],
+        textureIndexes: [],
+        placement: {
+          id: `native-stadium-scanline-source-${indexedSha256.slice(0, 16)}`,
+          kind: "prebaked-native-stadium-scanline-source-raster",
+          rgbaSha256: rasterSha256,
+          sourceRects: [],
+          rasterScale: 1,
+          sourcePadding: STADIUM_SCANLINE_SOURCE_PADDING,
+          textureIndexes: [],
+          width: rasterWidth,
+          height: rasterHeight,
+          x: 0,
+          y: 0,
+        },
+      };
+      sourcesByRaster.set(key, source);
+    }
+    const sourceRect = {
+      nativePage: spec.nativePage,
+      ...spec.sourceRect,
+    };
+    if (!source.sourceRects.some((entry) => (
+      entry.nativePage === sourceRect.nativePage
+      && sameStadiumSourceRect(entry, sourceRect)
+    ))) {
+      source.sourceRects.push(sourceRect);
+    }
+    source.textureIndexes.push(spec.textureIndex);
+  }
+  const sources = deduplicateContainedStadiumScanlineSources(
+    [...sourcesByRaster.values()],
+  );
+  return sources.map((source) => {
+    source.sourceRects.sort((left, right) => (
+      left.nativePage - right.nativePage
+      || left.y - right.y
+      || left.x - right.x
+    ));
+    source.textureIndexes = [...new Set(source.textureIndexes)]
+      .sort((left, right) => left - right);
+    source.nativeRasterMappings.sort((left, right) => (
+      left.nativePage - right.nativePage
+      || left.y - right.y
+      || left.x - right.x
+      || left.rasterOffsetY - right.rasterOffsetY
+      || left.rasterOffsetX - right.rasterOffsetX
+    ));
+    source.placement.sourceRects = source.sourceRects.map((entry) => ({ ...entry }));
+    source.placement.nativeRasterMappings = source.nativeRasterMappings
+      .map((entry) => ({ ...entry }));
+    source.placement.textureIndexes = [...source.textureIndexes];
+    return source;
+  });
+}
+
+function deduplicateContainedStadiumScanlineSources(sources) {
+  const sorted = [...sources].sort((left, right) => (
+    right.width * right.height - left.width * left.height
+    || right.height - left.height
+    || right.width - left.width
+    || left.placement.id.localeCompare(right.placement.id)
+  ));
+  const retained = [];
+  for (const source of sorted) {
+    const contained = retained
+      .map((candidate) => ({
+        candidate,
+        offset: findStadiumIndexedRasterOffset(candidate, source),
+      }))
+      .find(({ offset }) => offset !== null);
+    if (!contained) {
+      source.nativeRasterMappings = source.sourceRects.map((sourceRect) => ({
+        ...sourceRect,
+        rasterOffsetX: 0,
+        rasterOffsetY: 0,
+      }));
+      retained.push(source);
+      continue;
+    }
+    const { candidate, offset } = contained;
+    for (const sourceRect of source.sourceRects) {
+      if (!candidate.sourceRects.some((entry) => (
+        entry.nativePage === sourceRect.nativePage
+        && sameStadiumSourceRect(entry, sourceRect)
+      ))) {
+        candidate.sourceRects.push(sourceRect);
+      }
+      candidate.nativeRasterMappings.push({
+        ...sourceRect,
+        rasterOffsetX: offset.x,
+        rasterOffsetY: offset.y,
+      });
+    }
+    candidate.textureIndexes.push(...source.textureIndexes);
+  }
+  return retained;
+}
+
+function findStadiumIndexedRasterOffset(outer, inner) {
+  if (
+    inner.width > outer.width
+    || inner.height > outer.height
+  ) {
+    return null;
+  }
+  for (let y = 0; y <= outer.height - inner.height; y += 1) {
+    for (let x = 0; x <= outer.width - inner.width; x += 1) {
+      let matches = true;
+      for (let row = 0; row < inner.height; row += 1) {
+        const outerStart = (y + row) * outer.width + x;
+        const innerStart = row * inner.width;
+        if (!outer.indexedRaster.subarray(
+          outerStart,
+          outerStart + inner.width,
+        ).equals(inner.indexedRaster.subarray(
+          innerStart,
+          innerStart + inner.width,
+        ))) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return { x, y };
+    }
+  }
+  return null;
+}
+
+function isStadiumScanlineSourceSpec(spec) {
+  return (
+    (
+      spec.sourceRect.width >= STADIUM_SCANLINE_SOURCE_MIN_WIDTH
+      && spec.sourceRect.height >= STADIUM_SCANLINE_SOURCE_MIN_HEIGHT
+    )
+    || STADIUM_SCANLINE_BILLBOARD_TEXTURE_INDEXES.includes(spec.textureIndex)
+  );
+}
+
+function prepareStadiumSharedSourceRasters({
+  scanlineSourceRasters,
+  specs,
+}) {
+  const matchedSpecIds = new Set();
+  const shared = scanlineSourceRasters.map((source) => {
+    const members = specs.filter((spec) => (
+      source.textureIndexes.includes(spec.textureIndex)
+    ));
+    for (const member of members) matchedSpecIds.add(member.id);
+    const placement = source.placement;
+    placement.nativeRasterSourceId = placement.id;
+    placement.nativeRasterWidth = source.width;
+    placement.nativeRasterHeight = source.height;
+    if (members.length === 0) return null;
+    // These opaque quads are painted by the retained indexed scanline source,
+    // so the PNG only needs one exact source texel per atlas texel. Keeping a
+    // redundant 2x nearest-neighbour copy made the physical sheet 20% larger
+    // without changing the native raster path.
+    const atlasRasterScale = STADIUM_SHARED_SOURCE_ATLAS_RASTER_SCALE;
+    const scaled = scaleStadiumRgbaRasterNearest({
+      height: source.height,
+      raster: source.raster,
+      scale: atlasRasterScale,
+      width: source.width,
+    });
+    placement.kind = "prebaked-native-stadium-shared-source-raster";
+    placement.rgbaSha256 = sha256(scaled.raster);
+    placement.atlasRasterScale = atlasRasterScale;
+    placement.sourceCutoutIds = members.map(({ id }) => id).sort();
+    placement.width = scaled.width;
+    placement.height = scaled.height;
+    return {
+      height: scaled.height,
+      members,
+      placement,
+      raster: scaled.raster,
+      width: scaled.width,
+    };
+  }).filter(Boolean);
+  if (
+    matchedSpecIds.size !== specs.length
+    || specs.some(({ id }) => !matchedSpecIds.has(id))
+  ) {
+    throw new Error(
+      "Prepared stadium shared source rasters lost a logical cutout: "
+      + JSON.stringify({
+        unmatchedSources: scanlineSourceRasters
+          .filter((source) => !shared.some(({ placement }) => (
+            placement.id === source.placement.id
+          )))
+          .map(({ placement }) => placement.id),
+        unmatchedSpecs: specs
+          .filter(({ id }) => !matchedSpecIds.has(id))
+          .map(({ id }) => id),
+      }),
+    );
+  }
+  return shared;
+}
+
+function bindStadiumSpecsToSharedSourceRaster(shared) {
+  const { placement } = shared;
+  const atlasRasterScale = placement.atlasRasterScale;
+  for (const spec of shared.members) {
+    spec.x = placement.x + placement.sourcePadding * atlasRasterScale;
+    spec.y = placement.y + placement.sourcePadding * atlasRasterScale;
+    spec.width = spec.sourceRect.width * atlasRasterScale;
+    spec.height = spec.sourceRect.height * atlasRasterScale;
+    spec.atlasRasterTransform = STADIUM_RASTER_TRANSFORMS[0].id;
+    spec.atlasUvs = FULL_IMAGE_UVS;
+    spec.canonicalTextureId = placement.id;
+    spec.canonicalTextureSha256 = placement.rgbaSha256;
+    spec.canonicalTextureMemberCount = shared.members.length;
+  }
+}
+
+function bindUnpackedStadiumScanlineSourcesToCanonicalCutouts({
+  specs,
+  scanlineSourceRasters,
+}) {
+  for (const source of scanlineSourceRasters) {
+    const { placement } = source;
+    if (Number.isSafeInteger(placement.atlasRasterScale)) continue;
+    const alias = specs
+      .filter(({ textureIndex }) => source.textureIndexes.includes(textureIndex))
+      .sort((left, right) => left.textureIndex - right.textureIndex)[0];
+    if (
+      !alias
+      || ![alias.x, alias.y].every((value) => (
+        Number.isSafeInteger(value) && value >= 0
+      ))
+      || ![alias.width, alias.height].every((value) => (
+        Number.isSafeInteger(value) && value > 0
+      ))
+    ) {
+      throw new Error(
+        `Prepared stadium scanline source ${placement.id} has no material alias.`,
+      );
+    }
+    placement.kind = "prepared-native-stadium-scanline-material-alias";
+    placement.atlasRasterScale = STADIUM_CUTOUT_RASTER_SCALE;
+    placement.sourceCutoutIds = [alias.id];
+    placement.x = alias.x;
+    placement.y = alias.y;
+    placement.width = alias.width;
+    placement.height = alias.height;
+  }
+}
+
+function prepareNativeStadiumRasterSource({ palette, scanlineSourceRasters }) {
+  if (!Buffer.isBuffer(palette) || palette.length !== 256 * 3) {
+    throw new Error("Prepared native stadium raster requires the exact 256-entry palette.");
+  }
+  const colors = Array.from({ length: 256 }, (_unused, paletteIndex) => {
+    const offset = paletteIndex * 3;
+    return `#${
+      [palette[offset], palette[offset + 1], palette[offset + 2]]
+        .map((component) => expandVgaComponent(component).toString(16).padStart(2, "0"))
+        .join("")
+    }`;
+  });
+  const sources = scanlineSourceRasters.map(({
+    height,
+    indexedRaster,
+    placement,
+    width,
+  }) => {
+    if (
+      !Buffer.isBuffer(indexedRaster)
+      || indexedRaster.length !== width * height
+    ) {
+      throw new Error(`Prepared stadium raster ${placement.id} lost its indexed pixels.`);
+    }
+    return {
+      id: placement.id,
+      encoding: "palette-index-u8-row-major-base64",
+      height,
+      pixelsBase64: indexedRaster.toString("base64"),
+      pixelsSha256: sha256(indexedRaster),
+      width,
+    };
+  });
+  return deepFreeze({
+    schema: STADIUM_NATIVE_RASTER_SOURCE_SCHEMA,
+    interpolation: "polym-screen-space-fixed16",
+    colors,
+    sources,
+    sourceCount: sources.length,
+    runtimeImageConstruction: false,
+  });
+}
+
+function packStadiumSharedRasters(canonicalRasters, occupiedRects) {
+  if (!Array.isArray(occupiedRects) || occupiedRects.length === 0) {
+    throw new Error("Prepared stadium packing requires its fixed source-page placements.");
+  }
+  let freeRects = [{
+    x: 0,
+    y: 0,
+    width: STADIUM_ATLAS_WIDTH,
+    height: STADIUM_ATLAS_HEIGHT,
+  }];
+  for (const occupied of occupiedRects) {
+    assertStadiumAtlasRect(occupied, "fixed atlas placement");
+    freeRects = splitStadiumFreeRects(freeRects, occupied);
+  }
+  for (const canonical of canonicalRasters) {
+    const { placement } = canonical;
+    let best = null;
+    for (const free of freeRects) {
+      if (placement.width > free.width || placement.height > free.height) continue;
+      const remainingWidth = free.width - placement.width;
+      const remainingHeight = free.height - placement.height;
+      const score = [
+        Math.min(remainingWidth, remainingHeight),
+        Math.max(remainingWidth, remainingHeight),
+        free.y,
+        free.x,
+      ];
+      if (!best || compareStadiumPackScores(score, best.score) < 0) {
+        best = { free, score };
+      }
+    }
+    if (!best) {
+      throw new Error(
+        `Prepared stadium shared raster ${placement.id} no longer fits the fixed `
+        + `${STADIUM_ATLAS_WIDTH} by ${STADIUM_ATLAS_HEIGHT} atlas.`,
+      );
+    }
+    placement.x = best.free.x;
+    placement.y = best.free.y;
+    freeRects = splitStadiumFreeRects(freeRects, placement);
+  }
+  const placements = canonicalRasters.map(({ placement }) => placement);
+  const packedRects = [...occupiedRects, ...placements];
+  for (let leftIndex = 0; leftIndex < packedRects.length; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < packedRects.length;
+      rightIndex += 1
+    ) {
+      if (stadiumRectsOverlap(packedRects[leftIndex], packedRects[rightIndex])) {
+        throw new Error(
+          `Prepared stadium atlas placements ${packedRects[leftIndex].id} and `
+          + `${packedRects[rightIndex].id} overlap.`,
+        );
+      }
+    }
+  }
+  return {
+    algorithm: "deterministic-maxrects-best-short-side-fit",
+    atlasWidth: STADIUM_ATLAS_WIDTH,
+    atlasHeight: STADIUM_ATLAS_HEIGHT,
+    fixedPlacementCount: occupiedRects.length,
+    packedRasterCount: placements.length,
+    usedBounds: {
+      width: Math.max(...packedRects.map(({ x, width }) => x + width)),
+      height: Math.max(...packedRects.map(({ y, height }) => y + height)),
+    },
+  };
+}
+
+function splitStadiumFreeRects(freeRects, occupied) {
+  const split = [];
+  for (const free of freeRects) {
+    if (!stadiumRectsOverlap(free, occupied)) {
+      split.push(free);
+      continue;
+    }
+    if (occupied.x > free.x) {
+      split.push({
+        x: free.x,
+        y: free.y,
+        width: occupied.x - free.x,
+        height: free.height,
+      });
+    }
+    if (occupied.x + occupied.width < free.x + free.width) {
+      split.push({
+        x: occupied.x + occupied.width,
+        y: free.y,
+        width: free.x + free.width - occupied.x - occupied.width,
+        height: free.height,
+      });
+    }
+    if (occupied.y > free.y) {
+      split.push({
+        x: free.x,
+        y: free.y,
+        width: free.width,
+        height: occupied.y - free.y,
+      });
+    }
+    if (occupied.y + occupied.height < free.y + free.height) {
+      split.push({
+        x: free.x,
+        y: occupied.y + occupied.height,
+        width: free.width,
+        height: free.y + free.height - occupied.y - occupied.height,
+      });
+    }
+  }
+  return pruneContainedStadiumFreeRects(split);
+}
+
+function pruneContainedStadiumFreeRects(freeRects) {
+  const pruned = [...freeRects];
+  for (let index = 0; index < pruned.length; index += 1) {
+    for (let otherIndex = 0; otherIndex < pruned.length; otherIndex += 1) {
+      if (
+        index !== otherIndex
+        && stadiumRectContains(pruned[otherIndex], pruned[index])
+      ) {
+        pruned.splice(index, 1);
+        index -= 1;
+        break;
+      }
+    }
+  }
+  return pruned;
+}
+
+function stadiumRectContains(outer, inner) {
+  return (
+    inner.x >= outer.x
+    && inner.y >= outer.y
+    && inner.x + inner.width <= outer.x + outer.width
+    && inner.y + inner.height <= outer.y + outer.height
+  );
+}
+
+function stadiumRectsOverlap(left, right) {
+  return (
+    left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y
+  );
+}
+
+function compareStadiumPackScores(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+function assertStadiumAtlasRect(rect, label) {
+  if (
+    !rect
+    || ![rect.x, rect.y, rect.width, rect.height].every(Number.isSafeInteger)
+    || rect.x < 0
+    || rect.y < 0
+    || rect.width <= 0
+    || rect.height <= 0
+    || rect.x + rect.width > STADIUM_ATLAS_WIDTH
+    || rect.y + rect.height > STADIUM_ATLAS_HEIGHT
+  ) {
+    throw new Error(`Prepared stadium ${label} is outside the atlas.`);
+  }
 }
 
 function triangleCutoutSpec(
@@ -1860,8 +2817,14 @@ function triangleCutoutSpec(
   const [uvOrigin, uvU, uvV] = sourceTriangle;
   const uEdge = [uvU[0] - uvOrigin[0], uvU[1] - uvOrigin[1]];
   const vEdge = [uvV[0] - uvOrigin[0], uvV[1] - uvOrigin[1]];
-  const width = Math.max(1, Math.ceil(Math.hypot(...uEdge) * PAGE_SIZE));
-  const height = Math.max(1, Math.ceil(Math.hypot(...vEdge) * PAGE_SIZE));
+  const width = Math.max(
+    1,
+    Math.ceil(Math.hypot(...uEdge) * PAGE_SIZE) * STADIUM_CUTOUT_RASTER_SCALE,
+  );
+  const height = Math.max(
+    1,
+    Math.ceil(Math.hypot(...vEdge) * PAGE_SIZE) * STADIUM_CUTOUT_RASTER_SCALE,
+  );
   const minU = Math.min(...sourceTriangle.map(([u]) => u));
   const maxU = Math.max(...sourceTriangle.map(([u]) => u));
   const minV = Math.min(...sourceTriangle.map(([, v]) => v));
@@ -1880,6 +2843,7 @@ function triangleCutoutSpec(
     basisVertexIndexes,
     alphaMode,
     directImageTransform: "edge-basis",
+    rasterScale: STADIUM_CUTOUT_RASTER_SCALE,
     nativePage: record.page,
     sourceRect: {
       x: sourceLeft,
@@ -1899,6 +2863,99 @@ function triangleCutoutSpec(
     x: 0,
     y: 0,
   };
+}
+
+function stadiumQuadCutoutSpec(record, alphaMode) {
+  const sourceXs = record.uvs.map(([u]) => u * PAGE_SIZE);
+  const sourceYs = record.uvs.map(([, v]) => (1 - v) * PAGE_SIZE);
+  const sourceLeft = Math.floor(Math.min(...sourceXs));
+  const sourceRight = Math.ceil(Math.max(...sourceXs));
+  const sourceTop = Math.floor(Math.min(...sourceYs));
+  const sourceBottom = Math.ceil(Math.max(...sourceYs));
+  const sourceWidth = Math.max(1, sourceRight - sourceLeft);
+  const sourceHeight = Math.max(1, sourceBottom - sourceTop);
+  const canonical = axisAlignedStadiumQuad(record.uvs);
+  const rasterSourceUvs = canonical?.sourceUvs ?? record.uvs;
+  const [origin, horizontal, , vertical] = rasterSourceUvs;
+  const width = Math.max(
+    1,
+    Math.ceil(Math.hypot(
+      horizontal[0] - origin[0],
+      horizontal[1] - origin[1],
+    ) * PAGE_SIZE) * STADIUM_CUTOUT_RASTER_SCALE,
+  );
+  const height = Math.max(
+    1,
+    Math.ceil(Math.hypot(
+      vertical[0] - origin[0],
+      vertical[1] - origin[1],
+    ) * PAGE_SIZE) * STADIUM_CUTOUT_RASTER_SCALE,
+  );
+  return {
+    id: `native-stadium-quad-${record.textureIndex}`,
+    kind: "prebaked-native-stadium-projective-quad",
+    textureIndex: record.textureIndex,
+    alphaMode,
+    directImageTransform: "projective-quad",
+    rasterScale: STADIUM_CUTOUT_RASTER_SCALE,
+    nativePage: record.page,
+    sourceRect: {
+      x: sourceLeft,
+      y: sourceTop,
+      width: sourceWidth,
+      height: sourceHeight,
+    },
+    sourceUvs: record.uvs,
+    rasterSourceUvs,
+    vertexOrder: canonical?.vertexOrder ?? [0, 1, 2, 3],
+    sourceRasterOrientation: canonical
+      ? "canonical-axis-aligned-source-rect"
+      : "native-projective-quad",
+    destinationUvs: FULL_IMAGE_UVS,
+    destinationToSourceHomography: solveUvHomography(
+      FULL_IMAGE_UVS,
+      rasterSourceUvs,
+    ),
+    width,
+    height,
+    x: 0,
+    y: 0,
+  };
+}
+
+function axisAlignedStadiumQuad(uvs) {
+  const uniqueUs = uniqueSortedCoordinates(uvs.map(([u]) => u));
+  const uniqueVs = uniqueSortedCoordinates(uvs.map(([, v]) => v));
+  if (uniqueUs.length !== 2 || uniqueVs.length !== 2) return null;
+  const [minU, maxU] = uniqueUs;
+  const [minV, maxV] = uniqueVs;
+  const sourceUvs = [
+    [minU, maxV],
+    [maxU, maxV],
+    [maxU, minV],
+    [minU, minV],
+  ];
+  const vertexOrder = sourceUvs.map(([sourceU, sourceV]) => (
+    uvs.findIndex(([u, v]) => (
+      Math.abs(u - sourceU) <= Number.EPSILON
+      && Math.abs(v - sourceV) <= Number.EPSILON
+    ))
+  ));
+  if (
+    vertexOrder.some((index) => index < 0)
+    || new Set(vertexOrder).size !== 4
+  ) {
+    return null;
+  }
+  return { sourceUvs, vertexOrder };
+}
+
+function uniqueSortedCoordinates(coordinates) {
+  return [...coordinates]
+    .sort((left, right) => left - right)
+    .filter((coordinate, index, sorted) => (
+      index === 0 || Math.abs(coordinate - sorted[index - 1]) > Number.EPSILON
+    ));
 }
 
 function minimumAreaTriangleBasis(sourceVertexIndexes, uvs) {
@@ -1925,10 +2982,11 @@ function minimumAreaTriangleBasis(sourceVertexIndexes, uvs) {
   return candidates[0].indexes;
 }
 
-function rasterStadiumTriangleCutout({ indexedPages, palette, rgba, spec }) {
+function renderStadiumTriangleCutout({ indexedPages, palette, spec }) {
   const pageIndex = spec.nativePage - 8;
   const indexed = indexedPages[pageIndex];
   if (!indexed) throw new Error(`Native stadium page ${spec.nativePage} is unavailable.`);
+  const raster = Buffer.alloc(spec.width * spec.height * 4);
   for (let y = 0; y < spec.height; y += 1) {
     for (let x = 0; x < spec.width; x += 1) {
       const s = (x + 0.5) / spec.width;
@@ -1939,45 +2997,273 @@ function rasterStadiumTriangleCutout({ indexedPages, palette, rgba, spec }) {
       const sourceX = clamp(Math.floor(sourceU * PAGE_SIZE), 0, PAGE_SIZE - 1);
       const sourceY = clamp(Math.floor((1 - sourceV) * PAGE_SIZE), 0, PAGE_SIZE - 1);
       const paletteIndex = indexed[sourceY * PAGE_SIZE + sourceX];
-      const targetY = spec.y + spec.height - 1 - y;
-      const target = (targetY * STADIUM_ATLAS_WIDTH + spec.x + x) * 4;
-      rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
-      rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
-      rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
-      rgba[target + 3] = spec.alphaMode === "mask" && paletteIndex === 0 ? 0 : 255;
+      const targetY = spec.height - 1 - y;
+      const target = (targetY * spec.width + x) * 4;
+      if (
+        spec.alphaMode === "mask"
+        && paletteIndex === STADIUM_TRANSPARENT_PALETTE_INDEX
+      ) {
+        continue;
+      }
+      raster[target] = expandVgaComponent(palette[paletteIndex * 3]);
+      raster[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
+      raster[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
+      raster[target + 3] = 255;
     }
+  }
+  return raster;
+}
+
+function renderStadiumQuadCutout({ indexedPages, palette, spec }) {
+  const pageIndex = spec.nativePage - 8;
+  const indexed = indexedPages[pageIndex];
+  if (!indexed) throw new Error(`Native stadium page ${spec.nativePage} is unavailable.`);
+  const raster = Buffer.alloc(spec.width * spec.height * 4);
+  for (let y = 0; y < spec.height; y += 1) {
+    for (let x = 0; x < spec.width; x += 1) {
+      const destinationU = (x + 0.5) / spec.width;
+      const destinationV = 1 - (y + 0.5) / spec.height;
+      const [sourceU, sourceV] = applyUvHomography(
+        spec.destinationToSourceHomography,
+        destinationU,
+        destinationV,
+      );
+      const sourceX = clamp(Math.floor(sourceU * PAGE_SIZE), 0, PAGE_SIZE - 1);
+      const sourceY = clamp(Math.floor((1 - sourceV) * PAGE_SIZE), 0, PAGE_SIZE - 1);
+      const paletteIndex = indexed[sourceY * PAGE_SIZE + sourceX];
+      const target = (y * spec.width + x) * 4;
+      if (
+        spec.alphaMode === "mask"
+        && paletteIndex === STADIUM_TRANSPARENT_PALETTE_INDEX
+      ) {
+        continue;
+      }
+      raster[target] = expandVgaComponent(palette[paletteIndex * 3]);
+      raster[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
+      raster[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
+      raster[target + 3] = 255;
+    }
+  }
+  return raster;
+}
+
+function transformStadiumRgbaRaster({ height, raster, transform, width }) {
+  let transformed = { height, raster, width };
+  for (let turn = 0; turn < transform.quarterTurns; turn += 1) {
+    transformed = rotateStadiumRgbaRasterClockwise(transformed);
+  }
+  if (transform.reflectX) {
+    transformed = reflectStadiumRgbaRasterX(transformed);
+  }
+  return transformed;
+}
+
+function rotateStadiumRgbaRasterClockwise({ height, raster, width }) {
+  const rotated = Buffer.alloc(raster.length);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const source = (y * width + x) * 4;
+      const targetX = height - 1 - y;
+      const targetY = x;
+      const target = (targetY * height + targetX) * 4;
+      raster.copy(rotated, target, source, source + 4);
+    }
+  }
+  return {
+    height: width,
+    raster: rotated,
+    width: height,
+  };
+}
+
+function reflectStadiumRgbaRasterX({ height, raster, width }) {
+  const reflected = Buffer.alloc(raster.length);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const source = (y * width + x) * 4;
+      const target = (y * width + width - 1 - x) * 4;
+      raster.copy(reflected, target, source, source + 4);
+    }
+  }
+  return { height, raster: reflected, width };
+}
+
+function transformStadiumRasterUvs(uvs, transform) {
+  return uvs.map(([sourceU, sourceV]) => {
+    let u = sourceU;
+    let v = sourceV;
+    for (let turn = 0; turn < transform.quarterTurns; turn += 1) {
+      [u, v] = [v, 1 - u];
+    }
+    if (transform.reflectX) u = 1 - u;
+    return [u, v];
+  });
+}
+
+function renderStadiumSourceRect({
+  alphaMode,
+  indexedPages,
+  nativePage,
+  padding = 0,
+  palette,
+  sourceRect,
+}) {
+  const indexed = indexedPages[nativePage - 8];
+  if (!indexed) throw new Error(`Native stadium page ${nativePage} is unavailable.`);
+  const width = sourceRect.width + padding * 2;
+  const height = sourceRect.height + padding * 2;
+  const raster = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = sourceRect.x + x - padding;
+      const sourceY = sourceRect.y + y - padding;
+      if (
+        sourceX < 0
+        || sourceX >= PAGE_SIZE
+        || sourceY < 0
+        || sourceY >= PAGE_SIZE
+      ) {
+        continue;
+      }
+      const paletteIndex = indexed[sourceY * PAGE_SIZE + sourceX];
+      const target = (y * width + x) * 4;
+      if (
+        alphaMode === "mask"
+        && paletteIndex === STADIUM_TRANSPARENT_PALETTE_INDEX
+      ) {
+        continue;
+      }
+      raster[target] = expandVgaComponent(palette[paletteIndex * 3]);
+      raster[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
+      raster[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
+      raster[target + 3] = 255;
+    }
+  }
+  return raster;
+}
+
+function renderStadiumIndexedSourceRect({
+  indexedPages,
+  nativePage,
+  padding = 0,
+  sourceRect,
+}) {
+  const indexed = indexedPages[nativePage - 8];
+  if (!indexed) throw new Error(`Native stadium page ${nativePage} is unavailable.`);
+  const width = sourceRect.width + padding * 2;
+  const height = sourceRect.height + padding * 2;
+  const raster = Buffer.alloc(width * height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = sourceRect.x + x - padding;
+      const sourceY = sourceRect.y + y - padding;
+      if (
+        sourceX < 0
+        || sourceX >= PAGE_SIZE
+        || sourceY < 0
+        || sourceY >= PAGE_SIZE
+      ) {
+        continue;
+      }
+      raster[y * width + x] = indexed[sourceY * PAGE_SIZE + sourceX];
+    }
+  }
+  return raster;
+}
+
+function blitStadiumCutout({ rgba, raster, x, y, width, height }) {
+  if (raster.length !== width * height * 4) {
+    throw new Error("Prepared stadium shared raster has an invalid RGBA byte count.");
+  }
+  for (let row = 0; row < height; row += 1) {
+    raster.copy(
+      rgba,
+      ((y + row) * STADIUM_ATLAS_WIDTH + x) * 4,
+      row * width * 4,
+      (row + 1) * width * 4,
+    );
   }
 }
 
-function prepareHudGlyphAtlas(nativeArchive) {
-  const palette = Buffer.from(nativeArchive.recordBytes(0));
-  for (const band of HUD_COLOR_BANDS) {
-    if (band.paletteSelector === 0) continue;
-    const payload = nativeArchive.recordBytes(band.paletteSelector);
-    if (payload.length !== 72) {
-      throw new Error(`HUD palette selector ${band.paletteSelector} is not a 24-colour kit palette.`);
-    }
-    payload.copy(palette, band.paletteTargetIndex * 3);
+function scaleStadiumRgbaRasterNearest({ height, raster, scale, width }) {
+  if (
+    !Buffer.isBuffer(raster)
+    || raster.length !== width * height * 4
+    || !Number.isSafeInteger(scale)
+    || scale <= 0
+  ) {
+    throw new Error("Prepared stadium RGBA source cannot be scaled.");
   }
-  const sourcePage = nativeArchive.recordBytes(PINNED_NATIVE_ARCHIVE.glyphPage.selector);
+  const scaledWidth = width * scale;
+  const scaledHeight = height * scale;
+  const scaled = Buffer.alloc(scaledWidth * scaledHeight * 4);
+  for (let sourceY = 0; sourceY < height; sourceY += 1) {
+    for (let sourceX = 0; sourceX < width; sourceX += 1) {
+      const sourceOffset = (sourceY * width + sourceX) * 4;
+      for (let offsetY = 0; offsetY < scale; offsetY += 1) {
+        for (let offsetX = 0; offsetX < scale; offsetX += 1) {
+          const targetX = sourceX * scale + offsetX;
+          const targetY = sourceY * scale + offsetY;
+          const targetOffset = (targetY * scaledWidth + targetX) * 4;
+          raster.copy(scaled, targetOffset, sourceOffset, sourceOffset + 4);
+        }
+      }
+    }
+  }
+  return {
+    height: scaledHeight,
+    raster: scaled,
+    width: scaledWidth,
+  };
+}
+
+function prepareHudGlyphAtlas(nativeArchive, matchPalette) {
+  if (!Buffer.isBuffer(matchPalette) || matchPalette.length !== 256 * 3) {
+    throw new Error("Prepared HUD glyphs require the exact 256-entry match palette.");
+  }
+  const palette = Buffer.from(matchPalette);
+  const sourcePages = new Map([
+    [
+      HUD_NORMAL_FONT.id,
+      nativeArchive.recordBytes(HUD_NORMAL_FONT.sourcePageSelector),
+    ],
+    [
+      HUD_MENU_FONT.id,
+      nativeArchive.recordBytes(PINNED_NATIVE_ARCHIVE.glyphPage.selector),
+    ],
+  ]);
   const rgba = Buffer.alloc(HUD_GLYPH_ATLAS_WIDTH * HUD_GLYPH_ATLAS_HEIGHT * 4);
   for (const [bandIndex, band] of HUD_COLOR_BANDS.entries()) {
-    for (let y = 0; y < HUD_GLYPH_BAND_HEIGHT; y += 1) {
-      for (let x = 0; x < HUD_GLYPH_ATLAS_WIDTH; x += 1) {
-        const sourceIndex = sourcePage[
-          (HUD_FONT.sourcePitchRow + y) * PAGE_SIZE + HUD_FONT.sourceX + x
-        ];
-        const target = (
-          (bandIndex * HUD_GLYPH_BAND_HEIGHT + y) * HUD_GLYPH_ATLAS_WIDTH + x
-        ) * 4;
-        if (sourceIndex === 0) continue;
-        const paletteIndex = sourceIndex === 1
-          ? band.outputColorIndex
-          : sourceIndex - 1;
-        rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
-        rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
-        rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
-        rgba[target + 3] = 255;
+    for (const font of HUD_FONTS) {
+      const sourcePage = sourcePages.get(font.id);
+      const sourceWidth = font.columns * font.cellWidth;
+      const sourceHeight = font.rows * font.cellHeight;
+      for (let y = 0; y < sourceHeight; y += 1) {
+        for (let x = 0; x < sourceWidth; x += 1) {
+          const sourceIndex = sourcePage[
+            (font.sourcePitchRow + y) * PAGE_SIZE + font.sourceX + x
+          ];
+          if (sourceIndex === 0) continue;
+          const paletteIndex = sourceIndex === 1
+            ? band.outputColorIndex
+            : sourceIndex - 1;
+          for (let scaleY = 0; scaleY < font.presentationScale; scaleY += 1) {
+            for (let scaleX = 0; scaleX < font.presentationScale; scaleX += 1) {
+              const targetX = x * font.presentationScale + scaleX;
+              const targetY = bandIndex * HUD_GLYPH_BAND_HEIGHT
+                + font.atlasBandY
+                + y * font.presentationScale
+                + scaleY;
+              const target = (
+                targetY * HUD_GLYPH_ATLAS_WIDTH + targetX
+              ) * 4;
+              rgba[target] = expandVgaComponent(palette[paletteIndex * 3]);
+              rgba[target + 1] = expandVgaComponent(palette[paletteIndex * 3 + 1]);
+              rgba[target + 2] = expandVgaComponent(palette[paletteIndex * 3 + 2]);
+              rgba[target + 3] = 255;
+            }
+          }
+        }
       }
     }
   }
@@ -2039,9 +3325,12 @@ export function bindCssoccerStadiumTexture(preparation, sourceColorCode) {
   if (
     !preparation
     || !Array.isArray(preparation.stadiumTextureRecords)
-    || !Array.isArray(preparation.stadiumPageMaterials)
     || !Array.isArray(preparation.stadiumTriangleCutouts)
     || !Array.isArray(preparation.stadiumTriangleMaterials)
+    || !Array.isArray(preparation.stadiumQuadCutouts)
+    || !Array.isArray(preparation.stadiumQuadMaterials)
+    || !Array.isArray(preparation.stadiumScanlineSourceCutouts)
+    || !Array.isArray(preparation.stadiumScanlineSourceMaterials)
   ) {
     throw new TypeError("Stadium texture binding requires the prepared native stadium atlas.");
   }
@@ -2050,44 +3339,171 @@ export function bindCssoccerStadiumTexture(preparation, sourceColorCode) {
     ? -sourceColorCode - 2001
     : -sourceColorCode - 1;
   const record = preparation.stadiumTextureRecords[textureIndex];
-  const atlasPage = record ? record.page - 8 : -1;
+  const sourcePageIndex = record ? record.page - 8 : -1;
   if (
     !record
-    || atlasPage < 0
-    || atlasPage >= STADIUM_PAGE_COUNT
+    || sourcePageIndex < 0
+    || sourcePageIndex >= STADIUM_PAGE_COUNT
   ) {
     return null;
   }
-  const triangleCutouts = preparation.stadiumTriangleCutouts
-    .filter((entry) => entry.textureIndex === textureIndex);
-  const triangleMaterials = preparation.stadiumTriangleMaterials[textureIndex];
-  const expectedTriangleCount = record.vertexCount === 3 ? 1 : 2;
   const transparent = sourceColorCode < -2000;
-  const material = preparation.stadiumPageMaterials[atlasPage];
+  const alphaMode = transparent ? "mask" : "opaque";
+  const sourceTextureFixed = Object.freeze(Array.from(
+    { length: record.vertexCount },
+    (_unused, index) => Object.freeze([
+      record.preparedWords[record.vertexCount + index] & 0x00ff_ffff,
+      record.preparedWords[index] & 0x00ff_ffff,
+    ]),
+  ));
+  if (record.vertexCount === 3) {
+    const triangleCutouts = preparation.stadiumTriangleCutouts
+      .filter((entry) => entry.textureIndex === textureIndex);
+    const triangleMaterials = preparation.stadiumTriangleMaterials[textureIndex];
+    const triangleCutout = triangleCutouts[0];
+    if (
+      triangleCutouts.length !== 1
+      || !Array.isArray(triangleMaterials)
+      || triangleMaterials.length !== 1
+      || !triangleMaterials[0]?.imageSource
+      || triangleMaterials[0].presentation?.projection !== "affine"
+      || triangleCutout.alphaMode !== alphaMode
+      || !Array.isArray(triangleCutout.atlasUvs)
+      || triangleCutout.atlasUvs.length !== 4
+      || !Array.isArray(triangleCutout.basisVertexIndexes)
+      || triangleCutout.basisVertexIndexes.length !== 3
+      || [...triangleCutout.basisVertexIndexes].sort().join(",") !== "0,1,2"
+    ) {
+      return null;
+    }
+    const vertexOrder = triangleCutout.basisVertexIndexes;
+    const {
+      scanlineSourceCutout,
+      scanlineSourceMaterial,
+    } = bindStadiumScanlineSource(preparation, triangleCutout);
+    return deepFreeze({
+      sourceColorCode,
+      textureIndex,
+      nativePage: record.page,
+      sourcePageIndex,
+      vertexCount: record.vertexCount,
+      transparent,
+      sourceUvs: vertexOrder.map((vertexIndex) => record.uvs[vertexIndex]),
+      sourceTextureFixed: vertexOrder.map((vertexIndex) => (
+        sourceTextureFixed[vertexIndex]
+      )),
+      vertexOrder,
+      triangleCutouts,
+      triangleMaterials,
+      cutoutUvs: triangleCutout.atlasUvs,
+      scanlineSourceCutout,
+      scanlineSourceMaterial,
+      textureRecordSha256: record.sha256,
+    });
+  }
+
+  const quadCutout = preparation.stadiumQuadCutouts
+    .find((entry) => entry.textureIndex === textureIndex);
+  const material = preparation.stadiumQuadMaterials[textureIndex];
   if (
-    !material
-    || triangleCutouts.length !== expectedTriangleCount
-    || !Array.isArray(triangleMaterials)
-    || triangleMaterials.length !== expectedTriangleCount
-    || triangleMaterials.some((entry) => !entry)
-    || triangleCutouts.some(({ alphaMode }) => alphaMode !== (transparent ? "mask" : "opaque"))
+    !quadCutout
+    || quadCutout.alphaMode !== alphaMode
+    || !Array.isArray(quadCutout.atlasUvs)
+    || quadCutout.atlasUvs.length !== 4
+    || !material?.imageSource
+    || material.presentation?.projection !== "projective"
   ) {
     return null;
+  }
+  const vertexOrder = quadCutout.vertexOrder;
+  if (
+    !Array.isArray(vertexOrder)
+    || vertexOrder.length !== 4
+    || [...vertexOrder].sort().join(",") !== "0,1,2,3"
+  ) {
+    return null;
+  }
+  let {
+    scanlineSourceCutout,
+    scanlineSourceMaterial,
+  } = bindStadiumScanlineSource(preparation, quadCutout);
+  if (!scanlineSourceCutout) {
+    scanlineSourceCutout = preparation.stadiumQuadCutouts
+      .filter((entry) => (
+        entry.nativePage === quadCutout.nativePage
+        && entry.sourceRasterOrientation === "canonical-axis-aligned-source-rect"
+        && sameStadiumSourceRect(entry.sourceRect, quadCutout.sourceRect)
+      ))
+      .sort((left, right) => left.textureIndex - right.textureIndex)[0] ?? null;
+    scanlineSourceMaterial = scanlineSourceCutout
+      ? preparation.stadiumQuadMaterials[scanlineSourceCutout.textureIndex]
+      : null;
   }
   return deepFreeze({
     sourceColorCode,
     textureIndex,
     nativePage: record.page,
-    atlasPage,
+    sourcePageIndex,
     vertexCount: record.vertexCount,
     transparent,
+    sourceUvs: vertexOrder.map((vertexIndex) => record.uvs[vertexIndex]),
+    sourceTextureFixed: vertexOrder.map((vertexIndex) => (
+      sourceTextureFixed[vertexIndex]
+    )),
+    vertexOrder,
+    quadCutout,
     material,
-    sourceUvs: record.uvs,
-    triangleCutouts,
-    triangleMaterials,
-    cutoutUvs: FULL_IMAGE_UVS,
+    scanlineSourceCutout,
+    scanlineSourceMaterial,
+    uvs: quadCutout.atlasUvs,
     textureRecordSha256: record.sha256,
   });
+}
+
+function bindStadiumScanlineSource(preparation, cutout) {
+  const scanlineSourceIndex = preparation.stadiumScanlineSourceCutouts
+    .findIndex((entry) => entry.sourceRects.some((sourceRect) => (
+      sourceRect.nativePage === cutout.nativePage
+      && sameStadiumSourceRect(sourceRect, cutout.sourceRect)
+    )));
+  if (scanlineSourceIndex < 0) {
+    return {
+      scanlineSourceCutout: null,
+      scanlineSourceMaterial: null,
+    };
+  }
+  const preparedCutout =
+    preparation.stadiumScanlineSourceCutouts[scanlineSourceIndex];
+  const nativeRasterMapping = preparedCutout.nativeRasterMappings
+    ?.find((entry) => (
+      entry.nativePage === cutout.nativePage
+      && sameStadiumSourceRect(entry, cutout.sourceRect)
+    ));
+  if (!nativeRasterMapping) {
+    throw new Error(
+      `Prepared stadium scanline source lost texture ${cutout.textureIndex}.`,
+    );
+  }
+  return {
+    scanlineSourceCutout: {
+      ...preparedCutout,
+      nativePage: cutout.nativePage,
+      nativeRasterOffsetX: nativeRasterMapping.rasterOffsetX,
+      nativeRasterOffsetY: nativeRasterMapping.rasterOffsetY,
+      sourceRect: { ...cutout.sourceRect },
+    },
+    scanlineSourceMaterial:
+      preparation.stadiumScanlineSourceMaterials[scanlineSourceIndex],
+  };
+}
+
+function sameStadiumSourceRect(left, right) {
+  return (
+    left?.x === right?.x
+    && left?.y === right?.y
+    && left?.width === right?.width
+    && left?.height === right?.height
+  );
 }
 
 /** Bind one exact masked BM_NETS goal surface prepared from native page 15. */
@@ -2095,8 +3511,8 @@ export function bindCssoccerGoalNetTexture(preparation, sourceColorCode) {
   if (
     !preparation
     || !Array.isArray(preparation.goalNetTextureRecords)
-    || !Array.isArray(preparation.goalNetTriangleCutouts)
-    || !Array.isArray(preparation.goalNetTriangleMaterials)
+    || !Array.isArray(preparation.goalNetQuadCutouts)
+    || !Array.isArray(preparation.goalNetQuadMaterials)
   ) {
     throw new TypeError("Goal-net texture binding requires the prepared native BM_NETS atlas.");
   }
@@ -2113,15 +3529,14 @@ export function bindCssoccerGoalNetTexture(preparation, sourceColorCode) {
   ) {
     return null;
   }
-  const triangleCutouts = preparation.goalNetTriangleCutouts
-    .filter((entry) => entry.textureIndex === textureIndex);
-  const triangleMaterials = preparation.goalNetTriangleMaterials[textureIndex];
+  const quadCutout = preparation.goalNetQuadCutouts
+    .find((entry) => entry.textureIndex === textureIndex);
+  const material = preparation.goalNetQuadMaterials[textureIndex];
   if (
-    triangleCutouts.length !== 2
-    || !Array.isArray(triangleMaterials)
-    || triangleMaterials.length !== 2
-    || triangleMaterials.some((entry) => !entry?.imageSource)
-    || triangleCutouts.some(({ alphaMode }) => alphaMode !== "mask")
+    !quadCutout
+    || !material?.imageSource
+    || material.presentation?.projection !== "projective"
+    || quadCutout.alphaMode !== "mask"
   ) {
     return null;
   }
@@ -2134,40 +3549,44 @@ export function bindCssoccerGoalNetTexture(preparation, sourceColorCode) {
     vertexCount: record.vertexCount,
     transparent: true,
     sourceUvs: record.uvs,
-    triangleCutouts,
-    triangleMaterials,
-    cutoutUvs: FULL_IMAGE_UVS,
+    quadCutout,
+    material,
+    uvs: FULL_IMAGE_UVS,
     textureRecordSha256: record.sha256,
   });
 }
 
 
-function preparePalette(nativeArchive) {
+function preparePalette({
+  nativeArchive,
+  retailArchive,
+  demoArchive,
+}) {
   const palette = Buffer.from(
     nativeArchive.recordBytes(NATIVE_PLAYER_SELECTORS.palette),
   );
   copyPalette(
-    nativeArchive,
+    demoArchive,
     palette,
-    NATIVE_PLAYER_SELECTORS.teamAKitPalette,
+    SELECTORS.paletteOverrides.spainKit,
     32,
   );
   copyPalette(
-    nativeArchive,
+    retailArchive,
     palette,
-    NATIVE_PLAYER_SELECTORS.teamBKitPalette,
+    RETAIL_PLAYER_SELECTORS.argentinaKitPalette,
     56,
   );
   copyPalette(
-    nativeArchive,
+    demoArchive,
     palette,
-    NATIVE_PLAYER_SELECTORS.teamASkinPalette,
+    SELECTORS.paletteOverrides.argentinaSkin,
     80,
   );
   copyPalette(
-    nativeArchive,
+    demoArchive,
     palette,
-    NATIVE_PLAYER_SELECTORS.teamBSkinPalette,
+    SELECTORS.paletteOverrides.argentinaSkin,
     88,
   );
   copyPalette(
@@ -2219,16 +3638,33 @@ function preparePlayerTextureTableBytes(nativeArchive) {
 
 function preparePlayerPages(
   nativeArchive,
+  retailArchive,
+  demoArchive,
   textureRecords,
 ) {
   const pages = Array.from({ length: PLAYER_PAGE_COUNT }, () => Buffer.alloc(PAGE_SIZE * PAGE_SIZE));
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamAHead, pages[0], 0);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamBHead, pages[0], 128 * PAGE_SIZE);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamATorso, pages[1], 0);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamBTorso, pages[2], 0);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamALimbs, pages[3], 0);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.teamBLimbs, pages[3], 80 * PAGE_SIZE);
-  copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.sharedFeet, pages[3], 158 * PAGE_SIZE);
+  copyIntoPage(demoArchive, SELECTORS.player.argentinaHead, pages[0], 0);
+  copyIntoPage(
+    demoArchive,
+    SELECTORS.player.argentinaHead,
+    pages[0],
+    128 * PAGE_SIZE,
+  );
+  copyIntoPage(demoArchive, SELECTORS.player.spainTorso, pages[1], 0);
+  copyIntoPage(retailArchive, RETAIL_PLAYER_SELECTORS.argentinaTorso, pages[2], 0);
+  copyIntoPage(demoArchive, SELECTORS.player.spainLimbs, pages[3], 0);
+  copyIntoPage(
+    demoArchive,
+    SELECTORS.player.argentinaLimbs,
+    pages[3],
+    80 * PAGE_SIZE,
+  );
+  copyIntoPage(
+    nativeArchive,
+    NATIVE_PLAYER_SELECTORS.sharedFeet,
+    pages[3],
+    158 * PAGE_SIZE,
+  );
   copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.keeperTorso, pages[4], 0);
   copyIntoPage(nativeArchive, NATIVE_PLAYER_SELECTORS.keeperLimbs, pages[5], 0);
   copyIntoPage(
@@ -2238,14 +3674,14 @@ function preparePlayerPages(
     0,
   );
   copyIntoPage(
-    nativeArchive,
-    NATIVE_PLAYER_SELECTORS.teamANumbers,
+    retailArchive,
+    RETAIL_PLAYER_SELECTORS.spainNumbers,
     pages[6],
     62 * PAGE_SIZE,
   );
   copyIntoPage(
-    nativeArchive,
-    NATIVE_PLAYER_SELECTORS.teamBNumbers,
+    retailArchive,
+    RETAIL_PLAYER_SELECTORS.argentinaNumbers,
     pages[6],
     89 * PAGE_SIZE,
   );
@@ -2304,27 +3740,30 @@ function preparePlayerSourceAudit(pages, textureRecords) {
     };
   });
   return deepFreeze({
-    authority: "retained exact player_f1 fixture capture",
+    authority: "qualified native fixture page composition and exact player texture table",
     page: 3,
     pageSha256: EXACT_PLAYER_PAGE_THREE_SHA256,
     sourceRecords: [
       {
         id: "renderer-slot-0-limbs",
-        archive: "EUROREND.DAT",
-        selector: NATIVE_PLAYER_SELECTORS.teamALimbs,
+        archive: "official playable-demo ACTREND.DAT",
+        symbol: "BM_LIMBS2",
+        selector: SELECTORS.player.spainLimbs,
         y: 0,
         bytes: 19_968,
       },
       {
         id: "renderer-slot-1-limbs",
-        archive: "EUROREND.DAT",
-        selector: NATIVE_PLAYER_SELECTORS.teamBLimbs,
+        archive: "official playable-demo ACTREND.DAT",
+        symbol: "BM_LIMBS1",
+        selector: SELECTORS.player.argentinaLimbs,
         y: 80,
         bytes: 19_968,
       },
       {
         id: "exact-source-feet",
-        archive: "EUROREND.DAT",
+        archive: "retained native EUROREND.DAT",
+        symbol: "renderer shared feet",
         selector: NATIVE_PLAYER_SELECTORS.sharedFeet,
         y: 158,
         bytes: 17_152,
@@ -2809,6 +4248,7 @@ function createAtlasMaterial({
   imageWidth = ATLAS_WIDTH,
   imageHeight = ATLAS_HEIGHT,
   imageRendering = "pixelated",
+  projection = "affine",
 }) {
   return deepFreeze({
     texture: assetUrl,
@@ -2823,7 +4263,7 @@ function createAtlasMaterial({
     presentation: {
       backend: "image",
       lighting: "source",
-      projection: "affine",
+      projection,
       imageRendering,
     },
     assetSha256,

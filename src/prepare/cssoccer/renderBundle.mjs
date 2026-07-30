@@ -10,6 +10,8 @@ import { Window } from "happy-dom";
 export const CSSOCCER_RENDER_BUNDLE_SCHEMA = "cssoccer-prepared-render-bundle@1";
 export const CSSOCCER_RENDER_FRAME_SET_SCHEMA = "cssoccer-prepared-render-frame-set@1";
 const INLINE_FRAME_LEAF_STYLES = "inline-css-text@1";
+const NATIVE_STADIUM_SCANLINE_RASTER_SCHEMA =
+  "cssoccer-prepared-native-stadium-scanline-raster@4";
 
 const POLYCSS_VERSION = readPolycssVersion();
 const SAFE_ID = /^[a-z0-9](?:[a-z0-9_-]{0,78}[a-z0-9])?$/u;
@@ -211,12 +213,24 @@ async function buildFrameSetInternal({ id, frames }) {
         renderedFrames.push(capture.frame);
       }
 
-      const topology = firstCapture.frame.leaves.map(({ tag, classes, sourcePolygonIndex }, index) => ({
+      const topology = firstCapture.frame.leaves.map((
+        { tag, classes, sourcePolygonIndex },
         index,
-        tag,
-        classes,
-        sourcePolygonIndex,
-      }));
+      ) => {
+        const sourcePolygon = preparedFrames[0].polygons[sourcePolygonIndex];
+        const marking = sourcePolygon.marking ?? null;
+        const materialProjection = sourcePolygon.material?.presentation?.projection ?? null;
+        const nativeTextureRaster = sourcePolygon.nativeTextureRaster ?? null;
+        return {
+          index,
+          tag,
+          classes,
+          sourcePolygonIndex,
+          ...(marking ? { marking } : {}),
+          ...(materialProjection ? { materialProjection } : {}),
+          ...(nativeTextureRaster ? { nativeTextureRaster } : {}),
+        };
+      });
       const baseLeafStyles = preparedLeafStyles(firstCapture.frame, preparedFrames[0]);
       const topologyHash = sha256(canonicalJson(topology));
       const styleToken = sha256(canonicalJson({
@@ -413,7 +427,9 @@ function preparePolygon(polygon, frameId, polygonIndex) {
   const marking = prepareMarkingPresentation(polygon.marking, vertices, frameId, polygonIndex);
   if (polygon.material === undefined) {
     if (polygon.uvs !== undefined || polygon.textureAlphaMode !== undefined
-        || polygon.preparedPlayerNumberTextures !== undefined || marking) {
+        || polygon.preparedPlayerNumberTextures !== undefined
+        || polygon.nativeTextureRaster !== undefined
+        || marking) {
       throw new Error(`${frameId} polygon ${polygonIndex} has texture fields without a material.`);
     }
     return Object.freeze({
@@ -424,6 +440,12 @@ function preparePolygon(polygon, frameId, polygonIndex) {
   }
   const material = prepareMaterial(polygon.material, frameId, polygonIndex);
   const uvs = prepareUvs(polygon.uvs, vertices.length, frameId, polygonIndex);
+  const nativeTextureRaster = prepareNativeTextureRaster(
+    polygon.nativeTextureRaster,
+    material,
+    frameId,
+    polygonIndex,
+  );
   if (polygon.textureStyleRemap !== undefined
       || polygon.preparedPlayerNumberTextures !== undefined) {
     throw new Error(`${frameId} polygon ${polygonIndex} uses an obsolete player presentation field.`);
@@ -439,7 +461,99 @@ function preparePolygon(polygon, frameId, polygonIndex) {
     textureAlphaMode,
     uvs,
     ...(marking ? { marking } : {}),
+    ...(nativeTextureRaster ? { nativeTextureRaster } : {}),
     ...(doubleSided ? { doubleSided: true } : {}),
+  });
+}
+
+function prepareNativeTextureRaster(value, material, frameId, polygonIndex) {
+  if (value === undefined) return null;
+  if (
+    !value
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || Object.keys(value).sort().join(",")
+      !== "atlasHeight,atlasSourceRect,atlasWidth,interpolation,nativePage,nativeSourceTextureFixed,rasterScale,rasterTextureFixed,schema,sourceRasterHeight,sourceRasterId,sourceRasterWidth,textureIndex,vertexCount"
+    || value.schema !== NATIVE_STADIUM_SCANLINE_RASTER_SCHEMA
+    || value.interpolation !== "polym-screen-space-fixed16"
+    || ![8, 9].includes(value.nativePage)
+    || !Number.isSafeInteger(value.textureIndex)
+    || value.textureIndex < 0
+    || value.textureIndex >= 49
+    || ![3, 4].includes(value.vertexCount)
+    || (
+      value.vertexCount === 3
+        ? material.presentation.projection !== "affine"
+        : material.presentation.projection !== "projective"
+    )
+    || !Number.isSafeInteger(value.atlasWidth)
+    || value.atlasWidth !== material.imageSource.width
+    || !Number.isSafeInteger(value.atlasHeight)
+    || value.atlasHeight !== material.imageSource.height
+    || !Number.isSafeInteger(value.rasterScale)
+    || value.rasterScale <= 0
+    || !SAFE_ID.test(value.sourceRasterId ?? "")
+    || !Number.isSafeInteger(value.sourceRasterWidth)
+    || value.sourceRasterWidth <= 0
+    || !Number.isSafeInteger(value.sourceRasterHeight)
+    || value.sourceRasterHeight <= 0
+    || !value.atlasSourceRect
+    || typeof value.atlasSourceRect !== "object"
+    || Array.isArray(value.atlasSourceRect)
+    || Object.keys(value.atlasSourceRect).sort().join(",") !== "height,width,x,y"
+    || ![value.atlasSourceRect.x, value.atlasSourceRect.y]
+      .every((entry) => Number.isSafeInteger(entry) && entry >= 0)
+    || ![value.atlasSourceRect.width, value.atlasSourceRect.height]
+      .every((entry) => Number.isSafeInteger(entry) && entry > 0)
+    || value.atlasSourceRect.x + value.atlasSourceRect.width > value.atlasWidth
+    || value.atlasSourceRect.y + value.atlasSourceRect.height > value.atlasHeight
+    || !Array.isArray(value.nativeSourceTextureFixed)
+    || value.nativeSourceTextureFixed.length !== value.vertexCount
+    || value.nativeSourceTextureFixed.some((coordinate) => (
+      !Array.isArray(coordinate)
+      || coordinate.length !== 2
+      || coordinate.some((entry) => (
+        !Number.isSafeInteger(entry)
+        || entry < 0
+        || entry > 0x00ff_ffff
+      ))
+    ))
+    || !Array.isArray(value.rasterTextureFixed)
+    || value.rasterTextureFixed.length !== value.vertexCount
+    || value.rasterTextureFixed.some((coordinate) => (
+      !Array.isArray(coordinate)
+      || coordinate.length !== 2
+      || coordinate.some((entry, axis) => (
+        !Number.isSafeInteger(entry)
+        || entry < 0
+        || entry > [
+          value.sourceRasterWidth,
+          value.sourceRasterHeight,
+        ][axis] * 0x0001_0000
+      ))
+    ))
+  ) {
+    throw new Error(
+      `${frameId} polygon ${polygonIndex} native stadium scanline metadata is invalid.`,
+    );
+  }
+  return deepFreeze({
+    schema: NATIVE_STADIUM_SCANLINE_RASTER_SCHEMA,
+    interpolation: value.interpolation,
+    nativePage: value.nativePage,
+    textureIndex: value.textureIndex,
+    vertexCount: value.vertexCount,
+    atlasWidth: value.atlasWidth,
+    atlasHeight: value.atlasHeight,
+    atlasSourceRect: { ...value.atlasSourceRect },
+    rasterScale: value.rasterScale,
+    sourceRasterId: value.sourceRasterId,
+    sourceRasterWidth: value.sourceRasterWidth,
+    sourceRasterHeight: value.sourceRasterHeight,
+    nativeSourceTextureFixed: value.nativeSourceTextureFixed.map((coordinate) => (
+      [...coordinate]
+    )),
+    rasterTextureFixed: value.rasterTextureFixed.map((coordinate) => [...coordinate]),
   });
 }
 
@@ -452,7 +566,7 @@ function prepareMarkingPresentation(value, vertices, frameId, polygonIndex) {
   if (
     JSON.stringify(keys) !== JSON.stringify(["id", "kind"])
     || !SAFE_ID.test(value.id)
-    || !new Set(["solid", "solid-circle"]).has(value.kind)
+    || !new Set(["native-screen-line", "solid", "solid-circle"]).has(value.kind)
   ) {
     throw new Error(`${frameId} polygon ${polygonIndex} marking presentation changed.`);
   }
@@ -513,7 +627,7 @@ function prepareMaterial(material, frameId, polygonIndex) {
     !presentation
     || presentation.backend !== "image"
     || presentation.lighting !== "source"
-    || presentation.projection !== "affine"
+    || !new Set(["affine", "projective"]).has(presentation.projection)
     || !new Set(["auto", "pixelated"]).has(presentation.imageRendering)
     || Object.keys(presentation).sort().join(",")
       !== "backend,imageRendering,lighting,projection"
@@ -538,7 +652,7 @@ function prepareMaterial(material, frameId, polygonIndex) {
     presentation: {
       backend: "image",
       lighting: "source",
-      projection: "affine",
+      projection: presentation.projection,
       imageRendering: presentation.imageRendering,
     },
     assetSha256: material.assetSha256,

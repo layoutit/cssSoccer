@@ -2,9 +2,18 @@ import { decodeCssoccerPitchSlice } from "./pitchParser.mjs";
 import { mergeCssoccerPreparedPolygons } from "./sceneMerge.mjs";
 
 export const CSSOCCER_STATIC_SCENE_SCHEMA = "cssoccer-prepared-static-scene@1";
+const NATIVE_PITCH_LINE_OBJECTS = Object.freeze([
+  Object.freeze({ id: "l1", lineCount: 6 }),
+  Object.freeze({ id: "l2", lineCount: 6 }),
+  Object.freeze({ id: "l3", lineCount: 6 }),
+  Object.freeze({ id: "l4", lineCount: 6 }),
+  Object.freeze({ id: "l5", lineCount: 2 }),
+  Object.freeze({ id: "l6", lineCount: 2 }),
+]);
 
 export async function buildCssoccerPitchPreparedScene({ sourceRoot, facts } = {}) {
   const slice = await decodeCssoccerPitchSlice({ sourceRoot, facts });
+  const pitchLineRaster = prepareNativePitchLineRaster(slice.objects);
   const meshGroups = groupObjects(slice.objects);
   const meshes = [];
   const mergeMetrics = [];
@@ -39,6 +48,7 @@ export async function buildCssoccerPitchPreparedScene({ sourceRoot, facts } = {}
     status: "ready",
     axes: slice.axes,
     dimensions: slice.dimensions,
+    pitchLineRaster,
     cameraAnchor: {
       status: "prepared-static-framing; parent B9 owns native camera binding",
       target: [640, 0, -400],
@@ -59,6 +69,73 @@ export async function buildCssoccerPitchPreparedScene({ sourceRoot, facts } = {}
       materialBuildCount: 0,
       atlasBuildCount: 0,
     },
+  });
+}
+
+function prepareNativePitchLineRaster(objects) {
+  const segments = [];
+  for (const expected of NATIVE_PITCH_LINE_OBJECTS) {
+    const object = objects.find(({ sourceObject }) => sourceObject === expected.id);
+    if (
+      !object
+      || object.role !== "marking"
+      || !Array.isArray(object.sourceLineSegments)
+      || object.sourceLineSegments.length !== expected.lineCount
+    ) {
+      throw new Error(`Prepared native pitch-line raster lost ${expected.id}.`);
+    }
+    for (const [faceIndex, segment] of object.sourceLineSegments.entries()) {
+      if (
+        segment.id !== `${expected.id}:face:${faceIndex}`
+        || segment.object !== expected.id
+        || segment.sourceFaceIndex !== faceIndex
+        || segment.sourceColorCode !== 22
+        || !Array.isArray(segment.points)
+        || segment.points.length !== 2
+        || segment.points.some((point) => (
+          !Array.isArray(point)
+          || point.length !== 3
+          || point.some((value) => !Number.isFinite(value))
+        ))
+      ) {
+        throw new Error(`Prepared native pitch-line segment ${expected.id}:${faceIndex} changed.`);
+      }
+      segments.push({
+        id: segment.id,
+        object: segment.object,
+        sourceFaceIndex: segment.sourceFaceIndex,
+        points: segment.points.map((point) => [...point]),
+      });
+    }
+  }
+  if (segments.length !== 28 || new Set(segments.map(({ id }) => id)).size !== 28) {
+    throw new Error("Prepared native pitch-line raster must retain 28 unique source lines.");
+  }
+  return deepFreeze({
+    schema: "cssoccer-prepared-native-pitch-line-raster@1",
+    status: "ready",
+    viewport: { width: 640, height: 400 },
+    palette: { sourceIndex: 22, color: "#aeaeae" },
+    projection: {
+      sourceFile: "3DENG.C",
+      coordinateType: "scrpt signed int",
+      quantization: "truncate-toward-zero",
+      browserY: "height-1-trunc(height-y)",
+    },
+    raster: {
+      sourceFile: "Render.c",
+      routine: "line",
+      fixedPointFractionBits: 16,
+      endpointInclusive: true,
+      antialias: false,
+    },
+    fallback: {
+      rootId: "pitch-markings",
+      preparedMarkingKind: "native-screen-line",
+      logicalLeafCount: 17,
+      composition: "retained-world-polygon-plus-native-screen-line",
+    },
+    segments,
   });
 }
 

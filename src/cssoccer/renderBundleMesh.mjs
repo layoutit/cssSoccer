@@ -6,6 +6,8 @@ import {
 const RENDER_BUNDLE_SCHEMA = "cssoccer-prepared-render-bundle@1";
 const RENDER_FRAME_SET_SCHEMA = "cssoccer-prepared-render-frame-set@1";
 const INLINE_FRAME_LEAF_STYLES = "inline-css-text@1";
+const NATIVE_STADIUM_SCANLINE_RASTER_SCHEMA =
+  "cssoccer-prepared-native-stadium-scanline-raster@4";
 export const CSSOCCER_PACKED_FRAME_LEAF_STYLES = "cssquake-packed-frame-styles@3";
 const PACKED_FRAME_STYLES_SCHEMA = "cssoccer-packed-render-frame-styles@1";
 const PACKED_FRAME_STYLES_VERSION = 3;
@@ -16,6 +18,8 @@ const SAFE_STYLE_CLASS = /^cssoccer-rb-[0-9a-f]{16}$/u;
 const SAFE_LEAF_CLASS = /^cssoccer-rbl-[0-9a-z]+$/u;
 const SAFE_FRAME_STYLE_PATH = /^assets\/animation\/[a-z0-9][a-z0-9_-]*\/(?:slot-[0-9]{3}|frames-[0-9]{6}-[0-9]{6})\.json$/u;
 const SAFE_PREPARED_LEAF_CLASSES = new Set(["cssoccer-two-sided-face"]);
+const SAFE_MARKING_KINDS = new Set(["native-screen-line", "solid", "solid-circle"]);
+const SAFE_MATERIAL_PROJECTIONS = new Set(["affine", "projective"]);
 const LEAF_TAGS = new Set(["b", "i", "s", "u"]);
 const SAFE_ASSET_URL = /^\/cssoccer\/assets\/textures\/[A-Za-z0-9][A-Za-z0-9._-]*\.png$/u;
 const SAFE_ROOT_PROPERTIES = new Set(["--polycss-paint"]);
@@ -765,6 +769,103 @@ function validateLeaf(leaf, index, polygonCount, previousLeaf) {
           && !name.startsWith("polycss-"))
       ))) {
     throw new Error(`Prepared render bundle leaf ${index} classes are invalid.`);
+  }
+  if (
+    leaf.marking !== undefined
+    && (
+      !leaf.marking
+      || typeof leaf.marking !== "object"
+      || Array.isArray(leaf.marking)
+      || Object.keys(leaf.marking).sort().join(",") !== "id,kind"
+      || !SAFE_ID.test(leaf.marking.id ?? "")
+      || !SAFE_MARKING_KINDS.has(leaf.marking.kind)
+    )
+  ) {
+    throw new Error(`Prepared render bundle leaf ${index} marking metadata is invalid.`);
+  }
+  if (
+    leaf.materialProjection !== undefined
+    && !SAFE_MATERIAL_PROJECTIONS.has(leaf.materialProjection)
+  ) {
+    throw new Error(
+      `Prepared render bundle leaf ${index} material projection metadata is invalid.`,
+    );
+  }
+  if (leaf.nativeTextureRaster !== undefined) {
+    validateNativeTextureRaster(leaf.nativeTextureRaster, leaf, index);
+  }
+}
+
+function validateNativeTextureRaster(value, leaf, index) {
+  if (
+    !value
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || Object.keys(value).sort().join(",")
+      !== "atlasHeight,atlasSourceRect,atlasWidth,interpolation,nativePage,nativeSourceTextureFixed,rasterScale,rasterTextureFixed,schema,sourceRasterHeight,sourceRasterId,sourceRasterWidth,textureIndex,vertexCount"
+    || value.schema !== NATIVE_STADIUM_SCANLINE_RASTER_SCHEMA
+    || value.interpolation !== "polym-screen-space-fixed16"
+    || leaf.tag !== "s"
+    || ![3, 4].includes(value.vertexCount)
+    || (
+      value.vertexCount === 3
+        ? leaf.materialProjection !== "affine"
+        : leaf.materialProjection !== "projective"
+    )
+    || ![8, 9].includes(value.nativePage)
+    || !Number.isSafeInteger(value.textureIndex)
+    || value.textureIndex < 0
+    || value.textureIndex >= 49
+    || !Number.isSafeInteger(value.atlasWidth)
+    || value.atlasWidth <= 0
+    || !Number.isSafeInteger(value.atlasHeight)
+    || value.atlasHeight <= 0
+    || !Number.isSafeInteger(value.rasterScale)
+    || value.rasterScale <= 0
+    || !SAFE_ID.test(value.sourceRasterId ?? "")
+    || !Number.isSafeInteger(value.sourceRasterWidth)
+    || value.sourceRasterWidth <= 0
+    || !Number.isSafeInteger(value.sourceRasterHeight)
+    || value.sourceRasterHeight <= 0
+    || !value.atlasSourceRect
+    || typeof value.atlasSourceRect !== "object"
+    || Array.isArray(value.atlasSourceRect)
+    || Object.keys(value.atlasSourceRect).sort().join(",") !== "height,width,x,y"
+    || ![value.atlasSourceRect.x, value.atlasSourceRect.y]
+      .every((entry) => Number.isSafeInteger(entry) && entry >= 0)
+    || ![value.atlasSourceRect.width, value.atlasSourceRect.height]
+      .every((entry) => Number.isSafeInteger(entry) && entry > 0)
+    || value.atlasSourceRect.x + value.atlasSourceRect.width > value.atlasWidth
+    || value.atlasSourceRect.y + value.atlasSourceRect.height > value.atlasHeight
+    || !Array.isArray(value.nativeSourceTextureFixed)
+    || value.nativeSourceTextureFixed.length !== value.vertexCount
+    || value.nativeSourceTextureFixed.some((coordinate) => (
+      !Array.isArray(coordinate)
+      || coordinate.length !== 2
+      || coordinate.some((entry) => (
+        !Number.isSafeInteger(entry)
+        || entry < 0
+        || entry > 0x00ff_ffff
+      ))
+    ))
+    || !Array.isArray(value.rasterTextureFixed)
+    || value.rasterTextureFixed.length !== value.vertexCount
+    || value.rasterTextureFixed.some((coordinate) => (
+      !Array.isArray(coordinate)
+      || coordinate.length !== 2
+      || coordinate.some((entry, axis) => (
+        !Number.isSafeInteger(entry)
+        || entry < 0
+        || entry > [
+          value.sourceRasterWidth,
+          value.sourceRasterHeight,
+        ][axis] * 0x0001_0000
+      ))
+    ))
+  ) {
+    throw new Error(
+      `Prepared render bundle leaf ${index} native stadium scanline metadata is invalid.`,
+    );
   }
 }
 

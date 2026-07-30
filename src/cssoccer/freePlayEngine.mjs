@@ -495,17 +495,19 @@ function stepSnapshot(snapshot, command) {
         }),
       }
     : clone(match);
+  const sourcePlayerDistanceFrame = captureOpenPlayPlayerDistances(
+    sourceGetNearestFrame.players,
+    sourceGetNearestFrame.ball.ball.position,
+  );
   match = runStage("keeper_boxes", trace, () => processKeeperBoxes(
     match,
     nextTick,
     events,
     sourcePredictionState,
+    sourcePlayerDistanceFrame,
   ));
   match = runStage("player_distances", trace, () => {
-    playerDistanceFrame = captureOpenPlayPlayerDistances(
-      sourceGetNearestFrame.players,
-      sourceGetNearestFrame.ball.ball.position,
-    );
+    playerDistanceFrame = sourcePlayerDistanceFrame;
     playerDistanceRankFrame = captureOpenPlayPlayerDistanceRanks(
       sourceGetNearestFrame.players,
       playerDistanceFrame,
@@ -5469,7 +5471,13 @@ function keeperSaveMotion(offset, contactNumerator, effectiveFrames, keeperOnGro
   });
 }
 
-function processKeeperBoxes(match, nextTick, events, sourcePredictionState) {
+function processKeeperBoxes(
+  match,
+  nextTick,
+  events,
+  sourcePredictionState,
+  sourcePlayerDistanceFrame,
+) {
   const keeperIds = match.players
     .filter(({ role }) => role === "keeper")
     .map(({ id }) => id);
@@ -5666,6 +5674,7 @@ function processKeeperBoxes(match, nextTick, events, sourcePredictionState) {
       keeper,
       possession,
       rng,
+      sourceDistance: sourcePlayerDistanceFrame.get(keeper.id),
     });
     if (
       !forcedDive
@@ -5816,6 +5825,7 @@ function currentPossessedBallForcesKeeperDive({
   keeper,
   possession,
   rng,
+  sourceDistance,
 }) {
   if (
     possession.owner === 0
@@ -5838,11 +5848,13 @@ function currentPossessedBallForcesKeeperDive({
     || keeper.position.y < centreY - 19 * ratio
     || keeper.position.y > centreY + 19 * ratio
   ) return false;
-  const distance = sourceDistance2d({
-    x: F32(keeper.position.x - ball.ball.position.x),
-    y: F32(keeper.position.y - ball.ball.position.y),
-  });
-  return distance < ratio * 4 && rng.seed > keeper.gameplay.flair;
+  if (!Number.isFinite(sourceDistance)) {
+    throw new Error(`Keeper ${keeper.id} lost its source player_distances value.`);
+  }
+  // BALLINT.CPP player_distances freezes tm_dist before process_teams. The
+  // holder may publish a newer ball position before this keeper's later
+  // intelligence visit, but opp_has_ball still tests the frozen tm_dist.
+  return sourceDistance < ratio * 4 && rng.seed > keeper.gameplay.flair;
 }
 
 function currentBallThreatensKeeper({ ball, keeper, nextTick, players, possession }) {
@@ -7402,19 +7414,35 @@ function advanceCurrentFoulContactWaitTeams(match, {
     const startingSupportRun = supportIntent.run?.playerId === current.id;
     if (keeperWaitsForShot) {
       // stand_action skips find_zonal_target while shot_pending guards this
-      // goal. process_dir therefore republishes the retained keeper direction
-      // without turning toward either the restart ball or an offline target.
+      // goal, but go_team still reaches process_dir. init_stand_act retains
+      // dir_mode=1, so that trailing slot turns the stationary keeper toward
+      // the current ball rather than an offline positioning target.
+      const facingTarget = {
+        x: F32(match.ball.ball.position.x - current.position.x),
+        y: F32(match.ball.ball.position.y - current.position.y),
+      };
+      const facing = facingTarget.x === 0 && facingTarget.y === 0
+        ? clone(current.facing)
+        : turnSourceFacing({
+            facing: current.facing,
+            target: facingTarget,
+            maxTurnRadians: projectCssoccerMotionSourceProfile(
+              CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+              { teamRate },
+            ).maxTurnRadians,
+          }).facing;
       return {
         ...clone(current),
         previousPosition: clone(current.position),
         previousFacing: clone(current.facing),
         velocity: { x: F32(0), y: F32(0), z: F32(0) },
+        facing,
         action: createCssoccerActionState({
           tick: nextTick,
           playerId: current.id,
           actionId: CSSOCCER_NATIVE_ACTIONS.STAND,
-          facingX: current.facing.x,
-          facingY: current.facing.y,
+          facingX: facing.x,
+          facingY: facing.y,
         }),
         liveMotion: {
           ...clone(current.liveMotion),
@@ -20585,52 +20613,6 @@ function stepActiveFreeBallJourney(
         && sourceActiveVisitIndex < collectorVisitIndex
       )
     );
-  const sourceActiveCurrent = sourceActive === undefined
-    ? undefined
-    : players.find(({ id }) => id === sourceActive.id);
-  const sourceActiveVisit = sourceActiveVisitIndex < 0
-    ? undefined
-    : visits[sourceActiveVisitIndex];
-  const collectionPrecedesNeutralUserVisit = (
-    sourcePossession.owner === 0
-    && match.possession.owner !== 0
-    && collectorVisitIndex >= 0
-    && sourceActiveVisitIndex > collectorVisitIndex
-    && sourceActiveCurrent !== undefined
-    && sourceActiveVisit !== undefined
-    && sourceActiveVisit.possession.owner !== 0
-    && (
-      (sourceActiveVisit.possession.owner < 12)
-      !== (sourceActiveCurrent.nativePlayerNumber < 12)
-    )
-    && command.buttons === 0
-    && sourceActiveCurrent.role !== "keeper"
-    && sourceActiveCurrent.action.action.value <= CSSOCCER_NATIVE_ACTIONS.RUN
-    && (
-      sourceActiveCurrent.liveContact === undefined
-      || sourceActiveCurrent.liveContact.phase === "barge"
-    )
-    && sourceActiveCurrent.livePass === undefined
-    && sourceActiveCurrent.liveShot === undefined
-  );
-  if (collectionPrecedesNeutralUserVisit) {
-    // A collector on the first team can take a loose ball before the selected
-    // opponent's later go_team slot. That player then executes ordinary
-    // user_play under opponent possession before player_tussles. Materialize
-    // the neutral RUN/STAND visit here so the tussle sees both its updated
-    // position and retained go displacement; new_users must not replay it.
-    const visited = applyCurrentSourceUserVisit({
-      ball: match.ball,
-      ballPossession: sourceActiveVisit.possession.owner,
-      command,
-      match: { ...match, players },
-      nextTick,
-      player: sourceActiveCurrent,
-      sourcePlayer: sourceActive,
-    });
-    visited.liveMotion.sourceOpenPlayUserVisitTick = nextTick;
-    return players.map((player) => player.id === visited.id ? visited : player);
-  }
   if (
     (!preserveSourceBusyVisit && match.possession.owner !== 0)
     || (preserveSourceBusyVisit && sourcePossession.owner !== 0)

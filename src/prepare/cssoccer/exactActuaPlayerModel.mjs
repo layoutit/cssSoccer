@@ -12,8 +12,12 @@ const MODEL_ID = "player_f1";
 const MODEL_FACE_SHA256 = Object.freeze({
   player_f1: "cb77521c8fbc97579233f0f5f8bed1bedb8bdaa7fc59a777c33e10a339cf2219",
   player_f2: "b0ed1f3f8206b0006c745994b475a4371897115ced132244285681cd0ef918ae",
+  player_f1x: "5e9c2f2704aedb3ca7314cccaa937b3aa0e1f7711018168a9137bde9bf5cda1e",
+  player_f2x: "f791cb3c68b08f0a494534092530412890299649437dcc313a143d6423f791c1",
   player_fg1: "34dbf985b12c1dd7219ff53052dfc8cb3474ece16d68b8b96cdc21a7d298a942",
   player_fg2: "b1ff61240d26e58966080b2d762fca58388a05b56c15a370a494c1e519422fcf",
+  player_fg1x: "4aacfcb7e3ef6167089d4ba2da6c9e6222c69e2711ef3db49915ba62be27bd52",
+  player_fg2x: "f6d0b2149da10c57c2672292721fd742b6a99ef93aba204ab17222d76a327ed3",
 });
 const FACE_COUNT = 13;
 const POINT_COUNT = 28;

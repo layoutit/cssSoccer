@@ -50,6 +50,10 @@ import { createCssoccerRouteState } from "./routeState.mjs";
 
 const FIXED_STEP_MILLISECONDS = 50;
 const MAX_STEPS_PER_ANIMATION_FRAME = 5;
+const NATIVE_RENDERER_BASELINE_PLAYER_POSE = Object.freeze({
+  slotId: 0,
+  localFrameIndex: 0,
+});
 const CONTROL_COUNTRY_ORDER = Object.freeze(["spain", "argentina"]);
 const TOUCH_CONTROL_ORDER = Object.freeze([
   CSSOCCER_BROWSER_CONTROL.MOVE_UP,
@@ -964,6 +968,7 @@ export function mountCssoccerClient({
       phase: state.matchState.clock.phase,
       halftimeTransitionTicks: state.matchState.clock.halftimeTransitionTicks,
       goalHistory: state.hudGoalHistory,
+      justScored: live?.camera.justScored ?? state.matchState.goal.justScored,
       matchMode: live?.camera.matchMode ?? state.matchState.rules.matchMode,
       possession: projectNativeHudPossession(live, state.preparedFacts),
     });
@@ -998,10 +1003,12 @@ export function mountCssoccerClient({
     ) {
       throw new Error(`cssoccer native HUD cannot resolve source player ${player.rootId}.`);
     }
-    const surname = actor.name.slice(actor.name.lastIndexOf(" ") + 1);
     return {
       country: actor.country,
-      label: `${shirtNumber + 1}. ${surname}`,
+      // 3D_UPD2.C right-justifies the source `"N. " + surname` buffer.
+      // The retained fixture's surname slice is empty, but its trailing space
+      // still contributes one menu-font advance on team B.
+      label: `${shirtNumber + 1}. `,
     };
   }
 
@@ -1184,10 +1191,12 @@ function exactPlayerFrameRequests(frame) {
   if (!Array.isArray(frame?.players?.commands)) {
     throw new Error("Exact Actua residency requires one live player command batch.");
   }
-  return frame.players.commands.map(({ animation }) => ({
+  const requests = frame.players.commands.map(({ animation }) => ({
     slotId: animation.slotId,
     localFrameIndex: animation.frame,
   }));
+  if (frame.tick === 0) requests.push(NATIVE_RENDERER_BASELINE_PLAYER_POSE);
+  return requests;
 }
 
 function exactOfficialFrameRequests(frame) {

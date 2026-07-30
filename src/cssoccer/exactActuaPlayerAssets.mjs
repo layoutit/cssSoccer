@@ -20,6 +20,8 @@ const OFFICIAL_FACE_COUNT = 12;
 const OFFICIAL_CACHE_LIMIT = 6;
 const OFFICIAL_SEQUENCE_COUNT = 11;
 const OFFICIAL_POSE_COUNT = 312;
+const OFFICIAL_MIRRORED_SEQUENCE_COUNT = 3;
+const OFFICIAL_POSE_COORDINATE_COUNT = OFFICIAL_POSE_COUNT * PLAYER_COORDINATE_COUNT;
 const OFFICIAL_SAMPLE_COUNT = 7_488;
 const OFFICIAL_FACE_STATE_COUNT = 89_856;
 const OFFICIAL_CHUNK_COUNT = 23;
@@ -179,9 +181,6 @@ export function createCssoccerExactActuaPlayerAssetRuntime({
     },
     poseCoordinatesFields(slotId, localFrameIndex) {
       requireAlive();
-      if (configuration.runtimeSchema !== CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA) {
-        throw new Error("Exact Actua official assets do not publish player pose coordinates.");
-      }
       const address = resolveAddressFields(sequenceBySlot, slotId, localFrameIndex);
       const decoded = resident(address.descriptor.path, true);
       if (!decoded) {
@@ -193,6 +192,47 @@ export function createCssoccerExactActuaPlayerAssetRuntime({
       }
       const offset = (localFrameIndex - decoded.frameStart) * PLAYER_COORDINATE_COUNT;
       return decoded.poseCoordinates.subarray(offset, offset + PLAYER_COORDINATE_COUNT);
+    },
+    projectionTopologyFields(slotId, geometryVariant) {
+      requireAlive();
+      const sequence = sequenceBySlot.get(slotId);
+      const direct = materials.geometryVariants?.[geometryVariant];
+      const topology = sequence?.mirrored ? direct?.mirrored ?? direct : direct;
+      if (
+        !sequence
+        || !topology
+        || topology.pointCount !== 28
+        || topology.faceCount !== configuration.faceCount
+        || topology.faces?.length !== configuration.faceCount
+      ) {
+        throw new Error(
+          `Exact Actua ${String(geometryVariant)} topology is unavailable for slot ${slotId}.`,
+        );
+      }
+      return topology;
+    },
+    projectionSequenceMirroredFields(slotId) {
+      requireAlive();
+      const sequence = sequenceBySlot.get(slotId);
+      if (!sequence || typeof sequence.mirrored !== "boolean") {
+        throw new Error(`Exact Actua mirror state is unavailable for slot ${slotId}.`);
+      }
+      return sequence.mirrored;
+    },
+    projectionTweenBaselineFields() {
+      requireAlive();
+      if (configuration.runtimeSchema === CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA) {
+        return runtime.poseCoordinatesFields(0, 0);
+      }
+      const coordinates = materials.tweenBaseline?.coordinates;
+      if (
+        !Array.isArray(coordinates)
+        || coordinates.length !== PLAYER_COORDINATE_COUNT
+        || coordinates.some((coordinate) => !Number.isFinite(coordinate))
+      ) {
+        throw new Error("Exact Actua official renderer tween baseline is unavailable.");
+      }
+      return new Float32Array(coordinates);
     },
     sample(request) {
       const faces = [];
@@ -339,6 +379,8 @@ function assertIndexAndMaterials(index, materials) {
       index.status !== "ready-bounded-direct-index"
       || index.counts?.sequences !== OFFICIAL_SEQUENCE_COUNT
       || index.counts?.poseOccurrences !== OFFICIAL_POSE_COUNT
+      || index.counts?.mirroredSequences !== OFFICIAL_MIRRORED_SEQUENCE_COUNT
+      || index.counts?.poseCoordinates !== OFFICIAL_POSE_COORDINATE_COUNT
       || index.counts?.yawBins !== YAW_COUNT
       || index.counts?.samples !== OFFICIAL_SAMPLE_COUNT
       || index.counts?.facesPerSample !== OFFICIAL_FACE_COUNT
@@ -360,7 +402,13 @@ function assertIndexAndMaterials(index, materials) {
       || materials.geometryId !== index.geometryId
       || materials.topologySha256 !== index.topologySha256
       || materials.counts?.profiles !== 2
+      || materials.counts?.geometryVariants !== 1
       || materials.counts?.fixtureOfficials !== 3
+      || materials.geometryVariants?.outfield?.pointCount !== 28
+      || materials.geometryVariants.outfield.faceCount !== OFFICIAL_FACE_COUNT
+      || materials.geometryVariants.outfield.faces?.length !== OFFICIAL_FACE_COUNT
+      || materials.tweenBaseline?.coordinateCount !== PLAYER_COORDINATE_COUNT
+      || materials.tweenBaseline.coordinates?.length !== PLAYER_COORDINATE_COUNT
       || !Number.isSafeInteger(materials.counts?.textureEntries)
       || materials.counts.textureEntries <= 0
       || materials.atlas?.requestCount !== 1
@@ -371,6 +419,7 @@ function assertIndexAndMaterials(index, materials) {
     ) throw new Error("Exact Actua official material profiles are incomplete.");
     assertSequencePaths(index.sequences, {
       expectedPaths: OFFICIAL_CHUNK_COUNT,
+      expectedMirroredSequences: OFFICIAL_MIRRORED_SEQUENCE_COUNT,
       pathPattern:
         /^assets\/animation\/exact-official\/slot-(?:0(?:6[4-9]|7[0-3])|078)\/frames-[0-9]{3}-[0-9]{3}\.json$/u,
       label: "official",
@@ -379,6 +428,7 @@ function assertIndexAndMaterials(index, materials) {
       runtimeSchema: OFFICIAL_RUNTIME_SCHEMA,
       chunkSchema: OFFICIAL_CHUNK_SCHEMA,
       faceCount: OFFICIAL_FACE_COUNT,
+      poseCoordinates: true,
     });
   }
   if (
@@ -386,6 +436,7 @@ function assertIndexAndMaterials(index, materials) {
     || index.status !== "ready-bounded-direct-index"
     || index.counts?.sequences !== 124
     || index.counts?.poseOccurrences !== 5_857
+    || index.counts?.mirroredSequences !== 30
     || index.counts?.yawBins !== YAW_COUNT
     || index.counts?.samples !== 140_568
     || index.counts?.geometryVariants !== 2
@@ -416,8 +467,12 @@ function assertIndexAndMaterials(index, materials) {
     || materials.counts?.textureEntries !== 562
     || materials.geometryVariants?.outfield?.geometryId !== index.geometryId
     || materials.geometryVariants.outfield.topologySha256 !== index.topologySha256
+    || materials.geometryVariants.outfield.mirrored?.faceCount !== FACE_COUNT
+    || materials.geometryVariants.outfield.mirrored?.faces?.length !== FACE_COUNT
     || materials.geometryVariants?.goalkeeper?.geometryId
       !== "actua-goalkeeper-28p-13f-one-basis"
+    || materials.geometryVariants.goalkeeper.mirrored?.faceCount !== FACE_COUNT
+    || materials.geometryVariants.goalkeeper.mirrored?.faces?.length !== FACE_COUNT
     || materials.atlas?.requestCount !== 1
     || materials.runtime?.geometryMutation !== false
     || materials.runtime?.matrixMutationByMaterial !== false
@@ -426,6 +481,7 @@ function assertIndexAndMaterials(index, materials) {
   ) throw new Error("Exact Actua player material profiles are incomplete.");
   assertSequencePaths(index.sequences, {
     expectedPaths: 426,
+    expectedMirroredSequences: 30,
     pathPattern:
       /^assets\/animation\/exact-player\/slot-[0-9]{3}\/frames-[0-9]{3}-[0-9]{3}\.json$/u,
     label: "player",
@@ -434,19 +490,31 @@ function assertIndexAndMaterials(index, materials) {
     runtimeSchema: CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA,
     chunkSchema: CHUNK_SCHEMA,
     faceCount: FACE_COUNT,
+    poseCoordinates: true,
   });
 }
 
-function assertSequencePaths(sequences, { expectedPaths, pathPattern, label }) {
+function assertSequencePaths(sequences, {
+  expectedPaths,
+  expectedMirroredSequences = null,
+  pathPattern,
+  label,
+}) {
   const paths = new Set();
+  let mirroredSequences = 0;
   for (const sequence of sequences) {
     if (
       !Number.isSafeInteger(sequence.slotId)
       || !Number.isSafeInteger(sequence.frameCount)
       || sequence.frameCount <= 0
+      || (
+        expectedMirroredSequences !== null
+        && typeof sequence.mirrored !== "boolean"
+      )
       || !Array.isArray(sequence.chunks)
       || sequence.chunks.length !== Math.ceil(sequence.frameCount / 16)
     ) throw new Error("Exact Actua player sequence index is invalid.");
+    if (sequence.mirrored === true) mirroredSequences += 1;
     sequence.chunks.forEach((chunk, chunkIndex) => {
       if (
         chunk.slotId !== sequence.slotId
@@ -464,6 +532,14 @@ function assertSequencePaths(sequences, { expectedPaths, pathPattern, label }) {
   }
   if (paths.size !== expectedPaths) {
     throw new Error(`Exact Actua ${label} chunk paths are not total and unique.`);
+  }
+  if (
+    expectedMirroredSequences !== null
+    && mirroredSequences !== expectedMirroredSequences
+  ) {
+    throw new Error(
+      `Exact Actua ${label} mirrored sequence count changed.`,
+    );
   }
 }
 
@@ -535,7 +611,7 @@ function decodeChunk(chunk, descriptor, index, configuration) {
     || chunk.transformIndex?.count !== descriptor.faceStateCount
     || chunk.materialSelectorOffset?.count !== descriptor.faceStateCount
     || (
-      configuration.runtimeSchema === CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA
+      configuration.poseCoordinates
       && (
         descriptor.poseCoordinateCount !== descriptor.frameCount * PLAYER_COORDINATE_COUNT
         || chunk.poseCoordinates?.encoding !== "base64-float32le"
@@ -578,8 +654,7 @@ function decodeChunk(chunk, descriptor, index, configuration) {
     descriptor,
     configuration,
   );
-  const poseCoordinates = configuration.runtimeSchema
-    === CSSOCCER_EXACT_ACTUA_PLAYER_ASSET_RUNTIME_SCHEMA
+  const poseCoordinates = configuration.poseCoordinates
     ? float32LittleEndian(decodeBase64(chunk.poseCoordinates.data))
     : null;
   if (

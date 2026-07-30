@@ -340,6 +340,7 @@ export function assertPreparedExactPlayers(value) {
     value?.schema !== "cssoccer-exact-actua-player-asset-runtime@1"
     || value.index?.schema !== "cssoccer-exact-actua-player-animation-index@1"
     || value.index?.counts?.samples !== 140_568
+    || value.index?.counts?.mirroredSequences !== 30
     || value.index?.counts?.faceStates !== 1_827_384
     || value.index?.counts?.geometryVariants !== 2
     || value.index?.counts?.variantFaceStates !== 3_654_768
@@ -350,6 +351,11 @@ export function assertPreparedExactPlayers(value) {
     || value.materials?.counts?.fixturePlayers !== 22
     || value.materials?.geometryId !== value.index?.geometryId
     || value.materials?.topologySha256 !== value.index?.topologySha256
+    || value.materials?.geometryVariants?.outfield?.mirrored?.faceCount !== 13
+    || value.materials?.geometryVariants?.goalkeeper?.mirrored?.faceCount !== 13
+    || typeof value.projectionTopologyFields !== "function"
+    || typeof value.projectionSequenceMirroredFields !== "function"
+    || typeof value.projectionTweenBaselineFields !== "function"
   ) {
     throw new Error("Prepared exact Actua player publication is incomplete.");
   }
@@ -363,11 +369,18 @@ export function assertPreparedExactOfficials(value) {
     value?.schema !== "cssoccer-exact-actua-official-asset-runtime@1"
     || value.index?.schema !== "cssoccer-exact-actua-official-animation-index@1"
     || value.index?.counts?.samples !== 7_488
+    || value.index?.counts?.mirroredSequences !== 3
+    || value.index?.counts?.poseCoordinates !== 26_208
     || value.index?.counts?.faceStates !== 89_856
     || value.materials?.schema !== "cssoccer-exact-actua-official-materials@1"
+    || value.materials?.counts?.geometryVariants !== 1
     || value.materials?.counts?.fixtureOfficials !== 3
     || value.materials?.geometryId !== value.index?.geometryId
     || value.materials?.topologySha256 !== value.index?.topologySha256
+    || typeof value.poseCoordinatesFields !== "function"
+    || typeof value.projectionTopologyFields !== "function"
+    || typeof value.projectionSequenceMirroredFields !== "function"
+    || typeof value.projectionTweenBaselineFields !== "function"
   ) {
     throw new Error("Prepared exact Actua official publication is incomplete.");
   }

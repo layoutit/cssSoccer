@@ -7,7 +7,9 @@ import { readCssoccerSourceFacts } from "./sourceFacts.mjs";
 export const CSSOCCER_PITCH_SLICE_SCHEMA = "cssoccer-prepared-pitch-slice@1";
 
 const MARKING_LIFT = 0.35;
-const LINE_WIDTH = 2;
+const BASE_LINE_RIBBON_WIDTH = 2;
+const NATIVE_FRAMEBUFFER_PRESENTATION_SCALE = 2;
+const LINE_WIDTH = 3.5;
 const NO_WIND_FLAG_POINT_INDEX = 8;
 const NO_WIND_FLAG_POINT = Object.freeze([1.751, 6.629, 1.751]);
 
@@ -51,7 +53,6 @@ const GOAL_HIGHEST_DETAIL_BINDINGS = Object.freeze({
   goal3_b: Object.freeze({ points: "goal3cx_p", faces: "goal_f2d" }),
   goal4_b: Object.freeze({ points: "goal3ax_p", faces: "goal_f3d" }),
 });
-
 export async function decodeCssoccerPitchSlice({ sourceRoot, facts } = {}) {
   const sourceFacts = facts ?? readCssoccerSourceFacts({ sourceRoot });
   validateFacts(sourceFacts);
@@ -106,7 +107,6 @@ export async function decodeCssoccerPitchSlice({ sourceRoot, facts } = {}) {
       materials,
     }));
   }
-
   for (const goal of sourceFacts.goals.objects) {
     const binding = GOAL_HIGHEST_DETAIL_BINDINGS[goal.detail];
     if (!binding || goal.points !== "goal1a_p" || goal.faces !== "goal_f1a") {
@@ -223,7 +223,12 @@ export async function decodeCssoccerPitchSlice({ sourceRoot, facts } = {}) {
         bindings: GOAL_HIGHEST_DETAIL_BINDINGS,
       },
       presentationAdapters: [
-        { id: "native-line-ribbon", widthNative: LINE_WIDTH },
+        {
+          id: "native-line-ribbon",
+          baseWidthNative: BASE_LINE_RIBBON_WIDTH,
+          nativeFramebufferPresentationScale: NATIVE_FRAMEBUFFER_PRESENTATION_SCALE,
+          widthNative: LINE_WIDTH,
+        },
         { id: "marking-z-fight-lift", verticalNative: MARKING_LIFT },
       ],
     },
@@ -251,6 +256,7 @@ function buildPreparedObject({
   const placedPoints = points.map((point) => Object.freeze(point.map((value, axis) => (
     value + position[axis] + presentationOffset[axis]
   ))));
+  const sourceLineSegments = [];
   const polygons = faceList.faces.map((face) => {
     if (face.primitive === "cylinder-map" || face.primitive === "elliptical-cylinder-map") {
       throw new Error(`${id} uses unsupported source procedural primitive ${face.primitive}.`);
@@ -274,6 +280,18 @@ function buildPreparedObject({
       archiveSelectors,
       presentationAdapter: face.primitive === "line" ? "native-line-ribbon" : undefined,
     });
+    if (face.primitive === "line") {
+      sourceLineSegments.push(Object.freeze({
+        id: source.id,
+        object: sourceObject,
+        sourceFaceIndex: face.faceIndex,
+        sourceColorCode: face.sourceColorCode,
+        source,
+        points: Object.freeze(face.pointIndexes.map((pointIndex) => (
+          Object.freeze([...placedPoints[pointIndex]])
+        ))),
+      }));
+    }
     return Object.freeze({
       vertices: Object.freeze(vertices.map((vertex) => Object.freeze([...vertex]))),
       color: material.color,
@@ -300,6 +318,7 @@ function buildPreparedObject({
     sourceTriangleCount: faceList.faces.reduce((sum, face) => sum + sourceTriangleCount(face), 0),
     polygonCount: polygons.length,
     polygons: Object.freeze(polygons),
+    sourceLineSegments: Object.freeze(sourceLineSegments),
   });
 }
 

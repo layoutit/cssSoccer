@@ -2,13 +2,15 @@ const F32 = Math.fround;
 
 export const CSSOCCER_LIVE_ACTUA_PLAYER_PROJECTION_SCHEMA =
   "cssoccer-live-actua-player-projection@1";
+export const CSSOCCER_LIVE_ACTUA_PLAYER_TWEEN_SCHEMA =
+  "cssoccer-live-actua-player-tween@1";
 
 export const CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT = Object.freeze({
-  width: 320,
-  height: 200,
+  width: 640,
+  height: 400,
   projectionScale: 440,
-  scaleX: 0.5,
-  scaleY: 0.5,
+  scaleX: 1,
+  scaleY: 1,
   cutoffDistance: 5,
   screenDistance: 15,
 });
@@ -16,6 +18,174 @@ export const CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT = Object.freeze({
 const LEAF_WIDTH = 32;
 const LEAF_HEIGHT = 64;
 const PROJECTIVE_W_EPSILON = 1e-9;
+const PLAYER_POINT_COUNT = 28;
+const PLAYER_COORDINATE_COUNT = PLAYER_POINT_COUNT * 3;
+const NATIVE_RENDERER_INITIAL_ANIMATION = 78;
+const MIRRORED_PREVIOUS_POINT_INDEX = Object.freeze([
+  0, 1, 2, 3, 4,
+  8, 9, 10,
+  5, 6, 7,
+  12, 11,
+  17, 18, 19,
+  20,
+  13, 14, 15,
+  16,
+  22, 21,
+  23,
+  25, 24,
+  27, 26,
+]);
+const PLAYER_SHADOW_COORDINATES = new Float32Array([
+  5, 0, 0,
+  3, 0, -4,
+  -3, 0, -4,
+  -5, 0, 0,
+  -3, 0, 4,
+  3, 0, 4,
+]);
+const BALL_SHADOW_COORDINATES = new Float32Array([
+  2.5, 0, 0,
+  1.5, 0, -2,
+  -1.5, 0, -2,
+  -2.5, 0, 0,
+  -1.5, 0, 2,
+  1.5, 0, 2,
+]);
+const SHADOW_FACE = Object.freeze({
+  pointIndexes: Object.freeze([0, 1, 2, 3, 4, 5]),
+});
+
+/**
+ * Retain 3DENG.C's plyrtwdat presentation state. Gameplay owns tm_anim,
+ * tm_frm, and tm_fstep; this renderer owns only the source interpolation
+ * between the previous rendered pose and the current prepared pose.
+ */
+export function createCssoccerLiveActuaPlayerTween({
+  baselineCoordinates,
+  baselineMirrored = false,
+} = {}) {
+  requirePlayerCoordinates(baselineCoordinates, "baseline");
+  if (typeof baselineMirrored !== "boolean") {
+    throw new TypeError("Live Actua player tween baseline orientation must be boolean.");
+  }
+  let rendererAnimation = NATIVE_RENDERER_INITIAL_ANIMATION;
+  let rendererAnimationTo = NATIVE_RENDERER_INITIAL_ANIMATION;
+  let tween = F32(-1);
+  let tweenStep = F32(0);
+  let tweenFromCoordinates = copyCoordinates(baselineCoordinates);
+  let renderedCoordinates = copyCoordinates(baselineCoordinates);
+  let rendererMirrored = baselineMirrored;
+  let lastTick = null;
+  let lastInputKey = null;
+  let version = 0;
+
+  return Object.freeze({
+    schema: CSSOCCER_LIVE_ACTUA_PLAYER_TWEEN_SCHEMA,
+    apply({
+      tick,
+      slotId,
+      frameStep,
+      targetCoordinates,
+      targetMirrored,
+      mirroredForSlot,
+    } = {}) {
+      if (!Number.isSafeInteger(tick) || tick < 0) {
+        throw new RangeError("Live Actua player tween tick must be non-negative.");
+      }
+      if (!Number.isSafeInteger(slotId) || slotId < 0) {
+        throw new RangeError("Live Actua player tween slot must be non-negative.");
+      }
+      if (frameStep !== null && (!Number.isFinite(frameStep) || frameStep < 0)) {
+        throw new RangeError("Live Actua player tween frame step must be non-negative or null.");
+      }
+      requirePlayerCoordinates(targetCoordinates, "target");
+      if (typeof targetMirrored !== "boolean" || typeof mirroredForSlot !== "function") {
+        throw new TypeError("Live Actua player tween requires source mirror bindings.");
+      }
+      const inputKey = `${tick}:${slotId}:${frameStep}:${targetMirrored}`;
+      if (lastTick === tick) {
+        if (inputKey !== lastInputKey) {
+          throw new Error(`Live Actua player tween received two states for tick ${tick}.`);
+        }
+        return result();
+      }
+
+      if (frameStep === null) {
+        rendererAnimation = slotId;
+        rendererAnimationTo = slotId;
+        tween = F32(-1);
+        tweenStep = F32(0);
+        tweenFromCoordinates = copyCoordinates(targetCoordinates);
+        renderedCoordinates = copyCoordinates(targetCoordinates);
+        rendererMirrored = targetMirrored;
+      } else {
+        const previousAnimation = rendererAnimation;
+        if (slotId !== previousAnimation || tween >= 0) {
+          let previousMirrored = rendererMirrored;
+          if (tween < 0) {
+            tween = F32(0);
+            tweenStep = F32(F32(frameStep * 2) * F32(1));
+            rendererAnimationTo = slotId;
+          } else if (rendererAnimationTo !== slotId) {
+            tweenFromCoordinates = copyCoordinates(renderedCoordinates);
+            tween = F32(0);
+            tweenStep = F32(F32(frameStep * 2) * F32(1));
+            rendererAnimation = rendererAnimationTo;
+            rendererAnimationTo = slotId;
+            rendererMirrored = mirroredForSlot(rendererAnimation);
+            previousMirrored = rendererMirrored;
+          }
+          tween = F32(tween + tweenStep);
+          if (tween >= 1) {
+            tween = F32(-1);
+            renderedCoordinates = copyCoordinates(targetCoordinates);
+            tweenFromCoordinates = copyCoordinates(targetCoordinates);
+            rendererAnimation = rendererAnimationTo;
+            rendererMirrored = targetMirrored;
+          } else {
+            renderedCoordinates = blendPlayerCoordinates({
+              targetCoordinates,
+              previousCoordinates: tweenFromCoordinates,
+              progress: tween,
+              mirrorParityChanged: targetMirrored !== previousMirrored,
+            });
+          }
+        } else {
+          renderedCoordinates = copyCoordinates(targetCoordinates);
+          tweenFromCoordinates = copyCoordinates(targetCoordinates);
+          rendererAnimation = slotId;
+          rendererAnimationTo = slotId;
+          rendererMirrored = targetMirrored;
+        }
+      }
+
+      lastTick = tick;
+      lastInputKey = inputKey;
+      version += 1;
+      return result();
+    },
+    state() {
+      return Object.freeze({
+        rendererAnimation,
+        rendererAnimationTo,
+        rendererMirrored,
+        tween,
+        tweenStep,
+        lastTick,
+        version,
+      });
+    },
+  });
+
+  function result() {
+    return Object.freeze({
+      coordinates: renderedCoordinates,
+      active: tween >= 0,
+      progress: tween,
+      version,
+    });
+  }
+}
 
 /**
  * Apply the source addobjy/addpols projection for one prepared pose using the
@@ -67,6 +237,90 @@ export function applyCssoccerLiveActuaPlayerProjection({
   return visibleFaceCount;
 }
 
+/**
+ * Match 3DENG.C's object-list sort key for a player's world origin.
+ * Native sorts whole objects before sorting the polygons inside each object.
+ */
+export function projectCssoccerLiveActuaObjectDepth({
+  camera,
+  position,
+  viewport = CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT,
+} = {}) {
+  if (
+    !finiteVec3(camera?.rendered?.renderer?.eye)
+    || !finiteVec3(camera?.rendered?.renderer?.target)
+    || !finiteVec3(position)
+    || !Number.isSafeInteger(viewport?.width)
+    || !Number.isSafeInteger(viewport?.height)
+    || ![
+      viewport.projectionScale,
+      viewport.scaleX,
+      viewport.scaleY,
+      viewport.cutoffDistance,
+      viewport.screenDistance,
+    ].every(Number.isFinite)
+  ) {
+    throw new TypeError("Live Actua object-depth projection input is invalid.");
+  }
+  const view = createView(camera, viewport);
+  const row = view.rows[2];
+  const x = F32(position[0]);
+  const y = F32(position[1]);
+  const z = F32(position[2]);
+  return F32(
+    x * row[0]
+    + y * row[1]
+    + z * row[2]
+    + row[3],
+  );
+}
+
+/**
+ * Project DATA.OBJ plshad_p / ballshad_p through the same native 640x400
+ * source camera used by the live player renderer.
+ */
+export function projectCssoccerLiveActuaGroundShadow({
+  camera,
+  position,
+  kind = "player",
+  viewport = CSSOCCER_NATIVE_PLAYER_LOGICAL_VIEWPORT,
+} = {}) {
+  if (
+    !finiteVec3(camera?.rendered?.renderer?.eye)
+    || !finiteVec3(camera?.rendered?.renderer?.target)
+    || !finiteVec3(position)
+    || (kind !== "player" && kind !== "ball")
+    || !Number.isSafeInteger(viewport?.width)
+    || !Number.isSafeInteger(viewport?.height)
+    || ![
+      viewport.projectionScale,
+      viewport.scaleX,
+      viewport.scaleY,
+      viewport.cutoffDistance,
+      viewport.screenDistance,
+    ].every(Number.isFinite)
+  ) {
+    throw new TypeError("Live Actua ground-shadow projection input is invalid.");
+  }
+  const coordinates = kind === "player"
+    ? PLAYER_SHADOW_COORDINATES
+    : BALL_SHADOW_COORDINATES;
+  const view = createView(camera, viewport);
+  const points = projectPoints(
+    coordinates,
+    [position[0], 0, position[2]],
+    [1, 0],
+    view,
+  );
+  const projected = projectAddpoly(SHADOW_FACE, points, view.cutoffDistance);
+  if (!projected.visible) return Object.freeze({ visible: false });
+  return Object.freeze({
+    visible: true,
+    corners: Object.freeze(projected.corners.map((corner) => Object.freeze([...corner]))),
+    depth: projected.depth,
+  });
+}
+
 function createView(camera, viewport) {
   const [viewX, viewY, viewZ] = camera.rendered.renderer.eye.map(F32);
   let [targetX, targetY, targetZ] = camera.rendered.renderer.target.map(F32);
@@ -113,8 +367,8 @@ function createView(camera, viewport) {
 function projectPoints(coordinates, position, facing, view) {
   const [crot, srot] = facing;
   const [positionX, positionY, positionZ] = position;
-  const points = new Float32Array(28 * 3);
-  for (let pointIndex = 0; pointIndex < 28; pointIndex += 1) {
+  const points = new Float32Array(coordinates.length);
+  for (let pointIndex = 0; pointIndex < coordinates.length / 3; pointIndex += 1) {
     const coordinateOffset = pointIndex * 3;
     const sourceX = coordinates[coordinateOffset];
     const sourceY = coordinates[coordinateOffset + 1];
@@ -403,6 +657,59 @@ function culled() {
   return { visible: false };
 }
 
+function blendPlayerCoordinates({
+  targetCoordinates,
+  previousCoordinates,
+  progress,
+  mirrorParityChanged,
+}) {
+  const previousWeight = F32(1 - progress);
+  const output = new Float32Array(PLAYER_COORDINATE_COUNT);
+  for (let pointIndex = 0; pointIndex < PLAYER_POINT_COUNT; pointIndex += 1) {
+    const targetOffset = pointIndex * 3;
+    if (
+      mirrorParityChanged
+      && pointIndex === 23
+      && previousCoordinates[targetOffset + 1] < 0
+    ) {
+      output[targetOffset] = targetCoordinates[targetOffset];
+      output[targetOffset + 1] = targetCoordinates[targetOffset + 1];
+      output[targetOffset + 2] = targetCoordinates[targetOffset + 2];
+      continue;
+    }
+    const previousPointIndex = mirrorParityChanged
+      ? MIRRORED_PREVIOUS_POINT_INDEX[pointIndex]
+      : pointIndex;
+    const previousOffset = previousPointIndex * 3;
+    for (let axis = 0; axis < 3; axis += 1) {
+      const previousCoordinate = previousCoordinates[previousOffset + axis];
+      output[targetOffset + axis] = F32(
+        F32(targetCoordinates[targetOffset + axis] * progress)
+        + F32(
+          previousCoordinate
+          * previousWeight
+          * (mirrorParityChanged && axis === 2 ? -1 : 1),
+        ),
+      );
+    }
+  }
+  return output;
+}
+
+function copyCoordinates(value) {
+  return new Float32Array(value);
+}
+
+function requirePlayerCoordinates(value, label) {
+  if (
+    !ArrayBuffer.isView(value)
+    || value.length !== PLAYER_COORDINATE_COUNT
+    || [...value].some((coordinate) => !Number.isFinite(coordinate))
+  ) {
+    throw new TypeError(`Live Actua player tween ${label} pose is invalid.`);
+  }
+}
+
 function formatNumber(value) {
   if (Math.abs(value) < 1e-12) return "0";
   return Number(value.toPrecision(12)).toString();
@@ -411,9 +718,10 @@ function formatNumber(value) {
 function assertProjectionInput(topology, coordinates, camera, position, facing, viewport) {
   if (
     topology?.pointCount !== 28
-    || topology?.faceCount !== 13
+    || !Number.isSafeInteger(topology?.faceCount)
+    || topology.faceCount <= 0
     || !Array.isArray(topology.faces)
-    || topology.faces.length !== 13
+    || topology.faces.length !== topology.faceCount
     || topology.faces.some((face, faceIndex) => (
       face?.faceIndex !== faceIndex
       || !new Set(["addpoly", "add3dcmap", "add3demap"]).has(face.dispatch)

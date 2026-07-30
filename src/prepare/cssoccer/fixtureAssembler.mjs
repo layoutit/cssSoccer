@@ -80,7 +80,27 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const REQUEST_KEYS = Object.freeze(["fixtureId", "scenePath", "sceneUrl", "schema"]);
 const MARKING_UVS = Object.freeze([[0, 1], [1, 1], [1, 0], [0, 0]]);
 const MARKING_Y = 0.35;
-const MARKING_WIDTH = 2;
+// Calibrated against the retained VESA 640x400 framebuffer.
+const MARKING_LINE_WIDTH = 3.5;
+const MARKING_RING_WIDTH = 3;
+const MARKING_RING_RADIUS = 106.66666412353516;
+const NATIVE_STADIUM_SCANLINE_RASTER_SCHEMA =
+  "cssoccer-prepared-native-stadium-scanline-raster@4";
+const NATIVE_STADIUM_LARGE_PANEL_MIN_WIDTH = 150;
+const NATIVE_STADIUM_LARGE_PANEL_MIN_HEIGHT = 80;
+// TMD_STAD0 records whose 122x13 source strips are the pitch-side ads.
+// These use the same native polym scanline interpolation as the crowd panels.
+const NATIVE_STADIUM_BILLBOARD_TEXTURE_INDEXES = Object.freeze([
+  13,
+  14,
+  26,
+  33,
+  34,
+  37,
+  38,
+  39,
+  48,
+]);
 
 const EXTRA_SOURCE_INPUTS = Object.freeze([
   Object.freeze({
@@ -180,7 +200,7 @@ export async function assembleCssoccerPreparedFixture(request) {
     ...actorDomain.texturePreparation.markingPixelAssetFile,
     sourceIds: ["source:DATA.OBJ", "source:3DENG.C"],
     lineage: {
-      kind: "prepare-generated-white-marking-pixel",
+      kind: "prepare-generated-native-marking-pixel",
       sourceRevision: contracts.plan.source.revision,
       nativeProducer: "3DENG.C pitch markings",
       runtimeConstruction: false,
@@ -791,8 +811,12 @@ async function prepareActorDomain(contracts) {
   const exactModels = Object.fromEntries([
     "player_f1",
     "player_f2",
+    "player_f1x",
+    "player_f2x",
     "player_fg1",
     "player_fg2",
+    "player_fg1x",
+    "player_fg2x",
   ].map((modelId) => [
     modelId,
     prepareExactActuaPlayerModel({ ...exactModelInputs, modelId }),
@@ -948,11 +972,14 @@ function validateActorDomain({
     || exactPlayerPreparation?.geometry?.status
       !== "ready-two-native-geometries-four-material-profiles"
     || exactPlayerPreparation.geometry.geometry?.faceCount !== 13
+    || exactPlayerPreparation.geometry.geometry.mirrored?.faceCount !== 13
     || exactPlayerPreparation.geometry.geometryVariants?.goalkeeper?.faceCount !== 13
+    || exactPlayerPreparation.geometry.geometryVariants.goalkeeper.mirrored?.faceCount !== 13
     || exactPlayerPreparation.materials?.publication?.status
       !== "ready-complete-four-profile-two-geometry-normalized-atlas"
     || exactPlayerPreparation.materials.publication.counts?.fixturePlayers !== 22
     || exactPlayerPreparation.packaging?.index?.counts?.samples !== 140_568
+    || exactPlayerPreparation.packaging.index.counts.mirroredSequences !== 30
     || exactPlayerPreparation.packaging.index.counts.faceStates !== 1_827_384
     || exactPlayerPreparation.packaging.index.counts.geometryVariants !== 2
     || exactPlayerPreparation.packaging.index.counts.variantFaceStates !== 3_654_768
@@ -968,6 +995,8 @@ function validateActorDomain({
       !== "ready-complete-two-official-profile-normalized-atlas"
     || exactOfficialPreparation.materials.publication.counts?.fixtureOfficials !== 3
     || exactOfficialPreparation.packaging?.index?.counts?.samples !== 7_488
+    || exactOfficialPreparation.packaging.index.counts.mirroredSequences !== 3
+    || exactOfficialPreparation.packaging.index.counts.poseCoordinates !== 26_208
     || exactOfficialPreparation.packaging.index.counts.faceStates !== 89_856
     || exactOfficialPreparation.chunks?.length !== 23
     || teamPreparation?.counts?.retainedStarters !== 22
@@ -1049,6 +1078,8 @@ async function prepareRenderDomain({ staticDomain, actorDomain }) {
     bundles,
     frameSets,
     rootBindings,
+    stadiumNativeRasterSource:
+      actorDomain.texturePreparation.stadiumNativeRasterSource,
     counts: {
       bundles: bundles.length,
       frameSets: frameSets.length,
@@ -1293,9 +1324,9 @@ function prepareTexturedMarkingPolygons(polygons, texturePreparation) {
 function markingLine(id, start, end, sources) {
   return {
     id,
-    kind: "solid",
+    kind: "native-screen-line",
     sources,
-    vertices: lineQuad(start, end, MARKING_WIDTH),
+    vertices: lineQuad(start, end, MARKING_LINE_WIDTH),
   };
 }
 
@@ -1310,8 +1341,8 @@ function markingRing(id, center, startDegrees, endDegrees, segmentCount, sourceF
       center,
       radians(startDegrees + step * index),
       radians(startDegrees + step * (index + 1)),
-      105.66666412353516,
-      107.66666412353516,
+      MARKING_RING_RADIUS - MARKING_RING_WIDTH / 2,
+      MARKING_RING_RADIUS + MARKING_RING_WIDTH / 2,
     ),
   }));
 }
@@ -1394,47 +1425,27 @@ function prepareTexturedGoalPolygons(polygons, texturePreparation, meshId) {
       !binding
       || polygon.vertices.length !== 4
       || binding.sourceUvs.length !== polygon.vertices.length
-      || binding.triangleCutouts.length !== 2
-      || binding.triangleMaterials.length !== 2
-      || binding.cutoutUvs.length !== 4
+      || binding.quadCutout.sourceUvs.length !== polygon.vertices.length
+      || binding.uvs.length !== polygon.vertices.length
+      || binding.material.presentation?.projection !== "projective"
     ) {
       throw new Error(`${meshId} face ${index} cannot bind exact native net ${sourceColorCode}.`);
     }
-    const triangleVertexIndexes = [[0, 1, 2], [0, 2, 3]];
     texturedFaces += 1;
-    return triangleVertexIndexes.map((vertexIndexes, triangleIndex) => {
-      const cutout = binding.triangleCutouts[triangleIndex];
-      if (
-        !Array.isArray(cutout.basisVertexIndexes)
-        || cutout.basisVertexIndexes.length !== 3
-        || [...cutout.basisVertexIndexes].sort().join(",")
-          !== [...vertexIndexes].sort().join(",")
-      ) {
-        throw new Error(`${meshId} face ${index} lost its native net triangle basis.`);
-      }
-      const triangleVertices = cutout.basisVertexIndexes.map((vertexIndex) => (
-        polygon.vertices[vertexIndex]
-      ));
-      const expanded = expandTexturedTriangleToEdgeBasisQuad(
-        triangleVertices,
-        binding.cutoutUvs,
-      );
-      return {
-        ...polygon,
-        vertices: expanded.vertices,
-        color: "#ffffff",
-        material: binding.triangleMaterials[triangleIndex],
-        textureAlphaMode: "mask",
-        uvs: expanded.uvs,
-      };
-    });
+    return [{
+      ...polygon,
+      color: "#ffffff",
+      material: binding.material,
+      textureAlphaMode: "mask",
+      uvs: binding.uvs,
+    }];
   });
   const sourceIds = new Set(prepared.flatMap(({ sources }) => sources.map(({ id }) => id)));
   if (
     texturedFaces !== 8
     || solidFaces !== 24
     || sourceIds.size !== 32
-    || prepared.length !== 40
+    || prepared.length !== 32
   ) {
     throw new Error(`${meshId} lost exact post, crossbar, or BM_NETS source coverage.`);
   }
@@ -1548,51 +1559,248 @@ function prepareTexturedStadiumPolygons(polygons, texturePreparation) {
         `Prepared stadium polygon ${index} cannot bind native texture ${sourceColorCode}.`,
       );
     }
-    // PolyCSS maps a direct image to one parallelogram. Keep that plane local
-    // to the source triangle: [A, B, B + C - A, C]. The atlas is prebaked in
-    // the same edge basis, so the transparent half replaces runtime clipping
-    // without extending a UV bounding rectangle across the camera plane.
-    const triangleVertexIndexes = polygon.vertices.length === 3
-      ? [[0, 1, 2]]
-      : polygon.vertices.length === 4
-        ? [[0, 1, 2], [0, 2, 3]]
-        : null;
+    if (polygon.vertices.length === 4) {
+      if (
+        binding.vertexCount !== 4
+        || !binding.quadCutout
+        || binding.quadCutout.sourceUvs.length !== polygon.vertices.length
+        || binding.material?.presentation?.projection !== "projective"
+        || binding.uvs.length !== polygon.vertices.length
+      ) {
+        throw new Error(
+          `Prepared stadium polygon ${index} has no complete prepare-time quad binding.`,
+        );
+      }
+      if (
+        !Array.isArray(binding.vertexOrder)
+        || binding.vertexOrder.length !== 4
+        || [...binding.vertexOrder].sort().join(",") !== "0,1,2,3"
+      ) {
+        throw new Error(
+          `Prepared stadium polygon ${index} lost its canonical texture corner order.`,
+        );
+      }
+      const nativeTextureRaster = prepareNativeStadiumScanlineRaster({
+        binding,
+        sourceRect: binding.quadCutout.sourceRect,
+        sourceTextureFixed: binding.sourceTextureFixed,
+        vertexOrder: binding.vertexOrder,
+      });
+      return [{
+        ...polygon,
+        vertices: binding.vertexOrder.map((vertexIndex) => (
+          polygon.vertices[vertexIndex]
+        )),
+        material: binding.material,
+        ...(nativeTextureRaster ? { nativeTextureRaster } : {}),
+        textureAlphaMode: binding.transparent ? "mask" : "opaque",
+        uvs: binding.uvs,
+        doubleSided: true,
+      }];
+    }
+
+    // PolyCSS maps an affine direct image to one parallelogram. Keep a native
+    // triangle local to [A, B, B + C - A, C]; its prebaked transparent half
+    // clips the added corner without splitting or extending the source face.
     if (
-      !triangleVertexIndexes
-      || binding.triangleCutouts.length !== triangleVertexIndexes.length
-      || binding.triangleMaterials.length !== triangleVertexIndexes.length
+      polygon.vertices.length !== 3
+      || binding.vertexCount !== 3
+      || binding.triangleCutouts.length !== 1
+      || binding.triangleMaterials.length !== 1
       || binding.cutoutUvs.length !== 4
     ) {
       throw new Error(
         `Prepared stadium polygon ${index} has no complete prepare-time triangle binding.`,
       );
     }
-    return triangleVertexIndexes.map((vertexIndexes, triangleIndex) => {
-      const cutout = binding.triangleCutouts[triangleIndex];
-      if (
-        !Array.isArray(cutout.basisVertexIndexes)
-        || cutout.basisVertexIndexes.length !== 3
-        || [...cutout.basisVertexIndexes].sort().join(",") !== [...vertexIndexes].sort().join(",")
-      ) {
-        throw new Error(`Prepared stadium polygon ${index} lost its tight triangle basis.`);
-      }
-      const triangleVertices = cutout.basisVertexIndexes.map((vertexIndex) => (
-        polygon.vertices[vertexIndex]
-      ));
-      const expanded = expandTexturedTriangleToEdgeBasisQuad(
-        triangleVertices,
-        binding.cutoutUvs,
-      );
-      return {
-        ...polygon,
-        vertices: expanded.vertices,
-        material: binding.triangleMaterials[triangleIndex],
-        textureAlphaMode: "mask",
-        uvs: expanded.uvs,
-        doubleSided: true,
-      };
+    const [cutout] = binding.triangleCutouts;
+    if (
+      !Array.isArray(cutout.basisVertexIndexes)
+      || cutout.basisVertexIndexes.length !== 3
+      || [...cutout.basisVertexIndexes].sort().join(",") !== "0,1,2"
+    ) {
+      throw new Error(`Prepared stadium polygon ${index} lost its tight triangle basis.`);
+    }
+    const triangleVertices = cutout.basisVertexIndexes.map((vertexIndex) => (
+      polygon.vertices[vertexIndex]
+    ));
+    const expanded = expandTexturedTriangleToEdgeBasisQuad(
+      triangleVertices,
+      binding.cutoutUvs,
+    );
+    const nativeTextureRaster = prepareNativeStadiumScanlineRaster({
+      binding,
+      sourceRect: cutout.sourceRect,
+      sourceTextureFixed: binding.sourceTextureFixed,
+      vertexOrder: binding.vertexOrder,
     });
+    return [{
+      ...polygon,
+      vertices: expanded.vertices,
+      material: binding.triangleMaterials[0],
+      ...(nativeTextureRaster ? { nativeTextureRaster } : {}),
+      textureAlphaMode: binding.transparent ? "mask" : "opaque",
+      uvs: expanded.uvs,
+      doubleSided: true,
+    }];
   });
+}
+
+function prepareNativeStadiumScanlineRaster({
+  binding,
+  sourceRect,
+  sourceTextureFixed,
+  vertexOrder,
+}) {
+  const scanlineSourceCutout = binding.scanlineSourceCutout;
+  const scanlineSourceMaterial = binding.scanlineSourceMaterial;
+  const atlasSourceRect = scanlineSourceMaterial?.imageSource?.sourceRect;
+  const atlasWidth = scanlineSourceMaterial?.imageSource?.width;
+  const atlasHeight = scanlineSourceMaterial?.imageSource?.height;
+  const rasterScale = scanlineSourceCutout?.rasterScale;
+  const sourcePadding = scanlineSourceCutout?.sourcePadding ?? 0;
+  const sourceRasterId = scanlineSourceCutout?.nativeRasterSourceId;
+  const sourceRasterWidth = scanlineSourceCutout?.nativeRasterWidth;
+  const sourceRasterHeight = scanlineSourceCutout?.nativeRasterHeight;
+  const sourceRasterOffsetX = scanlineSourceCutout?.nativeRasterOffsetX;
+  const sourceRasterOffsetY = scanlineSourceCutout?.nativeRasterOffsetY;
+  const isLargePanel = (
+    sourceRect?.width >= NATIVE_STADIUM_LARGE_PANEL_MIN_WIDTH
+    && sourceRect.height >= NATIVE_STADIUM_LARGE_PANEL_MIN_HEIGHT
+  );
+  const isBillboard = NATIVE_STADIUM_BILLBOARD_TEXTURE_INDEXES.includes(
+    binding.textureIndex,
+  );
+  const isExactTriangle = binding.vertexCount === 3;
+  if (
+    binding.transparent
+    || !sourceRect
+    || (!isExactTriangle && !isLargePanel && !isBillboard)
+  ) {
+    return null;
+  }
+  if (
+    ![8, 9].includes(binding.nativePage)
+    || !Number.isSafeInteger(binding.textureIndex)
+    || binding.textureIndex < 0
+    || binding.textureIndex >= 49
+    || !Number.isSafeInteger(rasterScale)
+    || rasterScale <= 0
+    || !Number.isSafeInteger(sourcePadding)
+    || sourcePadding < 0
+    || typeof sourceRasterId !== "string"
+    || sourceRasterId.length === 0
+    || !Number.isSafeInteger(sourceRasterWidth)
+    || !Number.isSafeInteger(sourceRasterHeight)
+    || !Number.isSafeInteger(sourceRasterOffsetX)
+    || sourceRasterOffsetX < 0
+    || !Number.isSafeInteger(sourceRasterOffsetY)
+    || sourceRasterOffsetY < 0
+    || sourceRasterOffsetX
+      + sourceRect.width * rasterScale + sourcePadding * 2
+      > sourceRasterWidth
+    || sourceRasterOffsetY
+      + sourceRect.height * rasterScale + sourcePadding * 2
+      > sourceRasterHeight
+    || !Number.isSafeInteger(atlasWidth)
+    || !Number.isSafeInteger(atlasHeight)
+    || !atlasSourceRect
+    || scanlineSourceCutout.nativePage !== binding.nativePage
+    || scanlineSourceCutout.sourceRect.x !== sourceRect.x
+    || scanlineSourceCutout.sourceRect.y !== sourceRect.y
+    || scanlineSourceCutout.sourceRect.width !== sourceRect.width
+    || scanlineSourceCutout.sourceRect.height !== sourceRect.height
+    || !Array.isArray(sourceTextureFixed)
+    || sourceTextureFixed.length !== binding.vertexCount
+    || sourceTextureFixed.some((coordinate) => (
+      !Array.isArray(coordinate)
+      || coordinate.length !== 2
+      || coordinate.some((value) => (
+        !Number.isSafeInteger(value)
+        || value < 0
+        || value > 0x00ff_ffff
+      ))
+    ))
+  ) {
+    throw new Error(
+      `Prepared stadium texture ${binding.textureIndex} lost its native fixed-point mapping: `
+      + JSON.stringify({
+        nativePage: binding.nativePage,
+        sourceRect,
+        scanlineSourceNativePage: scanlineSourceCutout?.nativePage,
+        scanlineSourceRect: scanlineSourceCutout?.sourceRect,
+        atlasSourceRect,
+        atlasWidth,
+        atlasHeight,
+        rasterScale,
+        sourcePadding,
+        sourceRasterId,
+        sourceRasterWidth,
+        sourceRasterHeight,
+        sourceRasterOffsetX,
+        sourceRasterOffsetY,
+        sourceTextureFixed,
+      }),
+    );
+  }
+  if (!isCyclicVertexOrder(vertexOrder, binding.vertexCount)) {
+    throw new Error(
+      `Prepared native scanline texture ${binding.textureIndex} reversed its source winding.`,
+    );
+  }
+  const nativeSourceTextureFixed = sourceTextureFixed.map((coordinate) => (
+    Object.freeze([...coordinate])
+  ));
+  const rasterTextureFixed = nativeSourceTextureFixed.map(([sourceX, sourceY]) => (
+    Object.freeze([
+      (sourceX - sourceRect.x * 0x0001_0000) * rasterScale,
+      (sourceY - sourceRect.y * 0x0001_0000) * rasterScale,
+    ])
+  )).map(([rasterX, rasterY]) => Object.freeze([
+    rasterX + (sourcePadding + sourceRasterOffsetX) * 0x0001_0000,
+    rasterY + (sourcePadding + sourceRasterOffsetY) * 0x0001_0000,
+  ]));
+  if (rasterTextureFixed.some(([rasterX, rasterY]) => (
+    !Number.isSafeInteger(rasterX)
+    || !Number.isSafeInteger(rasterY)
+    || rasterX < 0
+    || rasterY < 0
+    || rasterX > sourceRasterWidth * 0x0001_0000
+    || rasterY > sourceRasterHeight * 0x0001_0000
+  ))) {
+    throw new Error(
+      `Prepared native scanline texture ${binding.textureIndex} exceeds its packed atlas.`,
+    );
+  }
+  return Object.freeze({
+    schema: NATIVE_STADIUM_SCANLINE_RASTER_SCHEMA,
+    interpolation: "polym-screen-space-fixed16",
+    nativePage: binding.nativePage,
+    textureIndex: binding.textureIndex,
+    vertexCount: binding.vertexCount,
+    atlasWidth,
+    atlasHeight,
+    atlasSourceRect: Object.freeze({ ...atlasSourceRect }),
+    rasterScale,
+    sourceRasterId,
+    sourceRasterWidth,
+    sourceRasterHeight,
+    nativeSourceTextureFixed: Object.freeze(nativeSourceTextureFixed),
+    rasterTextureFixed: Object.freeze(rasterTextureFixed),
+  });
+}
+
+function isCyclicVertexOrder(vertexOrder, vertexCount) {
+  if (
+    ![3, 4].includes(vertexCount)
+    || !Array.isArray(vertexOrder)
+    || vertexOrder.length !== vertexCount
+  ) return false;
+  return Array.from({ length: vertexCount }, (_unused, offset) => offset).some((offset) => (
+    vertexOrder.every((vertexIndex, index) => (
+      vertexIndex === (index + offset) % vertexCount
+    ))
+  ));
 }
 
 function expandTexturedTriangleToEdgeBasisQuad(vertices, cutoutUvs) {
@@ -2110,7 +2318,7 @@ function createInitialSceneBindings({
       z: sourceFloatValue(`refs[${index}].z`, 0),
     });
     const rendererFacing = rendererFacingBinding(
-      -sourceValues.directionX.value,
+      sourceValues.directionX.value,
       sourceValues.directionY.value,
     );
     const animation = initialAnimationBinding({
@@ -2134,7 +2342,9 @@ function createInitialSceneBindings({
         sourceValues,
         rendererMapping: {
           position: ["refs.x", "refs.z", "-refs.y"],
-          finalObjectFacing: ["-refs.dir_x", "refs.dir_y"],
+          facingChain:
+            "3D_UPD2 realtime_coords crot negation then 3DENG people crot negation",
+          finalObjectFacing: ["refs.dir_x", "refs.dir_y"],
         },
         rendererFacing,
         animation,
@@ -2461,6 +2671,7 @@ function createPreparedScene({
     },
     axes: staticDomain.scene.axes,
     dimensions: staticDomain.scene.dimensions,
+    pitchLineRaster: staticDomain.scene.pitchLineRaster,
     cameraAnchor: staticDomain.scene.cameraAnchor,
     backdrop: {
       schema: "cssoccer-prepared-sky-backdrop@1",

@@ -191,8 +191,13 @@ export function createCssoccerFreePlayRenderFrame(contract, {
     }
     const slotId = player.animation?.id;
     const nativeFrame = player.animation?.frame;
+    const frameStep = player.animation?.frameStep;
     const frameCount = preparedAnimationFrameCount(contract, slotId);
-    if (!Number.isFinite(nativeFrame)) {
+    if (
+      !Number.isFinite(nativeFrame)
+      || !Number.isFinite(frameStep)
+      || frameStep < 0
+    ) {
       throw new TypeError(`cssoccer free-play animation frame is invalid for ${player.id}.`);
     }
     const fractionalFrame = nativeFrame - Math.floor(nativeFrame);
@@ -208,6 +213,7 @@ export function createCssoccerFreePlayRenderFrame(contract, {
       animation: {
         slotId,
         frame: Math.min(frameCount - 1, Math.floor(fractionalFrame * frameCount)),
+        frameStep,
       },
     };
   });
@@ -301,12 +307,14 @@ function createCssoccerOfficialRenderCommands(contract, officialState) {
         || !isFiniteVec2(official.facing)
         || !isFinitePosition(official.position)
         || !Number.isSafeInteger(official.animation?.id)
-        || !Number.isFinite(official.animation?.frame)) {
+        || !Number.isFinite(official.animation?.frame)
+        || !Number.isFinite(official.animation?.frameStep)
+        || official.animation.frameStep < 0) {
       throw new Error(`cssoccer current official state is invalid at index ${index}.`);
     }
     const frameCount = preparedAnimationFrameCount(contract, official.animation.id);
     const fractionalFrame = official.animation.frame - Math.floor(official.animation.frame);
-    const cosine = -official.facing.x;
+    const cosine = official.facing.x;
     const sine = official.facing.y;
     const yawDegrees = rendererYawDegrees(cosine, sine);
     return {
@@ -322,6 +330,7 @@ function createCssoccerOfficialRenderCommands(contract, officialState) {
       animation: {
         slotId: official.animation.id,
         frame: Math.min(frameCount - 1, Math.floor(fractionalFrame * frameCount)),
+        frameStep: official.animation.frameStep,
       },
       material: {
         materialProfileId: binding.materialProfileId,
@@ -510,7 +519,7 @@ export function createCssoccerLiveRenderFrame(contract, {
         ),
       },
       visible: requireIntegerValue(values[`${prefix}on`], `${prefix}on`) !== 0,
-      animation: { slotId, frame },
+      animation: { slotId, frame, frameStep: null },
     };
   });
   const playerBatch = createCssoccerPlayerRenderCommands(contract, {
@@ -1165,12 +1174,18 @@ function requirePreparedPlayerPublication(
     exactOfficialAssets?.schema !== "cssoccer-exact-actua-official-asset-runtime@1"
     || exactOfficialAssets.index?.counts?.sequences !== 11
     || exactOfficialAssets.index?.counts?.poseOccurrences !== 312
+    || exactOfficialAssets.index?.counts?.mirroredSequences !== 3
+    || exactOfficialAssets.index?.counts?.poseCoordinates !== 26_208
     || exactOfficialAssets.index?.counts?.yawBins !== 24
     || exactOfficialAssets.index?.counts?.faceStates !== 89_856
     || !SHA256.test(exactOfficialAssets.index?.contractSha256 ?? "")
     || exactOfficialAssets.materials?.counts?.fixtureOfficials !== OFFICIAL_COUNT
     || exactOfficialAssets.materials?.geometryId !== exactOfficialAssets.index?.geometryId
     || exactOfficialAssets.materials?.topologySha256 !== exactOfficialAssets.index?.topologySha256
+    || typeof exactOfficialAssets.poseCoordinatesFields !== "function"
+    || typeof exactOfficialAssets.projectionTopologyFields !== "function"
+    || typeof exactOfficialAssets.projectionSequenceMirroredFields !== "function"
+    || typeof exactOfficialAssets.projectionTweenBaselineFields !== "function"
   ) throw new Error("Prepared exact-official publication changed.");
   for (const sequence of exactOfficialAssets.index.sequences ?? []) {
     if (preparedAnimationFrameCountFromFacts(facts, sequence.slotId) !== sequence.frameCount) {
@@ -1266,9 +1281,19 @@ function createPlayerHighlightRenderBinding(facts, publication) {
 
 function resolvePreparedAnimation(contract, binding, animation, rootId) {
   requirePlainObject(animation, `${rootId} animation`);
-  requireExactKeys(animation, ["frame", "slotId"], `${rootId} animation`);
+  const animationKeys = Object.keys(animation).sort();
+  if (
+    !sameValue(animationKeys, ["frame", "slotId"])
+    && !sameValue(animationKeys, ["frame", "frameStep", "slotId"])
+  ) {
+    throw new Error(`${rootId} animation has unexpected keys.`);
+  }
   requireNonNegativeSafeInteger(animation.slotId, `${rootId} animation slotId`);
   requireNonNegativeSafeInteger(animation.frame, `${rootId} animation frame`);
+  const frameStep = animation.frameStep ?? null;
+  if (frameStep !== null && (!Number.isFinite(frameStep) || frameStep < 0)) {
+    throw new RangeError(`${rootId} animation frame step must be non-negative or null.`);
+  }
   const key = `${animation.slotId}:${animation.frame}`;
   if (!Object.hasOwn(contract.preparedFrameIndexBySlotFrame, key)) {
     throw new Error(`${rootId} animation ${key} has no prepared frame.`);
@@ -1281,6 +1306,7 @@ function resolvePreparedAnimation(contract, binding, animation, rootId) {
   return {
     slotId: animation.slotId,
     frame: animation.frame,
+    frameStep,
     frameSetId: binding.frameSetId,
     preparedFrameIndex,
     preparedFrameId,
@@ -1448,7 +1474,14 @@ function assertCommandAnimation(contract, command, binding, index) {
   requirePlainObject(command.animation, `cssoccer player render animation ${index}`);
   requireExactKeys(
     command.animation,
-    ["frame", "frameSetId", "preparedFrameId", "preparedFrameIndex", "slotId"],
+    [
+      "frame",
+      "frameSetId",
+      "frameStep",
+      "preparedFrameId",
+      "preparedFrameIndex",
+      "slotId",
+    ],
     `cssoccer player render animation ${index}`,
   );
   requireNonNegativeSafeInteger(
@@ -1463,6 +1496,14 @@ function assertCommandAnimation(contract, command, binding, index) {
     command.animation.preparedFrameIndex,
     `cssoccer player render animation ${index} preparedFrameIndex`,
   );
+  if (
+    command.animation.frameStep !== null
+    && (!Number.isFinite(command.animation.frameStep) || command.animation.frameStep < 0)
+  ) {
+    throw new RangeError(
+      `cssoccer player render animation ${index} frameStep must be non-negative or null.`,
+    );
+  }
   const key = `${command.animation.slotId}:${command.animation.frame}`;
   const preparedFrameIndex = contract.preparedFrameIndexBySlotFrame[key];
   if (

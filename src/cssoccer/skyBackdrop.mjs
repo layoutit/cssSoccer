@@ -2,6 +2,7 @@ const SKY_WIDTH = 640;
 const SKY_HEIGHT = 480;
 const SKY_PANORAMA_ARC = 2 * 3.1415 / 3;
 const SKY_STADIUM_PADDING = 200;
+const NATIVE_PROJECTION_SCALE = 440;
 const DEFAULT_STADIUM_DIMENSIONS = Object.freeze({
   st_w: 190,
   st_l: 190,
@@ -25,6 +26,12 @@ export function projectCssoccerSkyBackdrop(camera, {
   if (!Number.isFinite(projectionScale) || projectionScale <= 0) {
     throw new TypeError("Sky camera must expose its source projection scale.");
   }
+  const presentationScale = projectionScale / NATIVE_PROJECTION_SCALE;
+  const nativeViewportWidth = viewportWidth / presentationScale;
+  const nativeViewportHeight = viewportHeight / presentationScale;
+  if (!(nativeViewportWidth > 0) || !(nativeViewportHeight > 0)) {
+    throw new Error("Sky presentation cannot resolve its native logical viewport.");
+  }
   const dimensions = requireStadiumDimensions(stadiumDimensions);
   const deltaX = target[0] - eye[0];
   const deltaY = target[1] - eye[1];
@@ -41,26 +48,41 @@ export function projectCssoccerSkyBackdrop(camera, {
   const skyClip = projectNativeSkyClip({
     eye,
     target,
-    projectionScale,
-    viewportHeight,
+    projectionScale: NATIVE_PROJECTION_SCALE,
+    viewportHeight: nativeViewportHeight,
     stadiumDimensions: dimensions,
   });
   // ground() walks the source bitmap and destination scanlines upward. Bind
   // the source row at screen y=0 after reproducing its stadium-height clip.
   const sourceY = skyClip.visibleHeight === 0
     ? Math.round(
-      SKY_HEIGHT - viewportHeight / 2 - projectionScale * deltaY / horizontal,
+      SKY_HEIGHT
+      - nativeViewportHeight / 2
+      - NATIVE_PROJECTION_SCALE * deltaY / horizontal,
     )
     : skyClip.sourceStartRow - (skyClip.visibleHeight - 1);
+  const backgroundPositionX = sourceX === 0
+    ? 0
+    : -sourceX * presentationScale;
+  const backgroundPositionY = sourceY === 0
+    ? 0
+    : -sourceY * presentationScale;
+  const visibleHeight = skyClip.visibleHeight * presentationScale;
   return Object.freeze({
     schema: "cssoccer-native-sky-screen-projection@1",
     sourceX,
     sourceY,
-    backgroundPositionX: sourceX === 0 ? 0 : -sourceX,
-    backgroundPositionY: -sourceY,
+    backgroundPositionX,
+    backgroundPositionY,
+    backgroundWidth: SKY_WIDTH * presentationScale,
+    backgroundHeight: SKY_HEIGHT * presentationScale,
     viewportWidth,
     viewportHeight,
-    visibleHeight: skyClip.visibleHeight,
+    nativeViewportWidth,
+    nativeViewportHeight,
+    nativeVisibleHeight: skyClip.visibleHeight,
+    presentationScale,
+    visibleHeight,
     sourceVisible:
       skyClip.visibleHeight > 0
       && sourceY < SKY_HEIGHT
@@ -105,6 +127,13 @@ export function createCssoccerSkyBackdropHandle({ host, backdrop, camera }) {
     if (projection?.backgroundPositionY !== next.backgroundPositionY) {
       element.style.backgroundPositionY = `${next.backgroundPositionY}px`;
       backgroundPositionYWrites += 1;
+    }
+    if (
+      projection?.backgroundWidth !== next.backgroundWidth
+      || projection?.backgroundHeight !== next.backgroundHeight
+    ) {
+      element.style.backgroundSize =
+        `${next.backgroundWidth}px ${next.backgroundHeight}px`;
     }
     if (projection?.visibleHeight !== next.visibleHeight) {
       element.style.height = `${next.visibleHeight}px`;

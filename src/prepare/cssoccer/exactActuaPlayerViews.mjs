@@ -212,11 +212,15 @@ function prepareSampleWithInput(context, preparedPoseIndex, yawIndex) {
   if (materializedSha256 !== frameAddress.exactFloat32PoseSha256) {
     throw new Error(`Exact Actua prepared pose ${preparedPoseIndex} changed float32 bits.`);
   }
+  const mirroredTopology = sequence.lineage.mode === "source-mirror-z";
   const projectionInput = Object.freeze({
-    topology: context.projectionTopology,
+    topology: mirroredTopology
+      ? context.projectionTopologies.mirrored
+      : context.projectionTopologies.direct,
     coordinates,
     expectedPoseSha256: materializedSha256,
     preparedPoseIndex,
+    mirrored: mirroredTopology,
   });
   const sample = prepareCssoccerExactActuaActorViewSample({
     ...projectionInput,
@@ -435,11 +439,22 @@ function prepareContext({ animationTable, sequences, geometry }) {
     || geometry.geometry?.pointCount !== 28
     || geometry.geometry?.faceCount !== FACE_COUNT
     || geometry.geometry?.faces?.length !== FACE_COUNT
+    || geometry.geometry?.mirrored?.pointCount !== 28
+    || geometry.geometry?.mirrored?.faceCount !== FACE_COUNT
+    || geometry.geometry?.mirrored?.faces?.length !== FACE_COUNT
   ) throw new Error("Exact Actua views require the one-basis geometry contract.");
-  const projectionTopology = {
-    pointCount: geometry.geometry.pointCount,
-    faceCount: geometry.geometry.faceCount,
-    faces: geometry.geometry.faces.map((face) => ({
+  const projectionTopologies = {
+    direct: projectionTopology(geometry.geometry),
+    mirrored: projectionTopology(geometry.geometry.mirrored),
+  };
+  return { animationTable, sequences, geometry, projectionTopologies };
+}
+
+function projectionTopology(geometry) {
+  return {
+    pointCount: geometry.pointCount,
+    faceCount: geometry.faceCount,
+    faces: geometry.faces.map((face) => ({
       faceIndex: face.faceIndex,
       primitiveCode: face.primitiveCode,
       dispatch: face.dispatch,
@@ -447,7 +462,6 @@ function prepareContext({ animationTable, sequences, geometry }) {
       payload: [...face.pointIndexes, ...face.primitiveParameters],
     })),
   };
-  return { animationTable, sequences, geometry, projectionTopology };
 }
 
 function exactPoseSha256(coordinates) {
