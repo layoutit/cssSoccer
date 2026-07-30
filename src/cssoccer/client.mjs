@@ -116,6 +116,7 @@ export function mountCssoccerClient({
     inputMode: detectInputMode(windowImpl),
     hudState: null,
     hudGoalHistory: [],
+    hudRestartMenuStartedTick: null,
     lastInputCommand: null,
     lastInputState: null,
     liveFrame: null,
@@ -270,6 +271,7 @@ export function mountCssoccerClient({
       state.exactPlayerAssets = exactPlayerAssets;
       state.exactOfficialAssets = exactOfficialAssets;
       state.hudGoalHistory = [];
+      state.hudRestartMenuStartedTick = null;
       state.matchState = createMatchState({
         preparedFacts,
         preparedScene: sceneData,
@@ -315,6 +317,7 @@ export function mountCssoccerClient({
       state.exactOfficialAssets = null;
       state.hudState = null;
       state.hudGoalHistory = [];
+      state.hudRestartMenuStartedTick = null;
       state.liveFrame = null;
       hudHost.hidden = true;
       delete documentImpl.body.dataset.controlCountry;
@@ -672,6 +675,7 @@ export function mountCssoccerClient({
       const publicationStarted = now?.() ?? 0;
       state.mount.applyLiveRenderFrame(frame);
       state.matchState = snapshot.match;
+      retainNativeHudRestartMenu(snapshot.lastStep?.events ?? []);
       state.lastInputCommand = emitted.command;
       state.lastInputState = emitted.input;
       state.liveFrame = frame;
@@ -971,6 +975,7 @@ export function mountCssoccerClient({
       justScored: live?.camera.justScored ?? state.matchState.goal.justScored,
       matchMode: live?.camera.matchMode ?? state.matchState.rules.matchMode,
       possession: projectNativeHudPossession(live, state.preparedFacts),
+      restartMenuStartedTick: state.hudRestartMenuStartedTick,
     });
     documentImpl.body.dataset.matchPaused = String(state.inputState.paused);
     documentImpl.body.dataset.matchFocused = String(state.inputState.focused);
@@ -1036,6 +1041,15 @@ export function mountCssoccerClient({
     ];
   }
 
+  function retainNativeHudRestartMenu(events) {
+    const initialized = events.find(({ type }) => type === "boundary-restart-initialized");
+    if (initialized === undefined) return;
+    if (!Number.isSafeInteger(initialized.tick) || initialized.tick < 0) {
+      throw new Error("cssoccer native HUD restart menu received an invalid source tick.");
+    }
+    state.hudRestartMenuStartedTick = initialized.tick;
+  }
+
   function renderTouchControls() {
     const active = new Set(state.inputState.pointers.map(({ control }) => control));
     for (const button of touchButtons) {
@@ -1093,6 +1107,7 @@ export function mountCssoccerClient({
       state.lastInputState = null;
       state.liveFrame = null;
       state.hudGoalHistory = [];
+      state.hudRestartMenuStartedTick = null;
       performanceInitialFramePublished = false;
       performanceFrameScheduler.accumulator = 0;
       performanceFrameScheduler.lastTimestamp = null;
@@ -1166,6 +1181,7 @@ export function mountCssoccerClient({
     state.playerRenderContract = null;
     state.hudState = null;
     state.hudGoalHistory = [];
+    state.hudRestartMenuStartedTick = null;
     state.lastInputCommand = null;
     state.lastInputState = null;
     state.liveFrame = null;

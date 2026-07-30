@@ -1,6 +1,6 @@
 import { CSSOCCER_MATCH_MODE } from "./boundaryState.mjs";
 
-export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@6";
+export const CSSOCCER_NATIVE_HUD_STATE_SCHEMA = "cssoccer-native-hud-state@7";
 
 const HUD_STATE_KEYS = Object.freeze([
   "cameraMessage",
@@ -12,6 +12,7 @@ const HUD_STATE_KEYS = Object.freeze([
   "matchMode",
   "phase",
   "possession",
+  "restartMenuActive",
   "schema",
   "score",
   "tick",
@@ -85,6 +86,10 @@ const SOURCE_KICKOFF_MENU_RENDER_TICKS = (
   + Math.ceil(SOURCE_KICKOFF_MENU_HOLD / SOURCE_MENU_RATE_PER_RENDER_TICK)
   + Math.ceil(SOURCE_KICKOFF_MENU_SLIDE / SOURCE_MENU_RATE_PER_RENDER_TICK)
 );
+// RULES.CPP initializes corner, throw-in, and goal-kick menus immediately
+// before the first rendered restart frame. The native render loop has already
+// consumed that frame's five slide units, leaving 65 visible restart frames.
+const SOURCE_RESTART_MENU_RENDER_TICKS = 65;
 
 export function createCssoccerNativeHudState(options = {}) {
   requirePlainObject(options, "cssoccer native HUD options");
@@ -98,6 +103,7 @@ export function createCssoccerNativeHudState(options = {}) {
       "matchMode",
       "phase",
       "possession",
+      "restartMenuStartedTick",
       "score",
       "tick",
     ],
@@ -105,6 +111,19 @@ export function createCssoccerNativeHudState(options = {}) {
   );
   const tick = options.tick ?? 0;
   const phase = options.phase ?? "opening-kickoff";
+  const restartMenuStartedTick = options.restartMenuStartedTick ?? null;
+  if (
+    restartMenuStartedTick !== null
+    && (
+      !Number.isSafeInteger(restartMenuStartedTick)
+      || restartMenuStartedTick < 0
+      || restartMenuStartedTick > tick
+    )
+  ) {
+    throw new TypeError(
+      "cssoccer native HUD restartMenuStartedTick must be null or a prior non-negative tick.",
+    );
+  }
   const sourceRenderedTick = Math.max(0, tick - 1);
   return assertCssoccerNativeHudState(deepFreeze({
     schema: CSSOCCER_NATIVE_HUD_STATE_SCHEMA,
@@ -121,6 +140,8 @@ export function createCssoccerNativeHudState(options = {}) {
     matchMode: options.matchMode ?? CSSOCCER_MATCH_MODE.NORMAL,
     phase,
     possession: clone(options.possession ?? null),
+    restartMenuActive: restartMenuStartedTick !== null
+      && tick - restartMenuStartedTick < SOURCE_RESTART_MENU_RENDER_TICKS,
     score: clone(options.score ?? { spain: 0, argentina: 0 }),
     tick,
   }));
@@ -224,6 +245,9 @@ export function assertCssoccerNativeHudState(state) {
   }
   if (typeof state.kickoffMenuActive !== "boolean") {
     throw new TypeError("cssoccer native HUD kickoff menu state must be boolean.");
+  }
+  if (typeof state.restartMenuActive !== "boolean") {
+    throw new TypeError("cssoccer native HUD restart menu state must be boolean.");
   }
   if (!SOURCE_PHASES.has(state.phase)) {
     throw new Error(`cssoccer native HUD has no source presentation for ${String(state.phase)}.`);
@@ -383,6 +407,7 @@ export function createCssoccerNativeHudView({ host } = {}) {
       // the normal bottom score during await_swap.
       const normalScoreVisible = !scoreMenuVisible
         && !current.kickoffMenuActive
+        && !current.restartMenuActive
         && current.justScored === 0;
       if (scoreMenuVisible) {
         renderScoreMenu({

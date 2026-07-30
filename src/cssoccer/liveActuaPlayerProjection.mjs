@@ -685,11 +685,7 @@ function blendPlayerCoordinates({
       const previousCoordinate = previousCoordinates[previousOffset + axis];
       output[targetOffset + axis] = F32(
         F32(targetCoordinates[targetOffset + axis] * progress)
-        + F32(
-          previousCoordinate
-          * previousWeight
-          * (mirrorParityChanged && axis === 2 ? -1 : 1),
-        ),
+        + F32(previousCoordinate * previousWeight),
       );
     }
   }

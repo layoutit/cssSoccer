@@ -13,9 +13,9 @@ const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const VIEWPORT_WIDTH = 640;
 const VIEWPORT_HEIGHT = 400;
 const VIEWPORT_MARGIN = 32;
+const NATIVE_NEAR_PLANE = 15;
 const NATIVE_FIXED_SCALE = 0x0001_0000;
-const SCANLINE_SLOT_COUNT = 20;
-const SCANLINE_BAND_COUNT = 64;
+const SCANLINE_SLOT_COUNT = 32;
 const MATRIX_EPSILON = 1e-9;
 const MIN_PROJECTED_AREA = 4;
 
@@ -70,6 +70,8 @@ export function createCssoccerNativeStadiumTextureProjection({
   let slotAssignmentCount = 0;
   let activeScanlineFaceCount = 0;
   let nativeBackfaceHiddenCount = 0;
+  let nearPlaneClippedFaceCount = 0;
+  let visibleScanlineCandidateCount = 0;
 
   const register = ({ bundle, handle }) => {
     if (!bundle?.id?.startsWith(STADIUM_BUNDLE_PREFIX)) return false;
@@ -195,40 +197,59 @@ export function createCssoccerNativeStadiumTextureProjection({
       transformWriteCount += 1;
     }
 
-    const visible = scanlineRecords
+    const candidates = scanlineRecords
       .map((record) => {
         const preparedLeaf = projectPreparedLeaf(record, camera);
         const projected = record.nativeTextureRaster.vertexCount === 3
           ? [preparedLeaf[0], preparedLeaf[1], preparedLeaf[3]]
           : preparedLeaf;
-        const screenProjected = projected.map(([x, y, depth]) => [
+        const textured = projected.map(([x, y, depth], index) => {
+          const [u, v] = record.nativeTextureRaster.rasterTextureFixed[index];
+          return { x, y, depth, u, v };
+        });
+        const clipped = clipNativeTexturedPolygon(textured);
+        const screenProjected = clipped.map(({ x, y, depth }) => [
           Math.trunc(x),
           Math.trunc(y),
           depth,
         ]);
-        const nativeRasterProjected = projected.map(([x, y, depth]) => [
+        const nativeRasterProjected = clipped.map(({ x, y, depth, u, v }) => [
           Math.trunc(x),
           Math.trunc(VIEWPORT_HEIGHT - y),
           depth,
+          u,
+          v,
         ]);
         return {
           area: projectedArea(screenProjected),
-          frontFacing: isNativeFrontFacing(screenProjected),
+          frontFacing:
+            screenProjected.length >= 3
+            && isNativeFrontFacing(screenProjected),
+          nearPlaneClipped: clipped.length !== textured.length
+            || textured.some(({ depth }) => depth < NATIVE_NEAR_PLANE),
           nativeRasterProjected,
           record,
           visible: isVisibleProjection(screenProjected),
         };
-      })
+      });
+    nearPlaneClippedFaceCount = candidates.filter(
+      ({ nearPlaneClipped }) => nearPlaneClipped,
+    ).length;
+    const eligible = candidates
       .filter(({ frontFacing, record }) => {
-        setNativeBackfaceHidden(record, !frontFacing);
+        // The prepared leaf remains the source-coverage fallback when native
+        // clipping makes its exact screen raster unavailable. Culling that
+        // retained leaf creates holes between stands at camera-plane seams.
+        setNativeBackfaceHidden(record, false);
         return frontFacing;
       })
       .filter(({ area, visible: isVisible }) => isVisible && area >= MIN_PROJECTED_AREA)
       .sort((left, right) => (
         right.area - left.area
         || left.record.paintOrder - right.record.paintOrder
-      ))
-      .slice(0, slots.length);
+      ));
+    visibleScanlineCandidateCount = eligible.length;
+    const visible = eligible.slice(0, slots.length);
     const selected = new Set(visible.map(({ record }) => record));
     const visibleByPaintOrder = [...visible].sort((left, right) => (
       left.record.paintOrder - right.record.paintOrder
@@ -282,11 +303,13 @@ export function createCssoccerNativeStadiumTextureProjection({
         applyCount,
         registeredBundleCount,
         nativeBackfaceHiddenCount,
+        nearPlaneClippedFaceCount,
         scanlineCandidateCount: scanlineRecords.length,
         scanlineSlotCount: slots.length,
         slotAssignmentCount,
         triangleLeafCount: triangleRecords.length,
         transformWriteCount,
+        visibleScanlineCandidateCount,
       });
     },
   });
@@ -335,21 +358,6 @@ function createScanlineSlot(layer, rasterLayer, paletteIndexes, index) {
   element.className = "cssoccer-native-stadium-scanline-face";
   element.dataset.cssoccerNativeStadiumScanlineSlot = String(index);
   element.hidden = true;
-  const bands = Array.from({ length: SCANLINE_BAND_COUNT }, (_unused, bandIndex) => {
-    const band = layer.ownerDocument.createElement("i");
-    band.className = "cssoccer-native-stadium-scanline-band";
-    band.dataset.cssoccerNativeStadiumScanlineBand = String(bandIndex);
-    band.hidden = true;
-    element.appendChild(band);
-    return {
-      element: band,
-      height: null,
-      left: null,
-      top: null,
-      transform: null,
-      width: null,
-    };
-  });
   layer.appendChild(element);
   return {
     backgroundImage: null,
@@ -358,7 +366,7 @@ function createScanlineSlot(layer, rasterLayer, paletteIndexes, index) {
     backgroundSize: null,
     sourceHeight: null,
     sourceWidth: null,
-    bands,
+    bands: [],
     element,
     rasterGroup,
     rasterPaths,
@@ -539,11 +547,51 @@ function releaseScanlineSlot(slot) {
   delete slot.element.dataset.cssoccerNativeStadiumScanlineFace;
 }
 
+function clipNativeTexturedPolygon(vertices) {
+  if (vertices.length < 3) return [];
+  const clipped = [];
+  let previous = vertices.at(-1);
+  let previousInside = previous.depth >= NATIVE_NEAR_PLANE;
+
+  for (const current of vertices) {
+    const currentInside = current.depth >= NATIVE_NEAR_PLANE;
+    if (currentInside !== previousInside) {
+      clipped.push(nativeNearPlaneIntersection(previous, current));
+    }
+    if (currentInside) clipped.push(current);
+    previous = current;
+    previousInside = currentInside;
+  }
+  return clipped;
+}
+
+function nativeNearPlaneIntersection(first, second) {
+  const amount = (
+    (NATIVE_NEAR_PLANE - first.depth)
+    / (second.depth - first.depth)
+  );
+  const projection = CSSOCCER_ACTUA_GAMEPLAY_CAMERA.projectionScale;
+  const midpointX = VIEWPORT_WIDTH / 2;
+  const midpointY = VIEWPORT_HEIGHT / 2;
+  const firstCameraX = (first.x - midpointX) * first.depth / projection;
+  const firstCameraY = (midpointY - first.y) * first.depth / projection;
+  const secondCameraX = (second.x - midpointX) * second.depth / projection;
+  const secondCameraY = (midpointY - second.y) * second.depth / projection;
+  const cameraX = firstCameraX + amount * (secondCameraX - firstCameraX);
+  const cameraY = firstCameraY + amount * (secondCameraY - firstCameraY);
+  return {
+    x: midpointX + projection * cameraX / NATIVE_NEAR_PLANE,
+    y: midpointY - projection * cameraY / NATIVE_NEAR_PLANE,
+    depth: NATIVE_NEAR_PLANE,
+    u: Math.trunc(first.u + amount * (second.u - first.u)),
+    v: Math.trunc(first.v + amount * (second.v - first.v)),
+  };
+}
+
 function buildNativeRasterPaths(record, projected) {
   const source = record.nativeRasterSource;
   if (!source) return null;
-  const vertices = projected.map(([x, y], index) => {
-    const [u, v] = record.nativeTextureRaster.rasterTextureFixed[index];
+  const vertices = projected.map(([x, y, _depth, u, v]) => {
     return { x, y, u, v };
   });
   const minimumNativeY = Math.min(...vertices.map(({ y }) => y));
