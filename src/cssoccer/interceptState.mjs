@@ -2,6 +2,7 @@ import { stepBallTrajectoryPredictionState } from "./ballState.mjs";
 import { createBallMatchState } from "./ballMatchState.mjs";
 import {
   sourceAngleCosine,
+  sourceDistance2d,
   sourceGetThereTime,
 } from "./motionState.mjs";
 import { CSSOCCER_NATIVE_GAMEPLAY_PROFILE } from "./nativeGameplayProfile.mjs";
@@ -28,7 +29,7 @@ export const CSSOCCER_INTERCEPT_SOURCE = deepFreeze({
     },
   ],
   supportedBranch:
-    "ground run-on, first-time foot shot, and foot/chest/down-head control for a free ball",
+    "ground run-on, first-time foot shot/volley, and foot/chest/down-head control for a free ball",
   predictionOffsets: "odd ticks 1..49",
 });
 
@@ -64,6 +65,16 @@ export const CSSOCCER_FREE_BALL_CONTROL_PROFILE = deepFreeze({
       x: F32(10.019489288330078),
       y: F32(0.033519208431243896),
       z: F32(2.6339149475097656),
+    },
+    completionOffsetsByFrame: {
+      // Exact prepared player_p slot 84, frame 47, point 23. init_stand_act
+      // retains tm_frm - tm_fstep, so a CONTROL_ACT crossing 1 from the
+      // preceding frame must not be clamped to the final frame 48 pose.
+      47: {
+        x: F32(9.915416717529297),
+        y: F32(-0.1153116226196289),
+        z: F32(4.339001178741455),
+      },
     },
   },
   downHead: {
@@ -111,6 +122,25 @@ const CSSOCCER_FIRST_TIME_SHOT_PROFILE = deepFreeze({
   localOffsets: [
     { x: F32(7.5185089111328125), y: F32(-5.521873950958252), z: F32(1.78097403049469) },
     { x: F32(7.5185089111328125), y: F32(5.521873950958252), z: F32(1.78097403049469) },
+  ],
+});
+
+const CSSOCCER_FIRST_TIME_VOLLEY_PROFILE = deepFreeze({
+  actionIndex: 5,
+  animationId: 43,
+  contact: F32(41 / 91),
+  timingContact: 41 / 91,
+  // INTELL.OBJ go_to_path retains MC_VOLLEY_FS as the qword 1/15.
+  timingFrameStep: 1 / 15,
+  // BALLINT.CPP strike_ball_off calls standard_fstep after contact.
+  standardFrameStep: F32(1 / 15),
+  // ACTIONS.OBJ save_offs[MC_VOLLEYL], with rotate_offs' stored-y negation.
+  localOffsets: [
+    {
+      x: F32(12.917553901672363),
+      y: F32(-3.1365718841552734),
+      z: F32(12.568001747131348),
+    },
   ],
 });
 
@@ -188,6 +218,68 @@ export function projectCssoccerFirstTimeShotIntercept(input = {}) {
     standardFrameStep: F32(
       CSSOCCER_FIRST_TIME_SHOT_PROFILE.timingFrameStep,
     ),
+    strikeTime: F32(animationTime + 1),
+    travel,
+  });
+}
+
+/** Project INTELL.CPP can_i_intercept's first-time volley candidate. */
+export function projectCssoccerFirstTimeVolleyIntercept(input = {}) {
+  requirePlainObject(input, "first-time volley intercept input");
+  requireExactKeys(input, [
+    "contactFacing",
+    "player",
+    "playerHeight",
+    "target",
+    "tickOffset",
+  ], "first-time volley intercept input");
+  const player = requireFreeBallControlPlayer(input.player);
+  requireF32Vector2(input.contactFacing, "first-time volley intercept contactFacing");
+  requirePositiveF32(input.playerHeight, "first-time volley intercept playerHeight");
+  requireF32Vector3(input.target, "first-time volley intercept target");
+  if (!Number.isSafeInteger(input.tickOffset) || input.tickOffset <= 0) {
+    throw new TypeError("first-time volley intercept tickOffset must be a positive safe integer.");
+  }
+  if (
+    input.target.z < input.playerHeight / 4
+    || input.target.z >= input.playerHeight * 0.5
+  ) return null;
+
+  const contactOffset = rotateSourceOffset(
+    CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.localOffsets[0],
+    input.contactFacing,
+  );
+  const target = {
+    x: F32(input.target.x - contactOffset.x),
+    y: F32(input.target.y - contactOffset.y),
+    z: input.target.z,
+  };
+  const travel = getInterceptTravel(player, target);
+  const animationTime = sourceControlAnimationTime(
+    CSSOCCER_FIRST_TIME_VOLLEY_PROFILE,
+    player.flairAttribute,
+    player.userControlled,
+  );
+  const waitTicks = Math.trunc(
+    input.tickOffset - (travel.ticks + animationTime),
+  );
+  if (
+    waitTicks < 0
+    || (!player.controlled && waitTicks >= player.reactionTicks)
+  ) return null;
+
+  return deepFreeze({
+    kind: "first-time-volley",
+    actionIndex: CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.actionIndex,
+    animationId: CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.animationId,
+    contact: CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.contact,
+    tickOffset: input.tickOffset,
+    waitTicks,
+    target,
+    predictionTarget: { ...input.target },
+    contactOffset,
+    animationTime,
+    standardFrameStep: CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.standardFrameStep,
     strikeTime: F32(animationTime + 1),
     travel,
   });
@@ -360,6 +452,7 @@ export function projectCssoccerControlCompletionBall(input = {}) {
   requirePlainObject(input, "control completion ball input");
   requireExactKeys(input, [
     "actionIndex",
+    "animationFrame",
     "facing",
     "playerPosition",
   ], "control completion ball input");
@@ -367,9 +460,13 @@ export function projectCssoccerControlCompletionBall(input = {}) {
     ({ actionIndex }) => actionIndex === input.actionIndex,
   );
   if (action === undefined) throw new RangeError("control completion actionIndex must be 1, 2, or 3.");
+  requireF32(input.animationFrame, "control completion animationFrame");
   requireF32Vector2(input.facing, "control completion facing");
   requireF32Vector3(input.playerPosition, "control completion playerPosition");
-  const offset = rotateSourceOffset(action.completionOffset, input.facing);
+  const retainedFrame = Math.trunc(input.animationFrame * action.frameCount);
+  const completionOffset = action.completionOffsetsByFrame?.[retainedFrame]
+    ?? action.completionOffset;
+  const offset = rotateSourceOffset(completionOffset, input.facing);
   return deepFreeze({
     actionIndex: action.actionIndex,
     animationId: action.animationId,
@@ -963,7 +1060,11 @@ export function projectCssoccerFirstTimeShotArrival(input = {}) {
     Math.trunc(input.freeTicks + (best.rt - oldRt)),
   );
   const receiveTicks = F32(best.rt);
-  const planarDistance = sourcePlanarDistance(best.x, best.y);
+  // init_wait_act calls the compiled MATHS.OBJ calc_dist routine again after
+  // get_closest_pred has selected its offset. Its fmul/fmul/faddp/DSQRT chain
+  // rounds only at the returned float store; do not reuse the independently
+  // qualified prediction-distance helper's intermediate stores here.
+  const planarDistance = sourceDistance2d({ x: best.x, y: best.y });
   const receiveValid = planarDistance / receiveTicks <= 2
     && Math.abs(best.z) <= 4;
   const receiveDisplacement = receiveValid
@@ -988,6 +1089,107 @@ export function projectCssoccerFirstTimeShotArrival(input = {}) {
     actionIndex: CSSOCCER_FIRST_TIME_SHOT_PROFILE.actionIndex,
     animationId,
     contact: CSSOCCER_FIRST_TIME_SHOT_PROFILE.contact,
+    contactOffset,
+    displacement,
+    frame: F32(frameStep + 0.01),
+    frameStep,
+    freeTicks,
+    position: freeTicks > 0
+      ? {
+          x: F32(input.playerPosition.x + displacement.x),
+          y: F32(input.playerPosition.y + displacement.y),
+          z: input.playerPosition.z,
+        }
+      : { ...input.playerPosition },
+    receiveTicks,
+    receiveValid,
+  });
+}
+
+/**
+ * Re-evaluate ACTIONS.CPP init_first_time_act/get_closest_pred when a
+ * first-time volley run reaches its target.
+ */
+export function projectCssoccerFirstTimeVolleyArrival(input = {}) {
+  requirePlainObject(input, "first-time volley arrival input");
+  requireExactKeys(input, [
+    "ballState",
+    "face",
+    "freeTicks",
+    "playerPosition",
+    "strikeTime",
+  ], "first-time volley arrival input");
+  requireF32Vector2(input.face, "first-time volley arrival face");
+  requireF32Vector3(input.playerPosition, "first-time volley arrival playerPosition");
+  requirePositiveF32(input.strikeTime, "first-time volley arrival strikeTime");
+  if (!Number.isSafeInteger(input.freeTicks) || input.freeTicks < 0) {
+    throw new TypeError("first-time volley arrival freeTicks must be a non-negative safe integer.");
+  }
+
+  const predictions = [input.ballState];
+  let prediction = input.ballState;
+  for (let tickOffset = 1; tickOffset < PREDICTION_LIMIT; tickOffset += 1) {
+    prediction = stepCssoccerInterceptPrediction(prediction);
+    predictions.push(prediction);
+  }
+  // init_first_time_act calls init_anim(MC_VOLLEYL), whose dispatcher keeps
+  // the left-volley clip and its single compiled contact offset.
+  const contactOffset = rotateSourceOffset(
+    CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.localOffsets[0],
+    input.face,
+  );
+  const oldRt = F32(input.strikeTime + input.freeTicks);
+  const sample = (rt) => {
+    const point = predictions[Math.trunc(rt)].ball.position;
+    const x = F32(F32(point.x - contactOffset.x) - input.playerPosition.x);
+    const y = F32(F32(point.y - contactOffset.y) - input.playerPosition.y);
+    const z = F32(F32(point.z - contactOffset.z) - input.playerPosition.z);
+    const planar = sourcePlanarDistance(x, y);
+    return { rt, x, y, z, distance: sourcePlanarDistance(z, planar) };
+  };
+  let cursor = oldRt;
+  let best = sample(cursor);
+  if (cursor < PREDICTION_LIMIT - 1) {
+    cursor = F32(cursor + 1);
+    const forward = sample(cursor);
+    if (forward.distance < best.distance) best = forward;
+  }
+  if (cursor >= 1) {
+    cursor = F32(cursor - 2);
+    const backward = sample(cursor);
+    if (backward.distance < best.distance) best = backward;
+  }
+
+  const freeTicks = Math.max(
+    0,
+    Math.trunc(input.freeTicks + (best.rt - oldRt)),
+  );
+  const receiveTicks = F32(best.rt);
+  const planarDistance = sourcePlanarDistance(best.x, best.y);
+  const receiveValid = planarDistance / receiveTicks <= 2
+    && Math.abs(best.z) <= 4;
+  const receiveDisplacement = receiveValid
+    ? {
+        x: F32(best.x / receiveTicks),
+        y: F32(best.y / receiveTicks),
+      }
+    : { x: F32(0), y: F32(0) };
+  const stepDistance = freeTicks > 0
+    ? F32(planarDistance / freeTicks)
+    : F32(0);
+  const displacement = freeTicks > 0
+    ? {
+        x: F32(F32(best.x / planarDistance) * stepDistance),
+        y: F32(F32(best.y / planarDistance) * stepDistance),
+      }
+    : receiveDisplacement;
+  const frameStep = F32(
+    CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.contact / receiveTicks,
+  );
+  return deepFreeze({
+    actionIndex: CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.actionIndex,
+    animationId: CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.animationId,
+    contact: CSSOCCER_FIRST_TIME_VOLLEY_PROFILE.contact,
     contactOffset,
     displacement,
     frame: F32(frameStep + 0.01),

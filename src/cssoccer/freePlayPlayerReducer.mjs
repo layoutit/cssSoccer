@@ -52,6 +52,9 @@ const DANGER_DISTANCE = F32(CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.valu
 const DRIBBLE_DANGER_DISTANCE = F32(
   CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.prat.value * 13,
 );
+const NATIVE_FACING_ANGLE =
+  CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.kickoff.facingAngle
+    .compiledOperand.value;
 
 export const CSSOCCER_FREE_PLAY_PLAYER_REDUCER_SOURCE = deepFreeze({
   files: [
@@ -414,6 +417,20 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
         },
       };
     }
+    const continuingIntercept = player.intelligence.move === 1
+      && player.intelligence.count > 1
+      && player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+      && player.liveMotion.goCount > 1;
+    if (continuingIntercept) {
+      // A centre-pass collection changes possession before this suffix visit,
+      // but it does not cancel an already-busy I_INTERCEPT. Native runs the
+      // installed action and decrements its counters; replanning this player
+      // as an ordinary zonal opponent overwrites the correct first-team pass.
+      return continueSourceInterceptJourney(current, {
+        ballPosition,
+        nextTick: input.nextTick,
+      });
+    }
     const planned = planZonalPlayer(current, {
       allowSideStep: supportRun?.playerId !== player.id,
       ballPosition,
@@ -453,6 +470,87 @@ export function stepCssoccerFreePlayOpeningTeamContinuation(input = {}) {
   });
 }
 
+function continueSourceInterceptJourney(current, {
+  ballPosition,
+  nextTick,
+}) {
+  const { player, motion, teamRate } = current;
+  const intelligenceCount = player.intelligence.count - 1;
+  const targetOffset = {
+    x: F32(motion.target.x - player.position.x),
+    y: F32(motion.target.y - player.position.y),
+  };
+  const speed = actualPlayerSpeed({
+    pitchLength: PITCH_LENGTH,
+    teamRate,
+    speedIntent: CSSOCCER_SPEED_INTENT.intercept,
+    intentionCount: intelligenceCount,
+    sideStep: motion.goStep,
+    nativePlayer: player.nativePlayerNumber,
+    ballPossession: 0,
+    ballInHands: false,
+    keeperNativePlayers: [1, 12],
+    userControlIndex: 1,
+    burstTimer: 0,
+  });
+  const goDisplacement = motion.goStep
+    ? clone(motion.goDisplacement)
+    : sourceForwardDisplacement({
+        facing: player.facing,
+        targetOffset,
+        speed,
+      }).displacement;
+  const position = {
+    ...updateSourcePosition2d({
+      position: { x: player.position.x, y: player.position.y },
+      displacement: goDisplacement,
+    }),
+    z: player.position.z,
+  };
+  const facing = turnSourceFacing({
+    facing: player.facing,
+    target: motion.directionMode === 1
+      ? {
+          x: F32(ballPosition.x - position.x),
+          y: F32(ballPosition.y - position.y),
+        }
+      : {
+          x: F32(motion.target.x - position.x),
+          y: F32(motion.target.y - position.y),
+        },
+    maxTurnRadians: projectCssoccerMotionSourceProfile(
+      CSSOCCER_NATIVE_GAMEPLAY_PROFILE,
+      { teamRate },
+    ).maxTurnRadians,
+  }).facing;
+  return {
+    ...clone(player),
+    previousPosition: clone(player.position),
+    previousFacing: clone(player.facing),
+    position,
+    velocity: { ...clone(goDisplacement), z: F32(0) },
+    facing,
+    intelligence: {
+      ...clone(player.intelligence),
+      count: intelligenceCount,
+    },
+    action: createCssoccerActionState({
+      tick: nextTick,
+      playerId: player.id,
+      actionId: CSSOCCER_NATIVE_ACTIONS.RUN,
+      facingX: facing.x,
+      facingY: facing.y,
+    }),
+    liveMotion: {
+      ...clone(motion),
+      goCount: motion.goCount - 1,
+      goDisplacement,
+      animationFrameStep: player.animation.frameStep,
+      userControlIndex: 1,
+    },
+  };
+}
+
 /** Continue ordinary current-state team work without consuming the local user visit. */
 export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
   requirePlainObject(input, "free-play team journey continuation");
@@ -464,6 +562,7 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
     "possessionKicks",
     "players",
     "possessionRuns",
+    "restartResetIdeas",
     "rngSeed",
     "sourceDecisionPlayers",
     "supportRun",
@@ -492,6 +591,9 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
   }
   if (typeof input.freeBallOutOfPlay !== "boolean") {
     throw new TypeError("Team journey freeBallOutOfPlay must be boolean.");
+  }
+  if (typeof input.restartResetIdeas !== "boolean") {
+    throw new TypeError("Team journey restartResetIdeas must be boolean.");
   }
   const tactics = currentTacticsState(input.tactics);
   const rates = currentRateMap(input.teamRates, input.players);
@@ -589,7 +691,16 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
       );
       const pendingShot = input.players.find((candidate) => (
         ["punt-released", "shot-released"].includes(candidate.liveShot?.phase)
-        || candidate.livePendingShot !== undefined
+        || (
+          candidate.livePendingShot !== undefined
+          && (
+            candidate.livePendingShot.kind !== "cross"
+            || candidate.livePendingShot.release?.tick < input.nextTick
+            || input.visits.findIndex(
+              ({ playerId }) => playerId === candidate.id,
+            ) < keeperVisitIndex
+          )
+        )
         || (
           candidate.liveFirstTimeIntercept?.phase === "released"
           && candidate.liveFirstTimeIntercept.kind === "shot"
@@ -616,12 +727,34 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
         if (keeperVisitIndex < 0 || shooterVisitIndex < 0) {
           throw new Error("Pending-shot keeper wait lost native traversal identity.");
         }
-        const waiting = settlePlayer(current, {
+        const settled = settlePlayer(current, {
           ballPosition: visit.ballPosition,
           nextTick: input.nextTick,
           possession: visit.possession,
           rngSeed: input.rngSeed,
         });
+        const waiting = current.motion.directionMode === 2
+          ? {
+              ...settled,
+              // stand_action's shot_pending guard skips find_zonal_target.
+              // A keeper coming out of I_GET_UP therefore reaches process_dir
+              // with the retained no-turn mode and old go target intact.
+              facing: clone(player.facing),
+              target: { ...clone(current.motion.target), z: F32(0) },
+              action: createCssoccerActionState({
+                tick: input.nextTick,
+                playerId: player.id,
+                actionId: CSSOCCER_NATIVE_ACTIONS.STAND,
+                facingX: player.facing.x,
+                facingY: player.facing.y,
+              }),
+              liveMotion: {
+                ...settled.liveMotion,
+                target: clone(current.motion.target),
+                directionMode: 2,
+              },
+            }
+          : settled;
         const pendingRelease = pendingShot.liveShot
           ?? pendingShot.livePendingShot
           ?? pendingShot.liveFirstTimeIntercept;
@@ -699,16 +832,21 @@ export function stepCssoccerFreePlayTeamJourneyContinuation(input = {}) {
       && player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
       && player.liveMotion.kind === "offside-runback"
       && player.liveMotion.goCount === 1
-      && visit.possession.owner !== 0
       && (
-        (visit.possession.owner < 12)
-        !== (player.nativePlayerNumber < 12)
+        input.restartResetIdeas
+        || (
+          visit.possession.owner !== 0
+          && (
+            (visit.possession.owner < 12)
+            !== (player.nativePlayerNumber < 12)
+          )
+        )
       );
     if (continuingClearedOffsideRunback) {
-      // computer_play clears tm_off when the opponent owns the ball, but it
-      // does not clear the already-installed RUN_ACT journey. run_action
-      // consumes that final step, then find_zonal_target installs and
-      // executes the replacement route in the same player visit.
+      // computer_play clears tm_off when the opponent owns the ball, while
+      // init_match_mode/reset_all_ideas does the same at a restart. Neither
+      // clears the already-installed RUN_ACT journey: run_action consumes its
+      // final step before find_zonal_target installs and executes a new route.
       const continued = continueSourceSupportJourney(current, {
         ballPosition: visit.ballPosition,
         nextTick: input.nextTick,
@@ -1252,6 +1390,7 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
     "logicCount",
     "nextTick",
     "offsideEnabled",
+    "opponentsNearHolder",
     "players",
     "possession",
     "rngSeed",
@@ -1292,6 +1431,13 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
   }
   if (typeof input.offsideEnabled !== "boolean") {
     throw new TypeError("Free-play support intent offsideEnabled must be boolean.");
+  }
+  if (
+    !Number.isSafeInteger(input.opponentsNearHolder)
+    || input.opponentsNearHolder < 0
+    || input.opponentsNearHolder > 11
+  ) {
+    throw new TypeError("Free-play support intent opponentsNearHolder must be in 0..11.");
   }
   if (
     !Number.isSafeInteger(input.sourcePossession?.lastTouch)
@@ -1343,8 +1489,18 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
   if (continuing.length > 1) {
     throw new Error("Source want_pass has more than one current support owner.");
   }
-  const run = continuing.length === 0
+  const expiringRequester = continuing.find(
+    sourceSupportRequestClearsDuringVisit,
+  );
+  const expiringRequesterVisitIndex = expiringRequester === undefined
+    ? -1
+    : input.visits.findIndex(({ playerId }) => playerId === expiringRequester.id);
+  if (expiringRequester !== undefined && expiringRequesterVisitIndex < 0) {
+    throw new Error("Free-play support intent lost the expiring requester visit.");
+  }
+  const run = continuing.length === 0 || expiringRequester !== undefined
       ? selectSourceSupportRun({
+        blockedUntilVisitIndex: expiringRequesterVisitIndex,
         candidateWindow: input.candidateWindow,
         controlledPlayerId: input.controlledPlayerId,
         defensiveLines: input.defensiveLines,
@@ -1353,6 +1509,7 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
         logicCount: input.logicCount,
         nextTick: input.nextTick,
         offsideEnabled: input.offsideEnabled,
+        opponentsNearHolder: input.opponentsNearHolder,
         players,
         possession: input.possession,
         rngSeed: input.rngSeed,
@@ -1361,21 +1518,40 @@ export function resolveCssoccerFreePlaySupportIntent(input = {}) {
         visits,
       })
     : null;
-  const requester = continuing[0]
-    ?? (run === null ? undefined : players.find(({ id }) => id === run.playerId));
+  const runRequester = run === null
+    ? undefined
+    : players.find(({ id }) => id === run.playerId);
   let holderWantPassNativePlayer = 0;
-  if (holder !== undefined && requester !== undefined && requester.id !== holder.id) {
-    const requesterIndex = input.visits.findIndex(({ playerId }) => playerId === requester.id);
+  if (holder !== undefined) {
     const holderIndex = input.visits.findIndex(({ playerId }) => playerId === holder.id);
-    if (requesterIndex < 0 || holderIndex < 0) {
+    const continuingRequester = continuing[0];
+    const continuingRequesterIndex = continuingRequester === undefined
+      ? -1
+      : input.visits.findIndex(({ playerId }) => playerId === continuingRequester.id);
+    const runRequesterIndex = runRequester === undefined
+      ? -1
+      : input.visits.findIndex(({ playerId }) => playerId === runRequester.id);
+    if (
+      holderIndex < 0
+      || (continuingRequester !== undefined && continuingRequesterIndex < 0)
+      || (runRequester !== undefined && runRequesterIndex < 0)
+    ) {
       throw new Error("Free-play support intent lost source traversal order.");
     }
-    const clearsBeforeHolder = continuing.length === 1
-      && requester.intelligence.count <= 1
-      && requesterIndex < holderIndex;
-    const startsBeforeHolder = continuing.length === 1 || requesterIndex < holderIndex;
-    if (startsBeforeHolder && !clearsBeforeHolder) {
-      holderWantPassNativePlayer = requester.nativePlayerNumber;
+    const continuingVisibleAtHolder = continuingRequester !== undefined
+      && (
+        expiringRequester === undefined
+        || continuingRequesterIndex >= holderIndex
+      );
+    const runVisibleAtHolder = runRequester !== undefined
+      && runRequesterIndex < holderIndex;
+    const requesterAtHolder = continuingVisibleAtHolder
+      ? continuingRequester
+      : runVisibleAtHolder
+        ? runRequester
+        : undefined;
+    if (requesterAtHolder !== undefined && requesterAtHolder.id !== holder.id) {
+      holderWantPassNativePlayer = requesterAtHolder.nativePlayerNumber;
     }
   }
   return deepFreeze({
@@ -1412,6 +1588,7 @@ function currentSupportRun(value, players) {
 }
 
 function selectSourceSupportRun({
+  blockedUntilVisitIndex = -1,
   candidateWindow,
   controlledPlayerId,
   defensiveLines,
@@ -1420,6 +1597,7 @@ function selectSourceSupportRun({
   logicCount,
   nextTick,
   offsideEnabled,
+  opponentsNearHolder = null,
   players,
   possession,
   rngSeed,
@@ -1428,10 +1606,6 @@ function selectSourceSupportRun({
   visits,
 }) {
   if (possession.owner === 0) return null;
-  if (players.some((player) => (
-    player.intelligence.move === RUN_ON_INTELLIGENCE_MOVE
-    && player.intelligence.count > 0
-  ))) return null;
   const holder = players.find(
     (player) => player.nativePlayerNumber === possession.owner,
   );
@@ -1463,6 +1637,8 @@ function selectSourceSupportRun({
       throw new Error(`Team journey support run lost the visit for ${player.id}.`);
     }
     if (
+      visit.index <= blockedUntilVisitIndex
+      ||
       (candidateWindow === "before-holder" && visit.index >= holderVisit.index)
       || (candidateWindow === "after-holder" && visit.index <= holderVisit.index)
     ) continue;
@@ -1493,7 +1669,10 @@ function selectSourceSupportRun({
     if (visit.distance >= CALL_DISTANCE) continue;
     const help = sourceHelpChance({
       ballPosition: visit.ballPosition,
-      opponentsNearHolder: sourceOpponentCountNearBall({
+      // FOOTBALL.CPP get_opp_near_ball freezes this global before
+      // process_teams. A same-pass collection changes ball_poss, but a later
+      // we_have_ball visit still reads the entry holder's pressure count.
+      opponentsNearHolder: opponentsNearHolder ?? sourceOpponentCountNearBall({
         ballPosition: visit.ballPosition,
         holder: visitHolder,
         players,
@@ -1513,6 +1692,7 @@ function selectSourceSupportRun({
           holderAlreadyVisited: holderVisitCompleted
             && candidateWindow === "after-holder"
             && holder.action.tick === nextTick,
+          holderIsCentreTaker: holder.id === takerId,
           holder: visitHolder,
           players,
           requester: player,
@@ -1524,6 +1704,28 @@ function selectSourceSupportRun({
     };
   }
   return null;
+}
+
+function sourceSupportRequestClearsDuringVisit(player) {
+  if (player.intelligence.count <= 1) return true;
+  if (player.liveMotion?.kind !== "support-run") return false;
+  const offset = player.liveMotion.wantPassOffset;
+  if (!Number.isFinite(offset?.x) || !Number.isFinite(offset?.y)) {
+    throw new Error(
+      `Active support run lost source go_xoff/go_yoff for ${player.id}.`,
+    );
+  }
+  const distance = sourceDistance2d(offset);
+  const requestFacing = (
+    ((offset.x * player.facing.x) + (offset.y * player.facing.y)) / distance
+  ) > NATIVE_FACING_ANGLE;
+  const facingReset = player.liveMotion.wantPassFaced === true && !requestFacing;
+  const routeArrives = player.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
+    && player.liveMotion.goCount <= 1;
+  // intelligence can clear I_RUN_ON before do_action; otherwise run_action's
+  // terminal go_forward enters init_stand_act and clears the source-global
+  // want_pass during this player's visit. Later teammates may request it.
+  return facingReset || routeArrives;
 }
 
 function sourceSupportPlayerIsOffside({
@@ -1605,6 +1807,7 @@ function sourceOpponentCountAroundPlayer(subject, players) {
 function sourceHolderFacingAtRequesterVisit({
   ballPosition,
   holderAlreadyVisited,
+  holderIsCentreTaker,
   holder,
   players,
   requester,
@@ -1618,6 +1821,11 @@ function sourceHolderFacingAtRequesterVisit({
   if (holderAlreadyVisited) return holder.facing;
   const holderRunsBeforeRequester = holder.nativePlayerNumber < requester.nativePlayerNumber;
   if (!holderRunsBeforeRequester) return holder.facing;
+
+  // On the opening centre pass, the taker's earlier source visit has already
+  // installed KICK_ACT and dir_mode=2. kicking_dist therefore reads the
+  // retained centre facing; it must not replay ordinary standing dir_ball.
+  if (holderIsCentreTaker) return holder.facing;
 
   const continuesHeldBallRun = holder.action.action.value === CSSOCCER_NATIVE_ACTIONS.RUN
     && holder.intelligence.move === DRIBBLE_INTELLIGENCE_MOVE
@@ -1982,6 +2190,7 @@ function planZonalPlayer(
   let facingTarget;
   let kind;
   let sideStepDirection = null;
+  let goStop = false;
   let goCount = 0;
   let goDisplacement = { x: F32(0), y: F32(0) };
   let resetAnimationFrame = false;
@@ -2057,6 +2266,7 @@ function planZonalPlayer(
         target: goDisplacement,
         facing: player.facing,
       }) >= Math.cos(motionProfile.maxTurnRadians);
+      goStop = !mayStart;
       position = mayStart
         ? updateSourcePosition2d({
             position: { x: player.position.x, y: player.position.y },
@@ -2105,6 +2315,9 @@ function planZonalPlayer(
       // init_stand_act does not clear the previous go_step flag. A later
       // run_back/find_zonal_target visit reads it when choosing STEP_RANGE.
       goStep: holdsPosition || arrived ? motion.goStep : sideStep,
+      // get_there_time can retain RUN_ACT while stop_and_face turns in place.
+      // go_forward clears this only once the route is aligned enough to move.
+      goStop,
       goCount,
       goDisplacement,
       directionMode: holdsPosition || arrived

@@ -13,12 +13,21 @@ import {
   createPossessionState,
   touchWithoutPossession,
 } from "./possessionState.mjs";
+import {
+  CSSOCCER_SPEED_INTENT,
+  actualPlayerSpeed,
+  sourceDistance2d,
+} from "./motionState.mjs";
 
 const F32 = Math.fround;
 // INTELL.OBJ save_in_zone_c comparisons at 0x2ccb and 0x3063 retain
 // SAVE_CHEST_HGT/prat = 1.8 and SAVE_HEAD_HGT/prat = 2.5 as f64 operands.
 const SAVE_CHEST_HEIGHT_MULTIPLIER = 1.8;
 const SAVE_HEAD_HEIGHT_MULTIPLIER = 2.5;
+// Andys Defines.h SAVE_AHEADC_TIME. The expression remains f64 at the
+// INTELL.CPP comparison boundary even though the calculated travel time is
+// first stored in a source float.
+const SAVE_AHEADC_TIME = 65 * 20 / 120;
 
 export const CSSOCCER_KEEPER_AI_SCHEMA = "cssoccer-keeper-intent@1";
 export const CSSOCCER_KEEPER_SAVE_PLAN_SCHEMA = "cssoccer-keeper-save-plan@1";
@@ -437,6 +446,57 @@ export function planCssoccerKeeperSave(input = {}) {
       reason: "trajectory-misses-keeper-area",
     });
   }
+
+  const sourceTargetOffset = {
+    x: F32(save.target.x - keeper.position.x),
+    y: F32(save.target.y - keeper.position.y),
+  };
+  const distance = sourceDistance2d(sourceTargetOffset);
+  const approachSpeed = actualPlayerSpeed({
+    pitchLength: pitch.length,
+    teamRate: keeper.attributes.pace,
+    speedIntent: CSSOCCER_SPEED_INTENT.normal,
+    intentionCount: 0,
+    sideStep: true,
+    nativePlayer: keeper.nativePlayerNumber,
+    ballPossession: 0,
+    ballInHands: false,
+    keeperNativePlayers: [1, 12],
+    userControlIndex: 0,
+    burstTimer: 0,
+  });
+  const approachTicks = F32(distance / approachSpeed);
+  if (
+    !forced
+    && !(approachTicks < 1)
+    && approachTicks < save.predictionIndex - SAVE_AHEADC_TIME
+  ) {
+    // go_to_save_path can still get the keeper's body behind the projected
+    // contact. It acknowledges the shot, resets ideas, forces go_step, and
+    // runs one prat goal-side of the selected midpoint before considering a
+    // save animation on a later acknowledgement visit.
+    return deepFreeze({
+      schema: CSSOCCER_KEEPER_SAVE_PLAN_SCHEMA,
+      status: "save-approach",
+      plannedAtTick: ball.ball.tick,
+      keeperNativePlayer: keeper.nativePlayerNumber,
+      predictionIndex: save.predictionIndex,
+      forced: false,
+      sourceTarget: clonePoint(save.target),
+      target: {
+        x: F32(
+          save.target.x
+            + (keeper.nativePlayerNumber < 12 ? -pitch.ratio : pitch.ratio),
+        ),
+        y: F32(save.target.y),
+        z: F32(save.target.z),
+      },
+      approachTicks,
+      acknowledgementTicks:
+        1 + Math.trunc((128 - keeper.attributes.vision) / 8),
+      sourceBallTick: ball.ball.tick,
+    });
+  }
   if (!forced && !(save.target.z < BOUND_KEEPER_CONSTANTS.saveJumpHeight)) {
     // go_to_save_path retains candidates up to SAVE_JUMP_HGT + prat/2, but
     // every save_in_zone_* height dispatch stops strictly at SAVE_JUMP_HGT.
@@ -451,7 +511,6 @@ export function planCssoccerKeeperSave(input = {}) {
     });
   }
 
-  const distance = planarDistance(keeper.position, save.target);
   const zone = distance <= pitch.ratio
     ? "A"
     : distance <= pitch.ratio * 2.5
@@ -555,7 +614,21 @@ export function resolveCssoccerKeeperSaveContact(input = {}) {
     y: F32(keeper.position.y + plan.contactOffset.y),
     z: F32(keeper.position.z + plan.contactOffset.z),
   };
-  const distance = planarDistance(contactPoint, ball.ball.position);
+  const distance = sourceDistance2d({
+    // rebound_off_plr passes ball-(keeper+save_offset) directly to
+    // calc_dist. The inner keeper+offset sum therefore remains in the x87
+    // evaluator until the complete argument is stored as a source float.
+    // Do not reuse contactPoint here: that object already models the later
+    // assignment to ballx/bally and has rounded the inner sum too early.
+    x: F32(
+      ball.ball.position.x
+        - (keeper.position.x + plan.contactOffset.x),
+    ),
+    y: F32(
+      ball.ball.position.y
+        - (keeper.position.y + plan.contactOffset.y),
+    ),
+  });
   const saveContact = CSSOCCER_NATIVE_GAMEPLAY_PROFILE.constants.contact.saveContact.value;
   if (
     (plan.forced !== true && !(distance < saveContact))
@@ -636,18 +709,25 @@ export function resolveCssoccerKeeperSaveContact(input = {}) {
     ...clone(ball),
     ball: {
       ...clone(ball.ball),
-      position: clonePoint(ball.ball.position),
+      // BALLINT.CPP's block branch calls rebound_off_plr first, then pins the
+      // live ball to the SAVE_ACT contact reached by this visit. tm_x/tm_y
+      // are still the pre-action keeper position here; go_txdis/go_tydis add
+      // the visit's movement before the rotated motion-capture offset.
+      position: {
+        x: F32(keeper.position.x + goDisplacement.x + plan.contactOffset.x),
+        y: F32(keeper.position.y + goDisplacement.y + plan.contactOffset.y),
+        // Unlike collect_ball's held contact, the block path publishes the
+        // global save_zoff directly rather than adding the keeper root z.
+        z: F32(plan.contactOffset.z),
+      },
       displacement,
       inAir: 1,
       still: 0,
       spin: {
+        // reset_shot clears only the active swerve flag. The spin values
+        // already published by this tick's move_ball remain observable.
+        ...clone(ball.ball.spin),
         swerve: 0,
-        count: 0,
-        nativeState: 0,
-        fullXY: F32(0),
-        fullZ: F32(0),
-        xy: F32(0),
-        z: F32(0),
       },
       afterTouch: {
         user: 0,
@@ -737,7 +817,13 @@ function requirePitch(value = {}) {
   requirePositiveFinite(length, "pitch length");
   requirePositiveFinite(width, "pitch width");
   requirePositiveFinite(ratio, "pitch ratio");
-  return deepFreeze({ length, width, ratio, centreY: width / 2 });
+  return deepFreeze({
+    length,
+    width,
+    ratio,
+    centreX: length / 2,
+    centreY: width / 2,
+  });
 }
 
 function requireBall(value) {

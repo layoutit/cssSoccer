@@ -27,6 +27,8 @@ export const CSSOCCER_BALL_CONSTANTS = Object.freeze({
   landingFriction: 0.1,
   groundStopThreshold: 0.25,
   swerveHoldFactor: 4,
+  userHorizontalSwerve: 0.14,
+  userVerticalSwerve: 0.12,
   reboundFactor: 0.8,
   // The bound Watcom rebound vector resolves the compiled PI expansion at
   // full precision; using the truncated recovered-header token drifts angle.

@@ -1570,7 +1570,10 @@ function rotateSourceOffset(local, facing) {
 }
 
 function sourcePlanarDistance(x, y) {
-  return F32(Math.sqrt(F32(F32(x * x) + F32(y * y))));
+  // MATHS.CPP calc_dist keeps both products, their sum, and sqrt in the x87
+  // expression evaluator; only the local float result is stored. Rounding the
+  // individual squares changes rotate_offs by one ULP for non-cardinal kicks.
+  return F32(Math.sqrt((x * x) + (y * y)));
 }
 
 function frameStepForLocomotion(locomotion, teamRate) {

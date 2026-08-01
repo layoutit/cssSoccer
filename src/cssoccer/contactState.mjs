@@ -977,16 +977,11 @@ export function stepCssoccerPlayerTussleFrame(input) {
       }],
     }));
   }
-  if (
+  const keeperFoul = (
     shoverValues.action === CSSOCCER_NATIVE_CONTACT_ACTION.save
     && ((shoverValues.possession + 2) * 32)
       < ((frame.seed.value * frame.profile.refereeStrictness.value) / 128)
-  ) {
-    failTussle(
-      "keeper-foul",
-      "Keeper-foul rule initialization is outside the first tussle-fall slice.",
-    );
-  }
+  );
 
   const directionDistance = sourceStoredDistance(summed.x, summed.y);
   if (!(directionDistance > 0)) {
@@ -1008,10 +1003,12 @@ export function stepCssoccerPlayerTussleFrame(input) {
     y: f32(fallenValues.position.y + (fallGo.y * 100)),
   };
   const postPosition = {
-    x: leftShoved
+    // The p1-shoved branch applies its summed-vector shove only when the
+    // keeper-foul branch does not divert immediately into init_foul.
+    x: leftShoved && !keeperFoul
       ? f32(fallenValues.position.x + summed.x)
       : fallenValues.position.x,
-    y: leftShoved
+    y: leftShoved && !keeperFoul
       ? f32(fallenValues.position.y + summed.y)
       : fallenValues.position.y,
     z: f32(0),
@@ -1108,17 +1105,25 @@ export function stepCssoccerPlayerTussleFrame(input) {
     ballPossession,
     players,
     nativeFall,
-    events: [{
-      type: "player-tussle-fall",
-      left: { stableId: left.stableId, nativePlayerNumber: left.nativePlayerNumber },
-      right: { stableId: right.stableId, nativePlayerNumber: right.nativePlayerNumber },
-      fallen: { stableId: fallen.stableId, nativePlayerNumber: fallen.nativePlayerNumber },
-      shover: { stableId: shover.stableId, nativePlayerNumber: shover.nativePlayerNumber },
-      leftShoved,
-      force,
-      releasedPossession,
-      postFallShove: leftShoved,
-    }],
+    events: [
+      {
+        type: "player-tussle-fall",
+        left: { stableId: left.stableId, nativePlayerNumber: left.nativePlayerNumber },
+        right: { stableId: right.stableId, nativePlayerNumber: right.nativePlayerNumber },
+        fallen: { stableId: fallen.stableId, nativePlayerNumber: fallen.nativePlayerNumber },
+        shover: { stableId: shover.stableId, nativePlayerNumber: shover.nativePlayerNumber },
+        leftShoved,
+        force,
+        releasedPossession,
+        postFallShove: leftShoved && !keeperFoul,
+      },
+      ...(keeperFoul ? [{
+        type: "foul-candidate",
+        fouler: shover.nativePlayerNumber,
+        fallenPlayer: fallen.nativePlayerNumber,
+        source: "tussle_collision",
+      }] : []),
+    ],
   }));
 }
 
@@ -1692,8 +1697,12 @@ function requireTussleTransition(value) {
     throw new Error("Player-tussle transition must retain exactly two players.");
   }
   value.players.forEach(requireTusslePlayer);
-  if (!Array.isArray(value.events) || value.events.length !== 1) {
-    throw new Error("Player-tussle transition requires one contact event.");
+  if (
+    !Array.isArray(value.events)
+    || value.events.length < 1
+    || value.events.length > 2
+  ) {
+    throw new Error("Player-tussle transition requires one contact event and at most one foul candidate.");
   }
   const event = value.events[0];
   requirePlainObject(event, "player-tussle transition event");
@@ -1742,6 +1751,31 @@ function requireTussleTransition(value) {
     }
   } else {
     throw new Error("Player-tussle transition event type changed.");
+  }
+  const foul = value.events[1] ?? null;
+  if (foul !== null) {
+    requirePlainObject(foul, "player-tussle foul candidate");
+    requireExactKeys(foul, [
+      "fallenPlayer",
+      "fouler",
+      "source",
+      "type",
+    ], "player-tussle foul candidate");
+    if (
+      event.type !== "player-tussle-fall"
+      || foul.type !== "foul-candidate"
+      || foul.source !== "tussle_collision"
+      || foul.fouler !== event.shover.nativePlayerNumber
+      || foul.fallenPlayer !== event.fallen.nativePlayerNumber
+    ) {
+      failTussle("keeper-foul", "Player-tussle keeper foul identity changed.");
+    }
+    const fouler = value.players.find(({ nativePlayerNumber }) => (
+      nativePlayerNumber === foul.fouler
+    ));
+    if (fouler?.action.value !== CSSOCCER_NATIVE_CONTACT_ACTION.save) {
+      failTussle("keeper-foul-action", "Player-tussle foul lost its SAVE_ACT fouler.");
+    }
   }
   return value;
 }

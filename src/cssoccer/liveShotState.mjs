@@ -424,8 +424,11 @@ function releaseCssoccerShotKernel(input, newSetPieceKick) {
     );
   }
   if (userControlled) {
-    fullXY = F32(0.12 * owner.flair / 128);
-    fullZ = F32(0.12 * owner.flair / 128);
+    // INTELL.CPP uses distinct MAX_XY_USW and MAX_Z_USW constants. The
+    // qualified native set-piece release resolves them to 0.14 and 0.12;
+    // sharing the vertical constant underpowered horizontal after-touch.
+    fullXY = F32(CSSOCCER_BALL_CONSTANTS.userHorizontalSwerve * owner.flair / 128);
+    fullZ = F32(CSSOCCER_BALL_CONSTANTS.userVerticalSwerve * owner.flair / 128);
   }
 
   const launchDistance = sourceDistance2d({ x: xOffset, y: yOffset });
@@ -443,9 +446,10 @@ function releaseCssoccerShotKernel(input, newSetPieceKick) {
       ...clone(ball.ball),
       displacement,
       inAir: 1,
-      // A kick releases after this tick's process_ball visit. The native
-      // new-set-piece path therefore retains ball_still until the next tick.
-      still: newSetPieceKick === null ? 0 : ball.ball.still,
+      // A kick releases after this tick's process_ball visit. shoot_ball does
+      // not write ball_still, so every shot retains the entry value until
+      // the next free-ball trajectory visit recomputes it.
+      still: ball.ball.still,
       spin: {
         swerve,
         count: 0,
@@ -462,7 +466,14 @@ function releaseCssoccerShotKernel(input, newSetPieceKick) {
       afterTouch: {
         user: userControlled && !drive ? 1 : 0,
         shotDirection: userControlled && !drive
-          ? clone(direction)
+          ? newSetPieceKick === null
+            ? clone(direction)
+            : {
+                // The new-kick branch stores direction*10 in ballxdis/y,
+                // then normalizes those rounded floats into shoot_x/y.
+                x: F32(xOffset / launchDistance),
+                y: F32(yOffset / launchDistance),
+              }
           : { x: F32(0), y: F32(0) },
       },
     },
@@ -533,7 +544,9 @@ export function releaseCssoccerPunt(input = {}) {
       ...clone(ball.ball),
       displacement,
       inAir: 1,
-      still: 0,
+      // punt_ball, like shoot_ball, runs after process_ball and does not
+      // rewrite ball_still at the release boundary.
+      still: ball.ball.still,
       spin: {
         swerve: 0,
         count: 0,

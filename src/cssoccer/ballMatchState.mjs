@@ -96,6 +96,21 @@ export function stepBallMatchState(
     throw new Error("A limbo player sample is unsupported while ball limbo is inactive.");
   }
 
+  if (outcome?.kind === "swap-ends" && ball.outOfPlay === 0) {
+    // BALL.CPP still visits ball_trajectory/ball_collision in SWAP_ENDS, but
+    // explicitly skips pitch_bounds. Once the inherited out-of-play counter
+    // is exhausted, the stationary halftime ball must therefore remain just
+    // outside the line instead of being classified as a fresh boundary.
+    ball = createBallState({
+      ...ball,
+      tick: ball.tick + 1,
+      previousPosition: { ...ball.position },
+      speed: 0,
+      still: 1,
+    });
+    return matchResult(ball, limbo, outcome, events);
+  }
+
   const enteredOutOfPlay = ball.outOfPlay !== 0;
   const physical = stepBallState(ball, {
     afterTouchInput,

@@ -129,7 +129,11 @@ export function releaseCssoccerGroundPass(input = {}) {
   ) {
     throw new TypeError("ground-pass release requires typed accuracy and wanted-receiver inputs");
   }
-  const receiver = requireGroundPassReceiver(input.receiver, possession.owner);
+  const receiver = requireGroundPassReceiver(
+    input.receiver,
+    possession.owner,
+    { cannotStop: input.wantedReceiver },
+  );
   const pass = requireGroundPassProfile(input.profile);
   const rng = createCssoccerNativeRngState(input.rng);
   const randomized = advanceCssoccerNativeRng(rng);
@@ -259,7 +263,11 @@ function releaseCssoccerAerialReceiverPass(input, { kind, speedBonus }) {
       `${kind}-pass release requires typed accuracy and wanted-receiver inputs`,
     );
   }
-  const receiver = requireGroundPassReceiver(input.receiver, possession.owner);
+  const receiver = requireGroundPassReceiver(
+    input.receiver,
+    possession.owner,
+    { cannotStop: input.wantedReceiver },
+  );
   const pass = requireGroundPassProfile(input.profile);
   const rng = createCssoccerNativeRngState(input.rng);
   const randomized = advanceCssoccerNativeRng(rng);
@@ -389,14 +397,25 @@ export function releaseCssoccerCrossPass(input = {}) {
   ) {
     throw new TypeError("cross-pass release requires typed accuracy, height, and receiver inputs");
   }
-  const receiver = requireGroundPassReceiver(input.receiver, possession.owner);
+  const receiver = requireGroundPassReceiver(
+    input.receiver,
+    possession.owner,
+    { cannotStop: input.wantedReceiver },
+  );
   const pass = requireGroundPassProfile(input.profile);
   const randomized = advanceCssoccerNativeRng(createCssoccerNativeRngState(input.rng));
-  const target = chooseCrossPassTarget({
-    ball: ball.ball,
-    receiver,
-    pass,
-  });
+  const target = input.wantedReceiver
+    ? chooseGroundPassTarget({
+        ball: ball.ball,
+        receiver,
+        pass,
+        forceAir: true,
+      })
+    : chooseCrossPassTarget({
+        ball: ball.ball,
+        receiver,
+        pass,
+      });
   const accuracySample = input.wantedReceiver
     ? 0
     : Math.trunc((randomized.seed * (128 - input.takerAccuracy)) / 128);
@@ -460,7 +479,7 @@ export function releaseCssoccerCrossPass(input = {}) {
       ownerNativePlayer: possession.owner,
       receiverStableId: receiver.stableId,
       receiverNativePlayer: receiver.nativePlayerNumber,
-      receiverStopped: true,
+      receiverStopped: !input.wantedReceiver,
       targetOffset: { x: target.x, y: target.y },
       targetDistance: target.distance,
       directionOffset,
@@ -596,7 +615,7 @@ function releaseDirectedGroundPass({
   });
 }
 
-function chooseGroundPassTarget({ ball, receiver, pass }) {
+function chooseGroundPassTarget({ ball, receiver, pass, forceAir = false }) {
   let x = F32(receiver.position.x - ball.position.x);
   let y = F32(receiver.position.y - ball.position.y);
   let a = x;
@@ -610,7 +629,7 @@ function chooseGroundPassTarget({ ball, receiver, pass }) {
     const projectedDistance = sourceDistance(a, b);
     let passSpeed;
     let travelTicks;
-    if (projectedDistance > lowPassDistance) {
+    if (forceAir || projectedDistance > lowPassDistance) {
       passSpeed = F32(
         pass.endSpeed + 4 + (projectedDistance * pass.airDecay),
       );
@@ -679,7 +698,11 @@ function chooseCrossPassTarget({ ball, receiver, pass }) {
   return { x, y, distance: sourceDistance(x, y) };
 }
 
-function requireGroundPassReceiver(value, ownerNativePlayer) {
+function requireGroundPassReceiver(
+  value,
+  ownerNativePlayer,
+  { cannotStop = false } = {},
+) {
   requirePlainObject(value, "ground-pass receiver");
   requireExactKeys(value, [
     "action",
@@ -711,10 +734,12 @@ function requireGroundPassReceiver(value, ownerNativePlayer) {
   // branch does not verify teams. A stale opposing request can therefore be
   // selected exactly as the compiled game does. choose_pass still stops any
   // receiver that is not running toward that receiver's opposing goal.
-  const runsForward = value.action === CSSOCCER_NATIVE_ACTIONS.RUN
+  const runsForward = cannotStop || (
+    value.action === CSSOCCER_NATIVE_ACTIONS.RUN
     && (value.nativePlayerNumber < 12
       ? goDisplacement.x > 0
-      : goDisplacement.x < 0);
+      : goDisplacement.x < 0)
+  );
   return {
     stableId: value.stableId,
     nativePlayerNumber: value.nativePlayerNumber,

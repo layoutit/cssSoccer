@@ -268,6 +268,7 @@ export function createCssoccerFreePlayState({
       nativeTeamSlot: selectedCountry === "spain" ? "A" : "B",
       nativeUserToken: selectedCountry === "spain" ? -1 : -2,
       activePlayerId: null,
+      selectionChanged: false,
       burstTimer: 0,
       lastCommand: null,
       passCharge: null,
@@ -1228,6 +1229,7 @@ function requireControl(control, players, controlCountry) {
     || control.nativeTeamSlot !== nativeTeamSlot
     || control.nativeUserToken !== nativeUserToken
     || control.activePlayerId !== null
+    || control.selectionChanged !== false
     || !sameValue(control.eligiblePlayerIds, eligibleIds)
   ) {
     throw new Error("Free-play control must belong to the selected country at kickoff.");
